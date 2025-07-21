@@ -1,0 +1,60 @@
+# FastAPI and server dependencies
+fastapi==0.115.2
+uvicorn[standard]==0.34.0
+pydantic==2.10.4
+pydantic-settings==2.7.0
+
+# Database and ORM
+sqlalchemy==2.0.23
+psycopg2-binary==2.9.9
+alembic==1.13.1
+
+# Async support
+asyncpg==0.29.0
+
+# Simple architecture - no background jobs needed for MCP server
+# redis==5.0.1    # Removed: MCP servers should be fast and simple
+# celery==5.3.4   # Removed: No background processing needed
+# flower==2.0.1   # Removed: No Celery monitoring needed
+
+# HTTP client
+httpx==0.28.1
+
+# MCP (Model Context Protocol) Dependencies
+mcp==1.0.0
+
+# Code parsing and analysis (NO AI APIs)
+tree-sitter==0.20.4
+tree-sitter-python==0.23.6
+tree-sitter-javascript==0.21.4
+tree-sitter-typescript==0.21.2
+tree-sitter-java==0.21.0
+tree-sitter-go==0.21.0
+tree-sitter-rust==0.21.2
+tree-sitter-cpp==0.22.3
+
+# Search and indexing (Algolia only)
+algoliasearch==3.0.0
+
+# Security and authentication
+python-jose[cryptography]==3.3.0
+passlib[bcrypt]==1.7.4
+python-multipart==0.0.6
+
+# Monitoring and logging
+structlog==23.2.0
+sentry-sdk[fastapi]==1.39.1
+
+# Development and testing
+pytest==7.4.3
+pytest-asyncio==0.21.1
+pytest-cov==4.1.0
+black==23.11.0
+isort==5.12.0
+flake8==6.1.0
+mypy==1.7.1
+
+# Utilities
+python-dotenv==1.0.0
+click==8.1.7
+rich==13.7.0 

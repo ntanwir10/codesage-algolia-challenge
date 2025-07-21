@@ -1,0 +1,1524 @@
+{
+  "info": {
+    "name": "CodeSage MCP Server API",
+    "description": "Complete API collection for CodeSage MCP Server - AI-powered code discovery platform built around Algolia MCP Server integration",
+    "version": "1.0.0",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:8000",
+      "type": "string"
+    }
+  ],
+  "item": [
+    {
+      "name": "🏥 Health & Status",
+      "item": [
+        {
+          "name": "Health Check",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/health",
+              "host": ["{{baseUrl}}"],
+              "path": ["health"]
+            },
+            "description": "Check overall system health including database, Algolia, and MCP server status"
+          },
+          "response": []
+        }
+      ],
+      "description": "System health and status endpoints"
+    },
+    {
+      "name": "🏗️ Repository Management",
+      "item": [
+        {
+          "name": "List Repositories",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/repositories?skip=0&limit=10&language=python&status=completed&mcp_ready=true",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "repositories"],
+              "query": [
+                {
+                  "key": "skip",
+                  "value": "0",
+                  "description": "Number of repositories to skip"
+                },
+                {
+                  "key": "limit",
+                  "value": "10",
+                  "description": "Maximum number of repositories (max 500)"
+                },
+                {
+                  "key": "language",
+                  "value": "python",
+                  "description": "Filter by programming language"
+                },
+                {
+                  "key": "status",
+                  "value": "completed",
+                  "description": "Filter by processing status"
+                },
+                {
+                  "key": "mcp_ready",
+                  "value": "true",
+                  "description": "Filter by MCP readiness"
+                }
+              ]
+            },
+            "description": "List all repositories with optional filtering for MCP server"
+          },
+          "response": []
+        },
+        {
+          "name": "Create Repository",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"my-awesome-project\",\n  \"description\": \"A sample project for testing CodeSage MCP Server\",\n  \"language\": \"python\",\n  \"url\": \"https://github.com/user/my-awesome-project\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/repositories/",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "repositories", ""]
+            },
+            "description": "Create a new repository for processing and MCP server integration"
+          },
+          "response": []
+        },
+        {
+          "name": "Get Repository Details",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/repositories/1",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "repositories", "1"]
+            },
+            "description": "Get detailed information about a specific repository"
+          },
+          "response": []
+        },
+        {
+          "name": "Update Repository",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"updated-project-name\",\n  \"description\": \"Updated description for the project\",\n  \"language\": \"python\",\n  \"url\": \"https://github.com/user/updated-project\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/repositories/1",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "repositories", "1"]
+            },
+            "description": "Update repository information"
+          },
+          "response": []
+        },
+        {
+          "name": "Delete Repository",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/repositories/1",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "repositories", "1"]
+            },
+            "description": "Delete a repository and all associated data"
+          },
+          "response": []
+        },
+        {
+          "name": "Upload Repository Files",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                {
+                  "key": "files",
+                  "type": "file",
+                  "src": [],
+                  "description": "Code files to upload (.py, .js, .ts, .java, .go, .rs, .cpp, .c, .h)"
+                }
+              ]
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/repositories/1/upload",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "repositories", "1", "upload"]
+            },
+            "description": "Upload files to a repository for processing (max 10MB per file)"
+          },
+          "response": []
+        },
+        {
+          "name": "Process Repository",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/repositories/1/process?force_reprocess=false",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "repositories", "1", "process"],
+              "query": [
+                {
+                  "key": "force_reprocess",
+                  "value": "false",
+                  "description": "Force reprocessing if already completed"
+                }
+              ]
+            },
+            "description": "Start processing repository for MCP server integration"
+          },
+          "response": []
+        },
+        {
+          "name": "Get Repository Status",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/repositories/1/status",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "repositories", "1", "status"]
+            },
+            "description": "Get current processing status of a repository"
+          },
+          "response": []
+        },
+        {
+          "name": "Get Repository Statistics",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/repositories/1/stats?include_file_breakdown=true&include_entity_stats=true&include_language_stats=true",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "repositories", "1", "stats"],
+              "query": [
+                {
+                  "key": "include_file_breakdown",
+                  "value": "true",
+                  "description": "Include file type breakdown"
+                },
+                {
+                  "key": "include_entity_stats",
+                  "value": "true",
+                  "description": "Include entity statistics"
+                },
+                {
+                  "key": "include_language_stats",
+                  "value": "true",
+                  "description": "Include language statistics"
+                }
+              ]
+            },
+            "description": "Get detailed repository statistics and analytics"
+          },
+          "response": []
+        }
+      ],
+      "description": "Repository CRUD operations, file uploads, and processing"
+    },
+    {
+      "name": "🔍 Search & Discovery",
+      "item": [
+        {
+          "name": "Advanced Code Search",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"query\": \"authentication function\",\n  \"repository_id\": 1,\n  \"language\": \"python\",\n  \"entity_type\": \"function\",\n  \"page\": 0,\n  \"per_page\": 20,\n  \"include_content\": true,\n  \"similarity_threshold\": 0.7\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/search/",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "search", ""]
+            },
+            "description": "Perform advanced natural language search across repositories"
+          },
+          "response": []
+        },
+        {
+          "name": "Search Suggestions",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/search/suggestions?q=auth&limit=10&context=programming",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "search", "suggestions"],
+              "query": [
+                {
+                  "key": "q",
+                  "value": "auth",
+                  "description": "Query string for suggestions"
+                },
+                {
+                  "key": "limit",
+                  "value": "10",
+                  "description": "Maximum number of suggestions"
+                },
+                {
+                  "key": "context",
+                  "value": "programming",
+                  "description": "Context for suggestions"
+                }
+              ]
+            },
+            "description": "Get search suggestions and autocomplete"
+          },
+          "response": []
+        },
+        {
+          "name": "Voice Search",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"voice_query\": \"find login functions in python\",\n  \"repository_id\": 1,\n  \"transcription_confidence\": 0.8\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/search/voice",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "search", "voice"]
+            },
+            "description": "Perform voice-to-text search across repositories"
+          },
+          "response": []
+        },
+        {
+          "name": "Similarity Search",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"entity_type\": \"function\",\n  \"entity_id\": 1,\n  \"threshold\": 0.7,\n  \"limit\": 10\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/search/similar",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "search", "similar"]
+            },
+            "description": "Find similar code entities using semantic similarity"
+          },
+          "response": []
+        },
+        {
+          "name": "Trending Searches",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/search/trending?limit=20&time_period=week",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "search", "trending"],
+              "query": [
+                {
+                  "key": "limit",
+                  "value": "20",
+                  "description": "Maximum number of trending queries"
+                },
+                {
+                  "key": "time_period",
+                  "value": "week",
+                  "description": "Time period for trending analysis"
+                }
+              ]
+            },
+            "description": "Get trending search queries and popular terms"
+          },
+          "response": []
+        },
+        {
+          "name": "Search Analytics",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/search/analytics?start_date=2024-01-01&end_date=2024-01-31&granularity=daily",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "search", "analytics"],
+              "query": [
+                {
+                  "key": "start_date",
+                  "value": "2024-01-01",
+                  "description": "Start date for analytics"
+                },
+                {
+                  "key": "end_date",
+                  "value": "2024-01-31",
+                  "description": "End date for analytics"
+                },
+                {
+                  "key": "granularity",
+                  "value": "daily",
+                  "description": "Data granularity (hourly, daily, weekly)"
+                }
+              ]
+            },
+            "description": "Get search analytics and performance metrics"
+          },
+          "response": []
+        },
+        {
+          "name": "Refresh Search Index",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/search/index/refresh?repository_id=1&force=false",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "search", "index", "refresh"],
+              "query": [
+                {
+                  "key": "repository_id",
+                  "value": "1",
+                  "description": "Specific repository to reindex (optional)"
+                },
+                {
+                  "key": "force",
+                  "value": "false",
+                  "description": "Force reindexing"
+                }
+              ]
+            },
+            "description": "Refresh Algolia search index"
+          },
+          "response": []
+        },
+        {
+          "name": "Search Service Health",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/search/health",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "search", "health"]
+            },
+            "description": "Check health of search service and Algolia connection"
+          },
+          "response": []
+        }
+      ],
+      "description": "Advanced search, suggestions, voice search, and analytics"
+    },
+    {
+      "name": "📁 File Operations",
+      "item": [
+        {
+          "name": "List Repository Files",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/files/repositories/1?path=src&language=python&analyzed_only=true&skip=0&limit=50",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "files", "repositories", "1"],
+              "query": [
+                {
+                  "key": "path",
+                  "value": "src",
+                  "description": "Filter by file path prefix"
+                },
+                {
+                  "key": "language",
+                  "value": "python",
+                  "description": "Filter by programming language"
+                },
+                {
+                  "key": "analyzed_only",
+                  "value": "true",
+                  "description": "Show only analyzed files"
+                },
+                {
+                  "key": "skip",
+                  "value": "0",
+                  "description": "Number of files to skip"
+                },
+                {
+                  "key": "limit",
+                  "value": "50",
+                  "description": "Maximum number of files (max 500)"
+                }
+              ]
+            },
+            "description": "List files in a repository with filtering options"
+          },
+          "response": []
+        },
+        {
+          "name": "Get File Content",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/files/1?include_entities=true&include_raw_content=true&entity_types=function,class",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "files", "1"],
+              "query": [
+                {
+                  "key": "include_entities",
+                  "value": "true",
+                  "description": "Include code entities"
+                },
+                {
+                  "key": "include_raw_content",
+                  "value": "true",
+                  "description": "Include raw file content"
+                },
+                {
+                  "key": "entity_types",
+                  "value": "function,class",
+                  "description": "Filter entities by types (comma-separated)"
+                }
+              ]
+            },
+            "description": "Get detailed file content with optional entities"
+          },
+          "response": []
+        },
+        {
+          "name": "Get Raw File Content",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "text/plain",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/files/1/raw",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "files", "1", "raw"]
+            },
+            "description": "Get raw file content as plain text"
+          },
+          "response": []
+        },
+        {
+          "name": "Get File Entities",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/files/1/entities?entity_type=function&include_private=true&sort_by=line_start",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "files", "1", "entities"],
+              "query": [
+                {
+                  "key": "entity_type",
+                  "value": "function",
+                  "description": "Filter by entity type"
+                },
+                {
+                  "key": "include_private",
+                  "value": "true",
+                  "description": "Include private entities"
+                },
+                {
+                  "key": "sort_by",
+                  "value": "line_start",
+                  "description": "Sort by: name, line_start, entity_type"
+                }
+              ]
+            },
+            "description": "Get code entities (functions, classes, etc.) in a file"
+          },
+          "response": []
+        },
+        {
+          "name": "Get File Summary",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/files/1/summary?include_entities=true&include_dependencies=true&detail_level=detailed",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "files", "1", "summary"],
+              "query": [
+                {
+                  "key": "include_entities",
+                  "value": "true",
+                  "description": "Include entity summary"
+                },
+                {
+                  "key": "include_dependencies",
+                  "value": "true",
+                  "description": "Include dependency analysis"
+                },
+                {
+                  "key": "detail_level",
+                  "value": "detailed",
+                  "description": "Summary detail level (brief, detailed)"
+                }
+              ]
+            },
+            "description": "Get AI-generated summary of file content and structure"
+          },
+          "response": []
+        },
+        {
+          "name": "Analyze File",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"force_reanalysis\": false,\n  \"include_entities\": true,\n  \"include_content\": true\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/files/1/analyze",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "files", "1", "analyze"]
+            },
+            "description": "Trigger AI analysis of a specific file"
+          },
+          "response": []
+        },
+        {
+          "name": "Bulk Analyze Files",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"file_ids\": [1, 2, 3, 4, 5],\n  \"force_reanalysis\": false,\n  \"parallel_processing\": true\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/files/analyze/bulk",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "files", "analyze", "bulk"]
+            },
+            "description": "Analyze multiple files in batch (max 100 files per batch)"
+          },
+          "response": []
+        },
+        {
+          "name": "Get Repository File Statistics",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/files/stats/repository/1?include_language_breakdown=true&include_analysis_status=true",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "files", "stats", "repository", "1"],
+              "query": [
+                {
+                  "key": "include_language_breakdown",
+                  "value": "true",
+                  "description": "Include language breakdown"
+                },
+                {
+                  "key": "include_analysis_status",
+                  "value": "true",
+                  "description": "Include analysis status"
+                }
+              ]
+            },
+            "description": "Get file statistics for a repository"
+          },
+          "response": []
+        }
+      ],
+      "description": "File content, entities, analysis, and statistics"
+    },
+    {
+      "name": "🤖 MCP Protocol",
+      "item": [
+        {
+          "name": "Get MCP Capabilities",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/ai/mcp/capabilities",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "ai", "mcp", "capabilities"]
+            },
+            "description": "Returns the capabilities of this MCP server including available tools and resources"
+          },
+          "response": []
+        },
+        {
+          "name": "List MCP Tools",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/ai/mcp/tools",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "ai", "mcp", "tools"]
+            },
+            "description": "Returns all MCP tools available for AI models to call"
+          },
+          "response": []
+        },
+        {
+          "name": "Execute MCP Tool",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"tool_name\": \"search_code\",\n  \"arguments\": {\n    \"query\": \"authentication\",\n    \"repository_id\": \"1\",\n    \"language\": \"python\"\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/ai/mcp/tools/call",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "ai", "mcp", "tools", "call"]
+            },
+            "description": "Execute a specific MCP tool with provided arguments"
+          },
+          "response": []
+        },
+        {
+          "name": "List MCP Resources",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/ai/mcp/resources",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "ai", "mcp", "resources"]
+            },
+            "description": "Returns all MCP resources that AI models can access"
+          },
+          "response": []
+        },
+        {
+          "name": "Read MCP Resource",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/ai/mcp/resources/read?uri=codesage://repositories",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "ai", "mcp", "resources", "read"],
+              "query": [
+                {
+                  "key": "uri",
+                  "value": "codesage://repositories",
+                  "description": "Resource URI to read (e.g., 'codesage://repositories', 'codesage://files?repository_id=1')"
+                }
+              ]
+            },
+            "description": "Read the content of a specific MCP resource"
+          },
+          "response": []
+        }
+      ],
+      "description": "Core MCP protocol endpoints for AI model integration"
+    },
+    {
+      "name": "🔧 MCP Convenience Tools",
+      "item": [
+        {
+          "name": "AI Search (Convenience)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"query\": \"How does user authentication work?\",\n  \"repository\": \"1\",\n  \"language\": \"python\",\n  \"entity_type\": \"function\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/ai/search",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "ai", "search"]
+            },
+            "description": "Direct access to search_code MCP tool for testing"
+          },
+          "response": []
+        },
+        {
+          "name": "Repository Analysis (Convenience)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"repository_id\": \"1\",\n  \"analysis_type\": \"structure\",\n  \"include_dependencies\": true\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/ai/analyze",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "ai", "analyze"]
+            },
+            "description": "Direct access to analyze_repository MCP tool"
+          },
+          "response": []
+        },
+        {
+          "name": "Function Exploration (Convenience)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"repository_id\": \"1\",\n  \"entity_type\": \"function\",\n  \"search_term\": \"login\",\n  \"similarity_search\": true\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/ai/explore",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "ai", "explore"]
+            },
+            "description": "Direct access to explore_functions MCP tool"
+          },
+          "response": []
+        },
+        {
+          "name": "Code Explanation (Convenience)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"code_snippet\": \"def authenticate(username, password):\\n    # Check credentials\\n    return True\",\n  \"context\": \"user authentication\",\n  \"detail_level\": \"detailed\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/ai/explain",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "ai", "explain"]
+            },
+            "description": "Direct access to explain_code MCP tool"
+          },
+          "response": []
+        },
+        {
+          "name": "Pattern Detection (Convenience)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"repository_id\": \"1\",\n  \"pattern_type\": \"security\",\n  \"include_suggestions\": true\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/ai/patterns",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "ai", "patterns"]
+            },
+            "description": "Direct access to find_patterns MCP tool"
+          },
+          "response": []
+        },
+        {
+          "name": "MCP Server Status",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/ai/status",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "ai", "status"]
+            },
+            "description": "Get detailed status of the MCP server and its components"
+          },
+          "response": []
+        }
+      ],
+      "description": "Convenience endpoints for direct MCP tool access and testing"
+    },
+    {
+      "name": "🤝 Collaboration",
+      "item": [
+        {
+          "name": "Create Collaboration Room",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"room_name\": \"Project Review Session\",\n  \"repository_id\": 1,\n  \"description\": \"Code review and pair programming session\",\n  \"max_participants\": 5\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/collaboration/rooms",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "collaboration", "rooms"]
+            },
+            "description": "Create a new collaboration room for real-time code collaboration"
+          },
+          "response": []
+        },
+        {
+          "name": "Get Collaboration Room",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/collaboration/rooms/room123",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "collaboration", "rooms", "room123"]
+            },
+            "description": "Get details of a specific collaboration room"
+          },
+          "response": []
+        },
+        {
+          "name": "List Room Participants",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/collaboration/rooms/room123/participants",
+              "host": ["{{baseUrl}}"],
+              "path": [
+                "api",
+                "v1",
+                "collaboration",
+                "rooms",
+                "room123",
+                "participants"
+              ]
+            },
+            "description": "List all participants in a collaboration room"
+          },
+          "response": []
+        },
+        {
+          "name": "Join Collaboration Room",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"user_name\": \"developer123\",\n  \"role\": \"reviewer\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/collaboration/rooms/room123/join",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "collaboration", "rooms", "room123", "join"]
+            },
+            "description": "Join a collaboration room"
+          },
+          "response": []
+        },
+        {
+          "name": "Leave Collaboration Room",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"session_id\": \"session456\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/collaboration/rooms/room123/leave",
+              "host": ["{{baseUrl}}"],
+              "path": [
+                "api",
+                "v1",
+                "collaboration",
+                "rooms",
+                "room123",
+                "leave"
+              ]
+            },
+            "description": "Leave a collaboration room"
+          },
+          "response": []
+        },
+        {
+          "name": "Update Cursor Position",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"session_id\": \"session456\",\n  \"file_path\": \"src/main.py\",\n  \"line\": 42,\n  \"column\": 15\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/collaboration/rooms/room123/cursor",
+              "host": ["{{baseUrl}}"],
+              "path": [
+                "api",
+                "v1",
+                "collaboration",
+                "rooms",
+                "room123",
+                "cursor"
+              ]
+            },
+            "description": "Update cursor position for real-time collaboration"
+          },
+          "response": []
+        },
+        {
+          "name": "Get Room Activity",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/collaboration/rooms/room123/activity?limit=50",
+              "host": ["{{baseUrl}}"],
+              "path": [
+                "api",
+                "v1",
+                "collaboration",
+                "rooms",
+                "room123",
+                "activity"
+              ],
+              "query": [
+                {
+                  "key": "limit",
+                  "value": "50",
+                  "description": "Maximum number of activity events"
+                }
+              ]
+            },
+            "description": "Get recent activity in a collaboration room"
+          },
+          "response": []
+        },
+        {
+          "name": "Get Session Status",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/collaboration/sessions/session456/status",
+              "host": ["{{baseUrl}}"],
+              "path": [
+                "api",
+                "v1",
+                "collaboration",
+                "sessions",
+                "session456",
+                "status"
+              ]
+            },
+            "description": "Get status of a collaboration session"
+          },
+          "response": []
+        },
+        {
+          "name": "Create Code Annotation",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"file_path\": \"src/main.py\",\n  \"line_start\": 42,\n  \"line_end\": 45,\n  \"annotation_text\": \"This function could be optimized\",\n  \"annotation_type\": \"suggestion\",\n  \"author\": \"reviewer123\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/collaboration/annotations",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "collaboration", "annotations"]
+            },
+            "description": "Create a code annotation or comment"
+          },
+          "response": []
+        }
+      ],
+      "description": "Real-time collaboration features including rooms, sessions, and annotations"
+    }
+  ],
+  "event": [
+    {
+      "listen": "prerequest",
+      "script": {
+        "type": "text/javascript",
+        "exec": [
+          "// Set timestamp for requests",
+          "pm.globals.set('timestamp', Date.now());"
+        ]
+      }
+    },
+    {
+      "listen": "test",
+      "script": {
+        "type": "text/javascript",
+        "exec": [
+          "// Basic response validation",
+          "pm.test('Status code is successful', function () {",
+          "    pm.expect(pm.response.code).to.be.oneOf([200, 201, 202, 204]);",
+          "});",
+          "",
+          "pm.test('Response time is less than 5000ms', function () {",
+          "    pm.expect(pm.response.responseTime).to.be.below(5000);",
+          "});",
+          "",
+          "pm.test('Content-Type is JSON (when applicable)', function () {",
+          "    if (pm.response.headers.get('Content-Type')) {",
+          "        pm.expect(pm.response.headers.get('Content-Type')).to.include('application/json');",
+          "    }",
+          "});"
+        ]
+      }
+    }
+  ]
+}

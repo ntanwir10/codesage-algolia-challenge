@@ -1,0 +1,344 @@
+{
+  "timestamp": 1753123308.3099022,
+  "total_tests": 42,
+  "passed_tests": 42,
+  "failed_tests": 0,
+  "results": [
+    {
+      "endpoint": "/",
+      "method": "GET",
+      "status_code": 200,
+      "success": true,
+      "response_time": 0.01136326789855957,
+      "error": null
+    },
+    {
+      "endpoint": "/health",
+      "method": "GET",
+      "status_code": 200,
+      "success": true,
+      "response_time": 0.00527501106262207,
+      "error": null
+    },
+    {
+      "endpoint": "/docs",
+      "method": "GET",
+      "status_code": 200,
+      "success": true,
+      "response_time": 0.002195119857788086,
+      "error": null
+    },
+    {
+      "endpoint": "/openapi.json",
+      "method": "GET",
+      "status_code": 200,
+      "success": true,
+      "response_time": 0.03373289108276367,
+      "error": null
+    },
+    {
+      "endpoint": "/api/v1/ai/mcp/capabilities",
+      "method": "GET",
+      "status_code": 200,
+      "success": true,
+      "response_time": 0.004720926284790039,
+      "error": null
+    },
+    {
+      "endpoint": "/api/v1/ai/mcp/tools",
+      "method": "GET",
+      "status_code": 200,
+      "success": true,
+      "response_time": 0.004155874252319336,
+      "error": null
+    },
+    {
+      "endpoint": "/api/v1/ai/mcp/resources",
+      "method": "GET",
+      "status_code": 200,
+      "success": true,
+      "response_time": 0.0039708614349365234,
+      "error": null
+    },
+    {
+      "endpoint": "/api/v1/ai/mcp/tools/call",
+      "method": "POST",
+      "status_code": 200,
+      "success": true,
+      "response_time": 0.16187691688537598,
+      "error": null
+    },
+    {
+      "endpoint": "/api/v1/ai/mcp/tools/call",
+      "method": "POST",
+      "status_code": 400,
+      "success": true,
+      "response_time": 0.0044901371002197266,
+      "error": null
+    },
+    {
+      "endpoint": "/api/v1/ai/mcp/resources/read?uri=codesage://repositories",
+      "method": "GET",
+      "status_code": 200,
+      "success": true,
+      "response_time": 0.0044291019439697266,
+      "error": null
+    },
+    {
+      "endpoint": "/api/v1/ai/search",
+      "method": "POST",
+      "status_code": 200,
+      "success": true,
+      "response_time": 0.16466999053955078,
+      "error": null
+    },
+    {
+      "endpoint": "/api/v1/ai/analyze",
+      "method": "POST",
+      "status_code": 200,
+      "success": true,
+      "response_time": 0.15657496452331543,
+      "error": null
+    },
+    {
+      "endpoint": "/api/v1/ai/explore",
+      "method": "POST",
+      "status_code": 200,
+      "success": true,
+      "response_time": 0.15761613845825195,
+      "error": null
+    },
+    {
+      "endpoint": "/api/v1/ai/explain",
+      "method": "POST",
+      "status_code": 200,
+      "success": true,
+      "response_time": 0.004368782043457031,
+      "error": null
+    },
+    {
+      "endpoint": "/api/v1/ai/patterns",
+      "method": "POST",
+      "status_code": 200,
+      "success": true,
+      "response_time": 0.9249520301818848,
+      "error": null
+    },
+    {
+      "endpoint": "/api/v1/ai/status",
+      "method": "GET",
+      "status_code": 200,
+      "success": true,
+      "response_time": 0.004042863845825195,
+      "error": null
+    },
+    {
+      "endpoint": "/api/v1/repositories/",
+      "method": "GET",
+      "status_code": 200,
+      "success": true,
+      "response_time": 0.009345769882202148,
+      "error": null
+    },
+    {
+      "endpoint": "/api/v1/repositories/?language=python&limit=10",
+      "method": "GET",
+      "status_code": 200,
+      "success": true,
+      "response_time": 0.007327079772949219,
+      "error": null
+    },
+    {
+      "endpoint": "/api/v1/repositories/",
+      "method": "POST",
+      "status_code": 201,
+      "success": true,
+      "response_time": 0.007080078125,
+      "error": null
+    },
+    {
+      "endpoint": "/api/v1/repositories/3",
+      "method": "GET",
+      "status_code": 200,
+      "success": true,
+      "response_time": 0.004219770431518555,
+      "error": null
+    },
+    {
+      "endpoint": "/api/v1/repositories/3",
+      "method": "PUT",
+      "status_code": 200,
+      "success": true,
+      "response_time": 0.007554054260253906,
+      "error": null
+    },
+    {
+      "endpoint": "/api/v1/repositories/3/status",
+      "method": "GET",
+      "status_code": 200,
+      "success": true,
+      "response_time": 0.003309011459350586,
+      "error": null
+    },
+    {
+      "endpoint": "/api/v1/repositories/3/stats",
+      "method": "GET",
+      "status_code": 200,
+      "success": true,
+      "response_time": 0.003545999526977539,
+      "error": null
+    },
+    {
+      "endpoint": "/api/v1/repositories/3/process",
+      "method": "POST",
+      "status_code": 200,
+      "success": true,
+      "response_time": 0.004615068435668945,
+      "error": null
+    },
+    {
+      "endpoint": "/api/v1/repositories/99999",
+      "method": "GET",
+      "status_code": 404,
+      "success": true,
+      "response_time": 0.0033380985260009766,
+      "error": null
+    },
+    {
+      "endpoint": "/api/v1/search/",
+      "method": "POST",
+      "status_code": 200,
+      "success": true,
+      "response_time": 0.17006611824035645,
+      "error": null
+    },
+    {
+      "endpoint": "/api/v1/search/suggestions?q=auth&limit=5",
+      "method": "GET",
+      "status_code": 200,
+      "success": true,
+      "response_time": 0.15849804878234863,
+      "error": null
+    },
+    {
+      "endpoint": "/api/v1/search/voice",
+      "method": "POST",
+      "status_code": 400,
+      "success": true,
+      "response_time": 0.006154060363769531,
+      "error": null
+    },
+    {
+      "endpoint": "/api/v1/search/similar",
+      "method": "POST",
+      "status_code": 404,
+      "success": true,
+      "response_time": 0.010987043380737305,
+      "error": null
+    },
+    {
+      "endpoint": "/api/v1/search/trending?hours=24&limit=10",
+      "method": "GET",
+      "status_code": 200,
+      "success": true,
+      "response_time": 0.0024938583374023438,
+      "error": null
+    },
+    {
+      "endpoint": "/api/v1/search/analytics?days=7",
+      "method": "GET",
+      "status_code": 200,
+      "success": true,
+      "response_time": 0.002552032470703125,
+      "error": null
+    },
+    {
+      "endpoint": "/api/v1/search/index/refresh",
+      "method": "POST",
+      "status_code": 200,
+      "success": true,
+      "response_time": 0.002521038055419922,
+      "error": null
+    },
+    {
+      "endpoint": "/api/v1/search/health",
+      "method": "GET",
+      "status_code": 200,
+      "success": true,
+      "response_time": 0.1581559181213379,
+      "error": null
+    },
+    {
+      "endpoint": "/api/v1/files/repositories/1",
+      "method": "GET",
+      "status_code": 200,
+      "success": true,
+      "response_time": 0.012151002883911133,
+      "error": null
+    },
+    {
+      "endpoint": "/api/v1/files/1",
+      "method": "GET",
+      "status_code": 404,
+      "success": true,
+      "response_time": 0.00472712516784668,
+      "error": null
+    },
+    {
+      "endpoint": "/api/v1/files/1/entities",
+      "method": "GET",
+      "status_code": 404,
+      "success": true,
+      "response_time": 0.004091024398803711,
+      "error": null
+    },
+    {
+      "endpoint": "/api/v1/files/1/summary",
+      "method": "GET",
+      "status_code": 404,
+      "success": true,
+      "response_time": 0.0036127567291259766,
+      "error": null
+    },
+    {
+      "endpoint": "/api/v1/files/analyze/bulk",
+      "method": "POST",
+      "status_code": 400,
+      "success": true,
+      "response_time": 0.002866983413696289,
+      "error": null
+    },
+    {
+      "endpoint": "/api/v1/files/stats/repository/1",
+      "method": "GET",
+      "status_code": 200,
+      "success": true,
+      "response_time": 0.009604930877685547,
+      "error": null
+    },
+    {
+      "endpoint": "/api/v1/invalid/endpoint",
+      "method": "GET",
+      "status_code": 404,
+      "success": true,
+      "response_time": 0.003923892974853516,
+      "error": null
+    },
+    {
+      "endpoint": "/api/v1/ai/mcp/tools/call",
+      "method": "POST",
+      "status_code": 422,
+      "success": true,
+      "response_time": 0.003365755081176758,
+      "error": null
+    },
+    {
+      "endpoint": "/api/v1/search/suggestions?q=a",
+      "method": "GET",
+      "status_code": 422,
+      "success": true,
+      "response_time": 0.003818988800048828,
+      "error": null
+    }
+  ]
+}

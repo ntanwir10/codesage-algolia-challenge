@@ -1,0 +1,55 @@
+version: "3.8"
+
+services:
+  # PostgreSQL Database (for metadata only)
+  postgres:
+    image: postgres:15-alpine
+    container_name: codesage_postgres
+    environment:
+      POSTGRES_USER: codesage
+      POSTGRES_PASSWORD: codesage123
+      POSTGRES_DB: codesage
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./backend/scripts/init.sql:/docker-entrypoint-initdb.d/init.sql
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U codesage -d codesage"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    restart: unless-stopped
+
+  # FastAPI MCP Server (simplified)
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: codesage_mcp_server
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./backend:/app
+      - backend_uploads:/app/uploads
+    env_file:
+      - .env
+    environment:
+      - DATABASE_URL=postgresql://codesage:codesage123@postgres:5432/codesage
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  backend_uploads:
+
+networks:
+  default:
+    driver: bridge
