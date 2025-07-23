@@ -8,6 +8,7 @@ from app.core.database import get_db
 from app.schemas.search import SearchQuery, SearchResponse, SearchSuggestion
 from app.services.search_service import SearchService
 from app.services.algolia_service import AlgoliaService
+from app.services.security_service import rate_limit_search, rate_limit_default
 
 logger = structlog.get_logger()
 router = APIRouter()
@@ -58,6 +59,7 @@ class SimilaritySearchRequest(BaseModel):
     summary="Advanced Code Search",
     description="Perform advanced search across repositories with filters and options",
 )
+@rate_limit_search
 async def search_code(
     search_request: AdvancedSearchRequest, db: Session = Depends(get_db)
 ):

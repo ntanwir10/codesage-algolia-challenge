@@ -5,15 +5,15 @@ import structlog
 import sentry_sdk
 from sentry_sdk.integrations.fastapi import FastApiIntegration
 from sentry_sdk.integrations.sqlalchemy import SqlalchemyIntegration
+from slowapi.errors import RateLimitExceeded
 
 from app.core.config import get_settings
 from app.api.v1.router import api_router
 from app.core.database import engine
 from app.models import Base
-from app.api.v1.router import api_router
 from app.core.database import get_db
 from app.services.algolia_service import AlgoliaService
-import structlog
+from app.services.security_service import get_rate_limiting_service
 
 # Configure structured logging
 structlog.configure(
@@ -64,6 +64,22 @@ app = FastAPI(
             "description": "CodeSage MCP Server",
         }
     ],
+)
+
+# Initialize rate limiting
+rate_limiting_service = get_rate_limiting_service()
+app.state.limiter = rate_limiting_service.limiter
+app.add_exception_handler(
+    RateLimitExceeded, rate_limiting_service.create_rate_limit_handler()
+)
+
+logger.info(
+    "Rate limiting configured",
+    enabled=settings.enable_rate_limiting,
+    default_limit=settings.rate_limit_default,
+    search_limit=settings.rate_limit_search,
+    upload_limit=settings.rate_limit_upload,
+    ai_limit=settings.rate_limit_ai,
 )
 
 # Add middleware
@@ -146,6 +162,7 @@ async def health_check():
     # Check database
     try:
         from sqlalchemy import text
+
         db = next(get_db())
         db.execute(text("SELECT 1"))
         health_status["components"]["database"] = {

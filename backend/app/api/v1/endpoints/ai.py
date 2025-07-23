@@ -6,6 +6,7 @@ from pydantic import BaseModel, Field
 
 from app.core.database import get_db
 from app.services.mcp_server import MCPServerService
+from app.services.security_service import rate_limit_ai, rate_limit_default
 
 logger = structlog.get_logger()
 router = APIRouter()
@@ -40,6 +41,7 @@ class MCPErrorResponse(BaseModel):
     summary="Get MCP Server Capabilities",
     description="Returns the capabilities of this MCP server including available tools and resources",
 )
+@rate_limit_default
 async def get_mcp_capabilities(db: Session = Depends(get_db)):
     """Get MCP server capabilities - MCP Protocol Endpoint"""
     try:
@@ -57,6 +59,7 @@ async def get_mcp_capabilities(db: Session = Depends(get_db)):
     summary="List Available MCP Tools",
     description="Returns all MCP tools available for AI models to call",
 )
+@rate_limit_default
 async def list_mcp_tools(db: Session = Depends(get_db)):
     """List available MCP tools - MCP Protocol Endpoint"""
     try:
@@ -77,6 +80,7 @@ async def list_mcp_tools(db: Session = Depends(get_db)):
     summary="Execute MCP Tool",
     description="Execute a specific MCP tool with provided arguments",
 )
+@rate_limit_ai
 async def call_mcp_tool(
     request: MCPToolCallRequest = Body(..., description="MCP tool call request"),
     db: Session = Depends(get_db),
@@ -136,6 +140,7 @@ async def call_mcp_tool(
     summary="List Available MCP Resources",
     description="Returns all MCP resources that AI models can access",
 )
+@rate_limit_default
 async def list_mcp_resources(db: Session = Depends(get_db)):
     """List available MCP resources - MCP Protocol Endpoint"""
     try:
@@ -155,6 +160,7 @@ async def list_mcp_resources(db: Session = Depends(get_db)):
     summary="Read MCP Resource",
     description="Read the content of a specific MCP resource",
 )
+@rate_limit_default
 async def read_mcp_resource(
     uri: str = Query(
         ..., description="Resource URI to read (e.g., 'codesage://repositories')"
@@ -228,6 +234,7 @@ class FindPatternsRequest(BaseModel):
     summary="Search Code (Convenience)",
     description="Direct access to search_code MCP tool for testing",
 )
+@rate_limit_ai
 async def search_code_via_mcp(
     request: SearchCodeRequest,
     db: Session = Depends(get_db),
@@ -265,6 +272,7 @@ async def search_code_via_mcp(
     summary="Analyze Repository (Convenience)",
     description="Direct access to analyze_repository MCP tool",
 )
+@rate_limit_ai
 async def analyze_repository_via_mcp(
     request: AnalyzeRepositoryRequest, db: Session = Depends(get_db)
 ):
@@ -308,6 +316,7 @@ async def analyze_repository_via_mcp(
     summary="Explore Functions (Convenience)",
     description="Direct access to explore_functions MCP tool",
 )
+@rate_limit_ai
 async def explore_functions_via_mcp(
     request: ExploreRequest,
     db: Session = Depends(get_db),
@@ -351,6 +360,7 @@ async def explore_functions_via_mcp(
     summary="Explain Code (Convenience)",
     description="Direct access to explain_code MCP tool",
 )
+@rate_limit_ai
 async def explain_code_via_mcp(
     request: ExplainCodeRequest,
     db: Session = Depends(get_db),
@@ -393,6 +403,7 @@ async def explain_code_via_mcp(
     summary="Find Patterns (Convenience)",
     description="Direct access to find_patterns MCP tool",
 )
+@rate_limit_ai
 async def find_patterns_via_mcp(
     request: FindPatternsRequest, db: Session = Depends(get_db)
 ):
@@ -436,6 +447,7 @@ async def find_patterns_via_mcp(
     summary="MCP Server Status",
     description="Get detailed status of the MCP server and its components",
 )
+@rate_limit_default
 async def get_mcp_server_status(db: Session = Depends(get_db)):
     """Get MCP server status and health information"""
     try:

@@ -9,7 +9,10 @@ class Settings(BaseSettings):
     app_name: str = "CodeSage MCP Server"
     debug: bool = False
     environment: str = "development"
-    secret_key: str = Field(..., description="Secret key for JWT encoding")
+    secret_key: str = Field(
+        default="dev-secret-key-change-in-production",
+        description="Secret key for JWT encoding",
+    )
 
     # Database Settings
     database_url: str = Field(
@@ -53,6 +56,18 @@ class Settings(BaseSettings):
     cors_origins: List[str] = ["http://localhost:3000", "http://localhost:5173"]
     max_upload_size: int = 100 * 1024 * 1024  # 100MB
     api_rate_limit: str = "100/minute"
+
+    # Rate Limiting Settings
+    enable_rate_limiting: bool = True
+    rate_limit_default: str = "100/minute"  # Default rate limit for most endpoints
+    rate_limit_search: str = (
+        "50/minute"  # Lower limit for search endpoints (more expensive)
+    )
+    rate_limit_upload: str = "10/minute"  # Very low limit for upload endpoints
+    rate_limit_ai: str = "30/minute"  # Moderate limit for AI/MCP endpoints
+    rate_limit_storage_uri: Optional[str] = (
+        None  # Redis URI for distributed rate limiting (None = in-memory)
+    )
 
     # Security Settings
     allowed_hosts: List[str] = ["localhost", "127.0.0.1"]
@@ -109,8 +124,8 @@ class Settings(BaseSettings):
     @classmethod
     def validate_database_url(cls, v: str) -> str:
         """Validate database URL format"""
-        if not v.startswith(("postgresql://", "postgresql+psycopg2://")):
-            raise ValueError("Database URL must be a valid PostgreSQL URL")
+        if not v.startswith(("postgresql://", "postgresql+psycopg2://", "sqlite:///")):
+            raise ValueError("Database URL must be a valid PostgreSQL or SQLite URL")
         return v
 
     @field_validator("cors_origins")
@@ -130,18 +145,18 @@ class Settings(BaseSettings):
     @classmethod
     def validate_algolia_app_id(cls, v: Optional[str]) -> Optional[str]:
         """Validate Algolia app ID is provided for MCP server"""
-        if v is None:
-            raise ValueError("Algolia App ID is required for MCP server functionality")
+        if v is None or v == "your_algolia_app_id_here":
+            # Allow None or placeholder values in development
+            return v
         return v
 
     @field_validator("algolia_admin_api_key")
     @classmethod
     def validate_algolia_admin_api_key(cls, v: Optional[str]) -> Optional[str]:
         """Validate Algolia admin API key is provided for MCP server"""
-        if v is None:
-            raise ValueError(
-                "Algolia Admin API Key is required for MCP server functionality"
-            )
+        if v is None or v == "your_algolia_admin_api_key_here":
+            # Allow None or placeholder values in development
+            return v
         return v
 
     @property

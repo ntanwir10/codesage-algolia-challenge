@@ -5,12 +5,12 @@ pydantic==2.10.4
 pydantic-settings==2.7.0
 
 # Database and ORM
-sqlalchemy==2.0.23
+sqlalchemy==2.0.35
 psycopg2-binary==2.9.9
 alembic==1.13.1
 
-# Async support
-asyncpg==0.29.0
+# Async support - removed asyncpg for Python 3.13 compatibility
+# asyncpg==0.29.0
 
 # Simple architecture - no background jobs needed for MCP server
 # redis==5.0.1    # Removed: MCP servers should be fast and simple
@@ -40,6 +40,9 @@ algoliasearch==3.0.0
 python-jose[cryptography]==3.3.0
 passlib[bcrypt]==1.7.4
 python-multipart==0.0.6
+
+# Rate limiting
+slowapi==0.1.9
 
 # Monitoring and logging
 structlog==23.2.0

@@ -12,6 +12,7 @@ from app.schemas.repository import (
     RepositoryUpdate,
 )
 from app.services.repository_service import RepositoryService
+from app.services.security_service import rate_limit_default, rate_limit_upload
 
 logger = structlog.get_logger()
 router = APIRouter()
@@ -87,6 +88,7 @@ async def list_repositories(
     summary="Create Repository",
     description="Create a new repository for processing and MCP server integration",
 )
+@rate_limit_default
 async def create_repository(
     repository: RepositoryCreate, db: Session = Depends(get_db)
 ):
@@ -230,6 +232,7 @@ async def delete_repository(repository_id: int, db: Session = Depends(get_db)):
     summary="Upload Repository Files",
     description="Upload files to a repository for processing",
 )
+@rate_limit_upload
 async def upload_repository_files(
     repository_id: int,
     files: List[UploadFile] = File(...),

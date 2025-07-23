@@ -10,6 +10,7 @@ from app.models.code_file import CodeFile
 from app.models.code_entity import CodeEntity
 from app.schemas.file import FileResponse, FileContentResponse, EntityResponse
 from app.services.file_service import FileService
+from app.services.security_service import rate_limit_default
 
 logger = structlog.get_logger()
 router = APIRouter()
@@ -40,6 +41,7 @@ class BulkAnalysisRequest(BaseModel):
     summary="List Repository Files",
     description="List files in a repository with filtering options",
 )
+@rate_limit_default
 async def list_repository_files(
     repository_id: int,
     path: Optional[str] = Query(None, description="Filter by file path prefix"),
