@@ -1,7 +1,7 @@
 version: "3.8"
 
 services:
-  # PostgreSQL Database (for metadata only)
+  # PostgreSQL Database
   postgres:
     image: postgres:15-alpine
     container_name: codesage_postgres
@@ -21,14 +21,14 @@ services:
       retries: 3
     restart: unless-stopped
 
-  # FastAPI MCP Server (simplified)
+  # CodeSage MCP Server with WebSocket Support
   backend:
     build:
       context: ./backend
       dockerfile: Dockerfile
     container_name: codesage_mcp_server
     ports:
-      - "8000:8000"
+      - "8001:8001" # HTTP API and WebSocket on same port
     volumes:
       - ./backend:/app
       - backend_uploads:/app/uploads
@@ -36,11 +36,14 @@ services:
       - .env
     environment:
       - DATABASE_URL=postgresql://codesage:codesage123@postgres:5432/codesage
+      - MCP_SERVER_HOST=0.0.0.0
+      - MCP_SERVER_PORT=8001
+      - CORS_ORIGINS=["http://localhost:3000", "http://localhost:5173"]
     depends_on:
       postgres:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
       interval: 30s
       timeout: 10s
       retries: 3

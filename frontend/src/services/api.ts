@@ -52,8 +52,41 @@ class CodeSageAPI {
 
   // Repository Management
   async createRepository(data: CreateRepositoryRequest): Promise<Repository> {
-    const response = await this.client.post("/api/v1/repositories/", data);
-    return response.data;
+    console.log("🚀 Creating repository with data:", data);
+    console.log("🔍 API Base URL:", this.client.defaults.baseURL);
+
+    try {
+      const response = await this.client.post("/api/v1/repositories/", data);
+      console.log("✅ Repository created successfully:", response.data);
+      return response.data;
+    } catch (error: unknown) {
+      // Type guard for axios error
+      if (error && typeof error === "object" && "response" in error) {
+        const axiosError = error as {
+          response?: { status?: number; statusText?: string; data?: unknown };
+          config?: {
+            url?: string;
+            method?: string;
+            data?: unknown;
+            headers?: unknown;
+          };
+        };
+        console.error("❌ Repository creation failed:", {
+          status: axiosError.response?.status,
+          statusText: axiosError.response?.statusText,
+          data: axiosError.response?.data,
+          config: {
+            url: axiosError.config?.url,
+            method: axiosError.config?.method,
+            data: axiosError.config?.data,
+            headers: axiosError.config?.headers,
+          },
+        });
+      } else {
+        console.error("❌ Repository creation failed:", error);
+      }
+      throw error;
+    }
   }
 
   async getRepositories(params?: {
@@ -115,7 +148,7 @@ class CodeSageAPI {
 
   async callMCPTool(
     toolName: string,
-    args: Record<string, any>
+    args: Record<string, unknown>
   ): Promise<MCPToolCallResponse> {
     const request: MCPToolCallRequest = {
       tool_name: toolName,
@@ -147,7 +180,7 @@ class CodeSageAPI {
     return response.data;
   }
 
-  async getMCPServerInfo(): Promise<any> {
+  async getMCPServerInfo(): Promise<unknown> {
     const response = await this.client.get("/mcp");
     return response.data;
   }
