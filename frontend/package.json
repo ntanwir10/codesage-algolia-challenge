@@ -1,5 +1,6 @@
 {
-  "name": "frontend",
+  "name": "codesage-mcp-frontend",
+  "description": "CodeSage - MCP-First Code Discovery Frontend",
   "private": true,
   "version": "0.0.0",
   "type": "module",

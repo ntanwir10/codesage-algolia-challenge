@@ -1,5 +1,5 @@
 import { useParams, Link, useNavigate } from "react-router-dom";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { api } from "@/services/api";
 import { Button } from "@/components/ui/button";
@@ -25,6 +25,13 @@ export function RepositoryPage() {
     isOpen: false,
     isDeleting: false,
   });
+
+  const queryClient = useQueryClient();
+  const [isReprocessing, setIsReprocessing] = useState(false);
+  const [reprocessMessage, setReprocessMessage] = useState<string | null>(null);
+  const [reprocessMessageType, setReprocessMessageType] = useState<
+    "success" | "error" | null
+  >(null);
 
   const {
     data: repository,
@@ -82,6 +89,29 @@ export function RepositoryPage() {
       isOpen: false,
       isDeleting: false,
     });
+  };
+
+  const handleReprocess = async () => {
+    if (!repository) return;
+    setIsReprocessing(true);
+    setReprocessMessage(null);
+    setReprocessMessageType(null);
+    try {
+      await api.reprocessRepository(repository.id);
+      setReprocessMessage(
+        "Reprocessing started! The repository will be re-analyzed and re-indexed."
+      );
+      setReprocessMessageType("success");
+      queryClient.invalidateQueries({ queryKey: ["repository", repositoryId] });
+      queryClient.invalidateQueries({
+        queryKey: ["repository-status", repositoryId],
+      });
+    } catch {
+      setReprocessMessage("Failed to start reprocessing. Please try again.");
+      setReprocessMessageType("error");
+    } finally {
+      setIsReprocessing(false);
+    }
   };
 
   if (isRepoLoading) {
@@ -300,6 +330,25 @@ export function RepositoryPage() {
                       <span className="ml-1">Real-time updates enabled.</span>
                     )}
                   </p>
+                  <Button
+                    variant="outline"
+                    className="mt-2"
+                    onClick={handleReprocess}
+                    disabled={isReprocessing}
+                  >
+                    {isReprocessing ? "Reprocessing..." : "Reprocess"}
+                  </Button>
+                  {reprocessMessage && (
+                    <div
+                      className={`mt-2 text-sm ${
+                        reprocessMessageType === "success"
+                          ? "text-green-700"
+                          : "text-red-700"
+                      }`}
+                    >
+                      {reprocessMessage}
+                    </div>
+                  )}
                 </div>
               </div>
             </CardContent>
@@ -318,6 +367,25 @@ export function RepositoryPage() {
                     {status?.message ||
                       "There was an error processing this repository."}
                   </p>
+                  <Button
+                    variant="outline"
+                    className="mt-2"
+                    onClick={handleReprocess}
+                    disabled={isReprocessing}
+                  >
+                    {isReprocessing ? "Reprocessing..." : "Reprocess"}
+                  </Button>
+                  {reprocessMessage && (
+                    <div
+                      className={`mt-2 text-sm ${
+                        reprocessMessageType === "success"
+                          ? "text-green-700"
+                          : "text-red-700"
+                      }`}
+                    >
+                      {reprocessMessage}
+                    </div>
+                  )}
                 </div>
               </div>
             </CardContent>

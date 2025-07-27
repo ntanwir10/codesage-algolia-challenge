@@ -39,13 +39,21 @@ def check_database():
         print("✅ Database connection successful")
         return True
     except Exception as e:
-        print(f"❌ Database connection failed: {e}")
-        print("Make sure PostgreSQL is running and credentials are correct")
+        print(f"❌ Database connection failed")
+        print("Make sure database is accessible and credentials are correct")
+        print("For SQLite: Check DATABASE_URL path and permissions")
+        print(
+            "For PostgreSQL: Make sure PostgreSQL is running and credentials are correct"
+        )
         return False
 
 
 def check_env_vars():
     """Check essential environment variables"""
+    # Load environment variables from .env file
+    from dotenv import load_dotenv
+    load_dotenv()
+    
     required_vars = {
         "ALGOLIA_APP_ID": os.getenv("ALGOLIA_APP_ID"),
         "ALGOLIA_ADMIN_API_KEY": os.getenv("ALGOLIA_ADMIN_API_KEY"),

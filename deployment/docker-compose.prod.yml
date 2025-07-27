@@ -1,25 +1,6 @@
 version: "3.8"
 
 services:
-  # PostgreSQL Database
-  postgres:
-    image: postgres:15-alpine
-    container_name: codesage_postgres_prod
-    environment:
-      POSTGRES_USER: ${POSTGRES_USER}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-      POSTGRES_DB: ${POSTGRES_DB}
-    volumes:
-      - postgres_data_prod:/var/lib/postgresql/data
-    networks:
-      - codesage_network
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-    restart: unless-stopped
-
   # CodeSage MCP Server (Production)
   backend:
     build:
@@ -30,16 +11,15 @@ services:
       - "8001:8001"
     volumes:
       - backend_uploads_prod:/app/uploads
+      - backend_data_prod:/app/data # SQLite database storage
     env_file:
-      - .env.prod
+      - backend/.env
     environment:
-      - DATABASE_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      - DATABASE_URL=sqlite:///./data/codesage.db
       - MCP_SERVER_HOST=0.0.0.0
       - MCP_SERVER_PORT=8001
       - ENVIRONMENT=production
-    depends_on:
-      postgres:
-        condition: service_healthy
+      - CORS_ORIGINS=["https://yourdomain.com"] # Update with your domain
     networks:
       - codesage_network
     healthcheck:
@@ -49,7 +29,7 @@ services:
       retries: 3
     restart: unless-stopped
 
-  # Nginx Reverse Proxy (Optional for production)
+  # Nginx Reverse Proxy (Production)
   nginx:
     image: nginx:alpine
     container_name: codesage_nginx
@@ -57,8 +37,8 @@ services:
       - "80:80"
       - "443:443"
     volumes:
-      - ./nginx/nginx.conf:/etc/nginx/nginx.conf
-      - ./nginx/ssl:/etc/nginx/ssl
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./ssl:/etc/nginx/ssl:ro # SSL certificates (optional)
     depends_on:
       - backend
     networks:
@@ -66,8 +46,8 @@ services:
     restart: unless-stopped
 
 volumes:
-  postgres_data_prod:
   backend_uploads_prod:
+  backend_data_prod: # Persistent SQLite database storage
 
 networks:
   codesage_network:

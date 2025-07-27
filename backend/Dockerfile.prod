@@ -1,4 +1,4 @@
-FROM python:3.11-slim AS builder
+FROM python:3.13-slim AS builder
 
 # Set environment variables for build
 ENV PYTHONDONTWRITEBYTECODE=1
@@ -6,12 +6,12 @@ ENV PYTHONUNBUFFERED=1
 ENV PIP_NO_CACHE_DIR=1
 ENV PIP_DISABLE_PIP_VERSION_CHECK=1
 
-# Install build dependencies
+# Install build dependencies (minimal for SQLite)
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         build-essential \
-        libpq-dev \
         gcc \
+        git \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Python dependencies
@@ -19,22 +19,22 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Production stage
-FROM python:3.11-slim
+FROM python:3.13-slim
 
 # Set environment variables
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
 ENV ENVIRONMENT=production
 
-# Install runtime dependencies only
+# Install runtime dependencies only (minimal for SQLite)
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         curl \
-        libpq5 \
+        git \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy Python packages from builder
-COPY --from=builder /usr/local/lib/python3.11/site-packages /usr/local/lib/python3.11/site-packages
+COPY --from=builder /usr/local/lib/python3.13/site-packages /usr/local/lib/python3.13/site-packages
 COPY --from=builder /usr/local/bin /usr/local/bin
 
 # Set work directory
@@ -44,6 +44,9 @@ WORKDIR /app
 COPY app/ ./app/
 COPY alembic/ ./alembic/
 COPY alembic.ini .
+
+# Create SQLite database directory with proper permissions
+RUN mkdir -p /app/data && chmod 755 /app/data
 
 # Create non-root user
 RUN adduser --disabled-password --gecos '' --uid 1000 appuser

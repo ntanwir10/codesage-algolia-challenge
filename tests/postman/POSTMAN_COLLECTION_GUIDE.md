@@ -5,6 +5,7 @@
 ### **1. Import the Collection**
 
 #### **Method 1: Import File**
+
 1. Open Postman
 2. Click **"Import"** button (top left)
 3. Select **"Upload Files"**
@@ -12,6 +13,7 @@
 5. Click **"Import"**
 
 #### **Method 2: Import from Raw JSON**
+
 1. Open Postman
 2. Click **"Import"** → **"Raw text"**
 3. Copy and paste the entire JSON content from the collection file
@@ -50,9 +52,11 @@ curl http://localhost:8000/health
 The Postman collection is organized into **7 main folders**:
 
 ### **🏥 1. Health & Status**
+
 - **Health Check**: `GET /health`
 
 ### **🏗️ 2. Repository Management (9 endpoints)**
+
 - List Repositories
 - Create Repository
 - Get Repository Details
@@ -64,6 +68,7 @@ The Postman collection is organized into **7 main folders**:
 - Get Repository Statistics
 
 ### **🔍 3. Search & Discovery (8 endpoints)**
+
 - Advanced Code Search
 - Search Suggestions
 - Voice Search
@@ -74,6 +79,7 @@ The Postman collection is organized into **7 main folders**:
 - Search Service Health
 
 ### **📁 4. File Operations (8 endpoints)**
+
 - List Repository Files
 - Get File Content
 - Get Raw File Content
@@ -84,6 +90,7 @@ The Postman collection is organized into **7 main folders**:
 - Get Repository File Statistics
 
 ### **🤖 5. MCP Protocol (5 endpoints)**
+
 - Get MCP Capabilities
 - List MCP Tools
 - Execute MCP Tool
@@ -91,6 +98,7 @@ The Postman collection is organized into **7 main folders**:
 - Read MCP Resource
 
 ### **🔧 6. MCP Convenience Tools (6 endpoints)**
+
 - AI Search (Convenience)
 - Repository Analysis (Convenience)
 - Function Exploration (Convenience)
@@ -99,6 +107,7 @@ The Postman collection is organized into **7 main folders**:
 - MCP Server Status
 
 ### **🤝 7. Collaboration (9 endpoints)**
+
 - Create Collaboration Room
 - Get Collaboration Room
 - List Room Participants
@@ -112,16 +121,21 @@ The Postman collection is organized into **7 main folders**:
 ## 🎯 **Complete Testing Workflow**
 
 ### **Step 1: Verify System Health**
-```
+
+```text
 🏥 Health & Status → Health Check
 ```
+
 **Expected**: Status 200, healthy components
 
 ### **Step 2: Create and Setup Repository**
-```
+
+```flow
 🏗️ Repository Management → Create Repository
 ```
+
 **Body Example**:
+
 ```json
 {
   "name": "test-repo-{{$timestamp}}",
@@ -132,24 +146,31 @@ The Postman collection is organized into **7 main folders**:
 ```
 
 ### **Step 3: Upload Files**
-```
+
+```flow
 🏗️ Repository Management → Upload Repository Files
 ```
+
 - Set `repository_id` in path (from Step 2 response)
 - Upload sample `.py`, `.js`, or `.ts` files
 
 ### **Step 4: Process Repository**
-```
+
+```flow
 🏗️ Repository Management → Process Repository
 ```
+
 - Set `repository_id` in path
 - Set `force_reprocess=false`
 
 ### **Step 5: Test Search Functionality**
-```
+
+```flow
 🔍 Search & Discovery → Advanced Code Search
 ```
+
 **Body Example**:
+
 ```json
 {
   "query": "function authentication",
@@ -160,14 +181,16 @@ The Postman collection is organized into **7 main folders**:
 ```
 
 ### **Step 6: Test MCP Protocol**
-```
+
+```flow
 🤖 MCP Protocol → Get MCP Capabilities
 🤖 MCP Protocol → List MCP Tools
 🤖 MCP Protocol → Execute MCP Tool
 ```
 
 ### **Step 7: Test File Operations**
-```
+
+```flow
 📁 File Operations → List Repository Files
 📁 File Operations → Get File Content
 ```
@@ -175,6 +198,7 @@ The Postman collection is organized into **7 main folders**:
 ## 📋 **Request Templates & Examples**
 
 ### **Repository Creation**
+
 ```json
 {
   "name": "demo-{{$randomWord}}-{{$timestamp}}",
@@ -185,6 +209,7 @@ The Postman collection is organized into **7 main folders**:
 ```
 
 ### **Advanced Search**
+
 ```json
 {
   "query": "user authentication login",
@@ -199,6 +224,7 @@ The Postman collection is organized into **7 main folders**:
 ```
 
 ### **MCP Tool Execution**
+
 ```json
 {
   "tool_name": "search_code",
@@ -211,6 +237,7 @@ The Postman collection is organized into **7 main folders**:
 ```
 
 ### **File Analysis**
+
 ```json
 {
   "force_reanalysis": false,
@@ -220,6 +247,7 @@ The Postman collection is organized into **7 main folders**:
 ```
 
 ### **Bulk File Analysis**
+
 ```json
 {
   "file_ids": [1, 2, 3, 4, 5],
@@ -231,6 +259,7 @@ The Postman collection is organized into **7 main folders**:
 ## 🔧 **Configuration Options**
 
 ### **Environment Variables**
+
 | Variable        | Description          | Default Value            |
 | --------------- | -------------------- | ------------------------ |
 | `baseUrl`       | API server URL       | `http://localhost:8000`  |
@@ -238,12 +267,16 @@ The Postman collection is organized into **7 main folders**:
 | `file_id`       | Active file ID       | `1` (set after upload)   |
 
 ### **Global Headers**
+
 All requests include:
+
 - `Accept: application/json`
 - `Content-Type: application/json` (for POST/PUT)
 
 ### **Query Parameters**
+
 Common parameters across endpoints:
+
 - `skip` / `limit`: Pagination
 - `language`: Programming language filter
 - `repository_id`: Repository scope
@@ -252,16 +285,20 @@ Common parameters across endpoints:
 ## 🧪 **Automated Testing Features**
 
 ### **Pre-request Scripts**
+
 - Automatic timestamp generation
 - Dynamic variable setting
 
 ### **Test Scripts**
+
 Each request includes automatic tests:
+
 - Status code validation (200, 201, 202, 204)
 - Response time check (<5000ms)
 - Content-Type validation
 
 ### **Collection Variables**
+
 - `{{$timestamp}}`: Current Unix timestamp
 - `{{$randomWord}}`: Random word for unique names
 - `{{baseUrl}}`: Server base URL
@@ -269,6 +306,7 @@ Each request includes automatic tests:
 ## 📊 **Response Examples**
 
 ### **Health Check Response**
+
 ```json
 {
   "status": "healthy",
@@ -284,6 +322,7 @@ Each request includes automatic tests:
 ```
 
 ### **Repository Creation Response**
+
 ```json
 {
   "id": 1,
@@ -297,6 +336,7 @@ Each request includes automatic tests:
 ```
 
 ### **Search Response**
+
 ```json
 {
   "query": "authentication",
@@ -319,6 +359,7 @@ Each request includes automatic tests:
 ### **Common Issues**
 
 #### **1. Connection Refused (Cannot reach server)**
+
 ```bash
 # Check if server is running
 docker-compose ps
@@ -329,27 +370,32 @@ curl http://localhost:8000/health
 ```
 
 #### **2. 404 Not Found (Invalid IDs)**
+
 - **Solution**: Use valid repository/file IDs from previous responses
 - **Check**: Repository exists before accessing files
 - **Verify**: Correct endpoint paths
 
 #### **3. 422 Unprocessable Entity (Validation errors)**
+
 - **Check**: Request body format and required fields
 - **Verify**: Data types (strings vs numbers)
 - **Ensure**: Valid enum values
 
 #### **4. Empty Search Results**
+
 - **Cause**: No files uploaded or processed
 - **Solution**: Upload files → Process repository → Search
 
 ### **Debug Steps**
 
 1. **Check Server Logs**:
+
    ```bash
    docker-compose logs backend -f
    ```
 
 2. **Verify Database Connection**:
+
    ```bash
    curl http://localhost:8000/health
    ```
@@ -367,6 +413,7 @@ curl http://localhost:8000/health
 ## 📚 **Advanced Usage**
 
 ### **Collection Runner**
+
 1. Click **"Runner"** (top left)
 2. Select **"CodeSage MCP Server API"**
 3. Choose specific folders to run
@@ -374,7 +421,9 @@ curl http://localhost:8000/health
 5. Click **"Run CodeSage MCP Server API"**
 
 ### **Monitoring & Newman**
+
 Export and run with Newman CLI:
+
 ```bash
 npm install -g newman
 newman run CodeSage_MCP_Server_API.postman_collection.json \
@@ -383,6 +432,7 @@ newman run CodeSage_MCP_Server_API.postman_collection.json \
 ```
 
 ### **CI/CD Integration**
+
 ```yaml
 # GitHub Actions example
 - name: Run API Tests
@@ -395,24 +445,28 @@ newman run CodeSage_MCP_Server_API.postman_collection.json \
 ## 🎉 **Collection Features**
 
 ### **📋 Complete Coverage**
+
 - ✅ **48 total endpoints** across all API categories
 - ✅ **All HTTP methods**: GET, POST, PUT, DELETE
 - ✅ **All parameter types**: Path, Query, Headers, Body
 - ✅ **Real examples**: Ready-to-use request bodies
 
 ### **🔧 Smart Organization**
+
 - ✅ **Logical folders** by feature area
 - ✅ **Descriptive names** and documentation
 - ✅ **Consistent patterns** across similar endpoints
 - ✅ **Environment variables** for easy configuration
 
 ### **🧪 Testing Ready**
+
 - ✅ **Automated validation** scripts
 - ✅ **Performance monitoring** (response times)
 - ✅ **Collection runner** support
 - ✅ **CI/CD integration** ready
 
 ### **📖 Documentation**
+
 - ✅ **Detailed descriptions** for each endpoint
 - ✅ **Parameter explanations** and examples
 - ✅ **Expected responses** and error codes
@@ -425,4 +479,4 @@ newman run CodeSage_MCP_Server_API.postman_collection.json \
 **Total Endpoints**: 48  
 **Coverage**: 100% of CodeSage MCP Server API
 
-**🚀 Ready to explore the CodeSage MCP Server API with Postman!** 
+**🚀 Ready to explore the CodeSage MCP Server API with Postman!**

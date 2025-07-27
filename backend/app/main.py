@@ -4,12 +4,27 @@ from fastapi import FastAPI, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
+# Load environment variables from .env file
+from dotenv import load_dotenv
+
+load_dotenv()
+
 from app.core.config import get_settings
-from app.core.database import engine
+from app.core.database import Base, engine, get_db
 from app.models import repository, code_entity, code_file
 from app.api.v1.router import api_router
 from app.services.algolia_service import AlgoliaService
 from app.services.security_service import get_rate_limiting_service
+
+# Optional Sentry imports - only import if sentry is available
+try:
+    import sentry_sdk
+    from sentry_sdk.integrations.fastapi import FastApiIntegration
+    from sentry_sdk.integrations.sqlalchemy import SqlalchemyIntegration
+
+    SENTRY_AVAILABLE = True
+except ImportError:
+    SENTRY_AVAILABLE = False
 
 # Configure structured logging
 structlog.configure(
@@ -36,7 +51,7 @@ logger = structlog.get_logger()
 settings = get_settings()
 
 # Initialize Sentry for error monitoring
-if hasattr(settings, "sentry_dsn") and settings.sentry_dsn:
+if hasattr(settings, "sentry_dsn") and settings.sentry_dsn and SENTRY_AVAILABLE:
     sentry_sdk.init(
         dsn=settings.sentry_dsn,
         integrations=[
@@ -47,17 +62,17 @@ if hasattr(settings, "sentry_dsn") and settings.sentry_dsn:
         environment=settings.environment,
     )
 
-# Create FastAPI application - MCP SERVER
+# Create FastAPI application - CodeSage - MCP-First Code Discovery Server
 app = FastAPI(
-    title="CodeSage MCP Server",
-    description="AI-Powered Code Discovery Platform built around Algolia MCP Server integration. Implements Model Context Protocol (MCP) for conversational code exploration.",
+    title="CodeSage - MCP-First Code Discovery",
+    description="AI-Powered Code Discovery Platform built entirely around the Model Context Protocol (MCP) for seamless integration with Claude Desktop and other AI clients. The only code discovery tool with MCP-first architecture.",
     version="1.0.0",
     docs_url="/docs" if settings.environment != "production" else None,
     redoc_url="/redoc" if settings.environment != "production" else None,
     servers=[
         {
             "url": f"http://{settings.mcp_server_host}:{settings.mcp_server_port}",
-            "description": "CodeSage MCP Server",
+            "description": "CodeSage - MCP-First Code Discovery Server",
         }
     ],
 )
@@ -76,7 +91,7 @@ logger.info(
 # Add middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=settings.cors_origins,
+    allow_origins=settings.cors_origins_list,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -86,8 +101,10 @@ app.add_middleware(
 app.include_router(api_router, prefix="/api/v1")
 
 # Add WebSocket endpoints directly to main app
-# app.add_websocket_route("/ws", repository_status_websocket) # This line is removed
-# app.add_api_route("/api/v1/ws/health", websocket_health, methods=["GET"]) # This line is removed
+from app.services.websocket_service import repository_status_websocket, websocket_health
+
+app.add_websocket_route("/ws", repository_status_websocket)
+app.add_api_route("/api/v1/ws/health", websocket_health, methods=["GET"])
 
 
 @app.on_event("startup")
@@ -174,7 +191,7 @@ async def health_check():
         db.execute(text("SELECT 1"))
         health_status["components"]["database"] = {
             "status": "healthy",
-            "message": "PostgreSQL connection successful",
+            "message": "SQLite connection successful",
         }
     except Exception as e:
         health_status["components"]["database"] = {
@@ -216,12 +233,12 @@ async def health_check():
 
     # Check WebSocket service
     try:
-        # Import the health function from websockets module
-        # ws_health = await websocket_health() # This line is removed
+        ws_health = await websocket_health()
         health_status["components"]["websocket"] = {
-            "status": "healthy",  # Placeholder, as websocket_health is removed
-            "message": "WebSocket service operational (placeholder)",
-            "connections": 0,  # Placeholder
+            "status": ws_health["status"],
+            "message": "WebSocket service operational",
+            "connections": ws_health["active_connections"],
+            "repository_subscriptions": ws_health["repository_subscriptions"],
         }
     except Exception as e:
         health_status["components"]["websocket"] = {

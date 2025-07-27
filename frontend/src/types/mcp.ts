@@ -39,30 +39,23 @@ export interface SearchQuery {
 }
 
 export interface SearchHit {
-  id: string;
-  title: string;
-  content: string;
-  summary?: string;
+  entity_name: string;
   entity_type: string;
+  description: string;
   file_path: string;
-  line_number?: number;
-  language?: string;
-  repository_id: number;
-  repository_name?: string;
-  score: number;
-  highlighted: Record<string, string[]>;
+  language: string;
+  line_start: number;
+  line_end: number;
+  parameters: string[];
+  return_type: string | null;
+  content: string;
+  relevance_score: number;
 }
 
 export interface SearchResponse {
   query: string;
   hits: SearchHit[];
-  total_hits: number;
-  processing_time: number;
-  page: number;
-  per_page: number;
-  has_more: boolean;
-  facets: Record<string, any>;
-  suggestions: string[];
+  total: number;
 }
 
 export interface MCPCapabilities {

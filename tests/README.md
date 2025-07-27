@@ -1,22 +1,28 @@
-# 🧪 **CodeSage MCP Server - Test Suite**
+# 🧪 **CodeSage - MCP-First Code Discovery: Test Suite**
 
-This directory contains comprehensive tests for the CodeSage MCP Server API endpoints and functionality.
+This directory contains comprehensive tests for **CodeSage - MCP-First Code Discovery** API endpoints and functionality. This is the only code discovery tool built entirely around the Model Context Protocol (MCP) for seamless AI integration.
 
-## 📁 **Test Files Structure**
+## 📁 Test Organization
 
-| **Test File**                                     | **Purpose**                 | **Coverage**                                           |
-| ------------------------------------------------- | --------------------------- | ------------------------------------------------------ |
-| `test_endpoints.py`                               | **Complete API Test Suite** | All endpoints (repositories, search, files, AI/MCP)    |
-| `test_mcp_protocol.py`                            | **MCP Protocol Compliance** | Core MCP endpoints (/capabilities, /tools, /resources) |
-| `test_mcp_convenience_tools.py`                   | **MCP Convenience Tools**   | MCP tool endpoints (/search, /analyze, /explain, etc.) |
-| `test_repository_endpoints.py`                    | **Repository Management**   | CRUD operations, upload, processing, statistics        |
-| `test_search_endpoints.py`                        | **Advanced Search**         | Search, suggestions, voice, similarity, analytics      |
-| `test_file_endpoints.py`                          | **File Operations**         | File listing, content, entities, analysis, bulk ops    |
-| `test_results.json`                               | **Test Results Archive**    | Historical test execution results                      |
-| `test_upload.py`                                  | **Upload Test Helper**      | Simple file upload testing                             |
-| **📮 POSTMAN COLLECTION**                          | **GUI API Testing**         | **Interactive testing with visual interface**          |
-| `CodeSage_MCP_Server_API.postman_collection.json` | **Postman Collection**      | All 48 endpoints organized in folders                  |
-| `POSTMAN_COLLECTION_GUIDE.md`                     | **Postman Setup Guide**     | Complete import and usage instructions                 |
+Tests are now organized by category for better maintainability:
+
+```tree
+tests/
+├── api/                    # API endpoint tests
+│   ├── test_endpoints.py   # General API tests
+│   ├── test_repository_endpoints.py
+│   ├── test_search_endpoints.py
+│   ├── test_file_endpoints.py
+│   ├── test_realtime_flow.py
+│   ├── test_rate_limiting.py
+│   └── test_upload.py
+├── mcp/                    # MCP protocol tests
+│   ├── test_mcp_protocol.py
+│   └── test_mcp_convenience_tools.py
+└── postman/               # Postman collection
+    ├── CodeSage_MCP_Server_API.postman_collection.json
+    └── POSTMAN_COLLECTION_GUIDE.md
+```
 
 ## 🚀 **Running Tests**
 
@@ -84,6 +90,7 @@ For **visual/GUI testing**, use the comprehensive Postman collection:
 ```
 
 **Postman Collection Features:**
+
 - ✅ **48 endpoints** organized in 7 logical folders
 - ✅ **Ready-to-use examples** with realistic request bodies
 - ✅ **Automated tests** for status codes and response times

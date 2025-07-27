@@ -1,7 +1,8 @@
 import { Link, useLocation } from "react-router-dom";
-import { Button } from "@/components/ui/button";
+// import { Button } from "@/components/ui/button";
 import { ConnectionStatus } from "@/components/ui/connection-status";
-import { useRealtimeStatus } from "@/hooks/useRealtimeStatus";
+import { usePageTitle } from "@/hooks/usePageTitle";
+// import { useRealtimeStatus } from "@/hooks/useRealtimeStatus";
 
 interface LayoutProps {
   children: React.ReactNode;
@@ -10,8 +11,11 @@ interface LayoutProps {
 export function Layout({ children }: LayoutProps) {
   const location = useLocation();
 
+  // Enable dynamic page titles
+  usePageTitle();
+
   // Enable global real-time status updates with notifications
-  const { connectionStatus } = useRealtimeStatus({ enableNotifications: true });
+  // const { connectionStatus } = useRealtimeStatus({ enableNotifications: true });
 
   const navigation = [
     { name: "Home", href: "/", current: location.pathname === "/" },
@@ -60,7 +64,7 @@ export function Layout({ children }: LayoutProps) {
 
             <div className="flex items-center gap-2">
               {/* Real-time Updates Status */}
-              <div className="hidden sm:flex items-center gap-2 text-xs text-muted-foreground">
+              {/* <div className="hidden sm:flex items-center gap-2 text-xs text-muted-foreground">
                 <div
                   className={`w-2 h-2 rounded-full ${
                     connectionStatus === "connected"
@@ -77,16 +81,11 @@ export function Layout({ children }: LayoutProps) {
                     ? "Connecting..."
                     : "No Live Updates"}
                 </span>
-              </div>
+              </div> */}
 
               <span className="text-sm text-muted-foreground hidden sm:block">
                 Powered by Algolia MCP
               </span>
-              <Link to="/dashboard">
-                <Button variant="outline" size="sm">
-                  Dashboard
-                </Button>
-              </Link>
             </div>
           </div>
         </div>
@@ -104,7 +103,7 @@ export function Layout({ children }: LayoutProps) {
             </p>
             <div className="flex items-center gap-4 text-sm text-muted-foreground">
               <a
-                href="https://github.com"
+                href="https://github.com/ntanwir10/codesage-algolia-challenge"
                 target="_blank"
                 rel="noopener noreferrer"
                 className="hover:text-foreground transition-colors"
@@ -120,7 +119,7 @@ export function Layout({ children }: LayoutProps) {
                 Algolia
               </a>
               <a
-                href="/api/docs"
+                href="http://localhost:8001/docs"
                 target="_blank"
                 rel="noopener noreferrer"
                 className="hover:text-foreground transition-colors"

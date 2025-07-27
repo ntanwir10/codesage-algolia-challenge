@@ -1,94 +1,71 @@
-.PHONY: help build up down restart logs shell test clean frontend backend start stop start-backend start-frontend backend-check
+.PHONY: help build up down restart logs shell test clean start stop start-backend start-frontend
 
+# CodeSage - MCP-First Code Discovery Makefile
+# 
+# This project is built entirely around the Model Context Protocol (MCP)
+# for seamless AI integration with Claude Desktop and other MCP clients.
+# 
 # Default target
 help:
-	@echo "CodeSage MCP Server Development Commands:"
+	@echo "🏆 CodeSage - MCP-First Code Discovery - Algolia Challenge Edition"
 	@echo ""
 	@echo "🚀 Quick Start:"
+	@echo "  setup           - Initial setup with environment files"
 	@echo "  start           - Start both backend and frontend (recommended)"
 	@echo "  stop            - Stop all development servers"
-	@echo "  start-backend   - Start backend with health checks and validation"
-	@echo "  start-frontend  - Start frontend development server"
 	@echo ""
 	@echo "🐳 Docker Commands:"
-	@echo "  build       - Build all Docker containers"
-	@echo "  up          - Start all services (backend + database)"
-	@echo "  down        - Stop all services"
-	@echo "  restart     - Restart all services"
-	@echo "  logs        - Show logs for all services"
-	@echo "  logs-api    - Show backend API logs"
-	@echo "  shell       - Open shell in backend container"
+	@echo "  build           - Build all Docker containers"
+	@echo "  up              - Start services (backend + database)"
+	@echo "  down            - Stop all services"
+	@echo "  logs            - Show logs for all services"
 	@echo ""
 	@echo "🛠️  Development:"
-	@echo "  backend         - Start backend with enhanced startup script"
-	@echo "  frontend        - Start frontend development server"
-	@echo "  backend-check   - Check backend health and WebSocket status"
-	@echo "  test            - Run tests"
-	@echo "  setup           - Initial setup with environment files"
+	@echo "  start-backend   - Start backend development server"
+	@echo "  start-frontend  - Start frontend development server"
+	@echo "  health          - Check backend health and MCP status"
+	@echo ""
+	@echo "🧪 Testing:"
+	@echo "  test            - Run API tests"
+	@echo "  test-mcp        - Test MCP protocol endpoints"
 	@echo ""
 	@echo "🧹 Maintenance:"
-	@echo "  clean       - Clean up containers and volumes"
-	@echo "  health      - Check backend health"
-	@echo "  status      - Show service status"
+	@echo "  clean           - Clean up containers and volumes"
 
-# Quick start commands
+# Setup development environment
+setup:
+	@echo "🏆 Setting up CodeSage - MCP-First Code Discovery for Algolia Challenge..."
+	@cp .env.example .env 2>/dev/null || echo "⚠️  .env.example not found, create .env manually"
+	@echo ""
+	@echo "📋 Required environment variables:"
+	@echo "   ALGOLIA_APP_ID=your_app_id"
+	@echo "   ALGOLIA_ADMIN_API_KEY=your_admin_key"
+	@echo "   SECRET_KEY=your_secret_key"
+	@echo ""
+	@echo "🎯 Next: Edit .env file and run 'make start'"
+
+# Quick start commands  
 start:
-	@echo "🚀 Starting CodeSage MCP Server (full development environment)"
-	@echo ""
-	@echo "Starting backend server with health checks..."
+	@echo "🚀 Starting CodeSage - MCP-First Code Discovery..."
 	@$(MAKE) start-backend &
-	@sleep 8
-	@echo ""
-	@echo "Starting frontend development server..."
+	@sleep 5
 	@$(MAKE) start-frontend
 
+
 start-backend:
-	@echo "🚀 Starting backend with enhanced startup script..."
-	cd backend && python start_server.py
+	@echo "🔧 Starting CodeSage - MCP-First Code Discovery backend server..."
+	@echo "📍 Make sure your virtual environment is active: source .venv/bin/activate"
+	cd backend && python -m uvicorn app.main:app --reload --port 8001
 
 start-frontend:
 	@echo "🎨 Starting frontend development server..."
 	cd frontend && npm run dev
 
-# Stop development servers
 stop:
 	@echo "🛑 Stopping development servers..."
 	@pkill -f "uvicorn app.main:app" || echo "Backend not running"
 	@pkill -f "vite" || echo "Frontend not running"
-	@echo "✅ Development servers stopped"
-
-# Enhanced backend startup (replaces simple uvicorn command)
-backend:
-	@echo "🚀 Starting backend development server with validation..."
-	cd backend && python start_server.py
-
-# Backend health and status checks
-backend-check:
-	@echo "🔍 Checking backend service health..."
-	@echo ""
-	@echo "📊 Backend Health:"
-	@curl -s http://localhost:8001/health | jq .status 2>/dev/null || curl -s http://localhost:8001/health || echo "❌ Backend not responding"
-	@echo ""
-	@echo "🔌 WebSocket Health:"
-	@curl -s http://localhost:8001/api/v1/ws/health | jq 2>/dev/null || echo "❌ WebSocket service not responding"
-	@echo ""
-	@echo "📋 Process Status:"
-	@ps aux | grep uvicorn | grep -v grep || echo "❌ No uvicorn processes found"
-
-# Setup development environment
-setup:
-	@echo "Setting up CodeSage MCP Server development environment..."
-	@cp .env.example .env 2>/dev/null || echo "⚠️  .env.example not found, skipping backend .env"
-	@cp frontend/.env.example frontend/.env 2>/dev/null || echo "⚠️  frontend/.env.example not found, skipping frontend .env"
-	@echo "✅ Created .env files from templates"
-	@echo ""
-	@echo "⚠️  Please edit .env file with your API keys:"
-	@echo "   - ALGOLIA_APP_ID, ALGOLIA_ADMIN_API_KEY, ALGOLIA_SEARCH_API_KEY"
-	@echo "   - Update SECRET_KEY for security"
-	@echo ""
-	@echo "🎯 Next steps:"
-	@echo "   1. Edit .env files with your configuration"
-	@echo "   2. Run 'make start' to start the full development environment"
+	@echo "✅ Servers stopped"
 
 # Docker commands
 build:
@@ -96,80 +73,72 @@ build:
 
 up:
 	docker-compose up -d
-	@echo "✅ CodeSage MCP Server is running!"
+	@echo "✅ CodeSage - MCP-First Code Discovery is running!"
 	@echo "🚀 Backend API: http://localhost:8001"
 	@echo "📚 API Docs: http://localhost:8001/docs"
-	@echo "🔌 WebSocket: ws://localhost:8001/ws"
-	@echo "🗄️  PostgreSQL: localhost:5432"
+	@echo "🔌 MCP Endpoint: http://localhost:8001/api/v1/ai/mcp/capabilities"
 	@echo ""
-	@echo "Frontend: Run 'make frontend' in a separate terminal"
+	@echo "💡 Test with: curl http://localhost:8001/health"
 
 down:
-	docker-compose down
+	docker-compose -f deployment/docker-compose.yml down
 
 restart:
-	docker-compose restart
+	docker-compose -f deployment/docker-compose.yml restart
 
 # Logs
 logs:
-	docker-compose logs -f
+	docker-compose -f deployment/docker-compose.yml logs -f
 
-logs-api:
-	docker-compose logs -f backend
+logs-backend:
+	docker-compose -f deployment/docker-compose.yml logs -f backend
 
-logs-postgres:
-	docker-compose logs -f postgres
-
-# Development
+# Development  
 shell:
-	docker-compose exec backend bash
+	docker-compose -f deployment/docker-compose.yml exec backend bash
 
-shell-db:
-	docker-compose exec postgres psql -U codesage -d codesage
-
-# Frontend development
-frontend:
-	@echo "🎨 Starting frontend development server..."
-	cd frontend && npm run dev
-
-# Database
-db-reset:
-	docker-compose down
-	docker volume rm codesage-algolia-challenge_postgres_data
-	docker-compose up -d postgres
-	@echo "⚠️  Database reset complete"
-
-db-migrate:
-	docker-compose exec backend alembic upgrade head
-
-db-migration:
-	@read -p "Enter migration message: " message; \
-	docker-compose exec backend alembic revision --autogenerate -m "$$message"
+health:
+	@echo "🏥 CodeSage - MCP-First Code Discovery Health Check:"
+	@curl -s http://localhost:8001/health | jq . || echo "❌ Backend not responding"
+	@echo ""
+	@echo "🤖 MCP Capabilities:"
+	@curl -s http://localhost:8001/api/v1/ai/mcp/capabilities | jq .tools || echo "❌ MCP not responding"
 
 # Testing
 test:
-	docker-compose exec backend pytest -v
+	@echo "🧪 Running CodeSage API tests..."
+	cd backend && python -m pytest tests/ -v
 
-test-realtime:
-	@echo "🧪 Testing real-time WebSocket flow..."
-	python test_realtime_flow.py
+test-mcp:
+	@echo "🤖 Testing MCP protocol endpoints..."
+	@echo "Testing capabilities..."
+	@curl -s http://localhost:8001/api/v1/ai/mcp/capabilities | jq .
+	@echo "Testing tools list..."
+	@curl -s http://localhost:8001/api/v1/ai/mcp/tools | jq .
 
-# Code quality
-lint:
-	docker-compose exec backend black app/
-	docker-compose exec backend isort app/
-	docker-compose exec backend flake8 app/
+# Database
+db-reset:
+	@echo "🗄️  Resetting SQLite database..."
+	rm -f backend/codesage.db 2>/dev/null || true
+	rm -f codesage.db 2>/dev/null || true
+	@echo "✅ SQLite database reset complete"
+
+db-migrate:
+	@echo "🔄 Running database migrations..."
+	cd backend && alembic upgrade head
+
+db-migration:
+	@read -p "Enter migration message: " message; \
+	cd backend && alembic revision --autogenerate -m "$$message"
 
 # Cleanup
 clean:
 	docker-compose down -v
 	docker system prune -f
-	docker volume prune -f
 
 clean-all:
-	docker-compose down -v
+	docker-compose down -v  
 	docker system prune -a -f
-	docker volume prune -f
 
 # Production
 prod-build:
@@ -180,29 +149,23 @@ prod-up:
 
 # Status
 status:
-	@echo "🔍 CodeSage MCP Server Status:"
+	@echo "📊 CodeSage MCP Server Status:"
 	@docker-compose ps
-
-health:
-	@echo "🏥 Health Check:"
-	@curl -s http://localhost:8001/health | jq . || echo "❌ Backend not responding"
-
-websocket-health:
-	@echo "🔌 WebSocket Health Check:"
-	@curl -s http://localhost:8001/api/v1/ws/health | jq . || echo "❌ WebSocket service not responding"
-
-# Quick development workflow
-dev: down build up logs-api
 
 # Install dependencies locally (for IDE support)
 install-local:
-	@echo "📦 Installing backend dependencies locally..."
+	@echo "📦 Installing dependencies locally..."
 	cd backend && pip install -r requirements.txt
-	@echo "📦 Installing frontend dependencies locally..."
 	cd frontend && npm install
 
-# Full development setup
-dev-setup: setup install-local
-	@echo "🎯 Development environment ready!"
-	@echo "Run 'make start' to start both backend and frontend"
-	@echo "Or run 'make up' for Docker-based development"
+# Challenge workflow
+challenge-setup: setup install-local
+	@echo "🏆 Algolia MCP Server Challenge Setup Complete!"
+	@echo ""  
+	@echo "🎯 Ready for the challenge:"
+	@echo "   1. Edit .env with your Algolia credentials"
+	@echo "   2. Run 'make start' to start development"
+	@echo "   3. Submit repository: POST /api/v1/repositories/"
+	@echo "   4. Connect Claude Desktop to MCP endpoint"
+	@echo ""
+	@echo "🔗 Challenge: https://dev.to/challenges/algolia-2025-07-09"

@@ -1,20 +1,22 @@
-# CodeSage Frontend
+# CodeSage - MCP-First Code Discovery: Frontend
 
-Simple repository management interface for the CodeSage MCP-first code discovery platform.
+Simple repository management interface for **CodeSage - MCP-First Code Discovery**, the only code discovery tool built entirely around the Model Context Protocol (MCP) for seamless AI integration.
 
 ## 🎯 Purpose
 
-The frontend provides a **minimal interface** for repository management. The core code discovery happens through **Claude Desktop** and the MCP protocol - not through complex frontend UI.
+The frontend provides a **minimal interface** for repository management. The core code discovery happens through **Claude Desktop** and the MCP protocol - not through complex frontend UI. This reflects our **MCP-first architecture** where AI interactions happen through MCP integration, not web interfaces.
 
 ## ✨ Features
 
 ### 🏗️ Repository Management
+
 - **GitHub URL Submission** - Clean form for repository input
 - **Repository Listing** - View submitted repositories with status
 - **Status Tracking** - Visual indicators (pending, processing, completed)
 - **Basic CRUD** - Create, read, delete repositories
 
 ### 🎨 Simple UI/UX  
+
 - **React 18 + TypeScript** - Modern, type-safe development
 - **TailwindCSS** - Clean, responsive design
 - **Vite** - Fast development and building
@@ -28,15 +30,17 @@ The frontend provides a **minimal interface** for repository management. The cor
 - ❌ Advanced analytics dashboards
 - ❌ Direct AI chat interface
 
-**Why?** Because code discovery happens through **Claude Desktop** via MCP protocol. The frontend's job is simple repository management only.
+**Why?** Because code discovery happens through **Claude Desktop** via MCP protocol. The frontend's job is simple repository management only. This is our **unique differentiator**: MCP-first architecture for code discovery.
 
 ## 🚀 Development
 
-### Prerequisites
+### Frontend Prerequisites
+
 - Node.js 18+
 - Backend running on `http://localhost:8001`
 
 ### Setup
+
 ```bash
 cd frontend
 npm install
@@ -44,15 +48,18 @@ npm run dev
 ```
 
 ### Environment Configuration
+
 The frontend gets its configuration from the backend API. No separate `.env` file needed.
 
 Optional environment variables:
+
 ```bash
 # Only if backend runs on different URL
 VITE_API_BASE_URL=http://localhost:8001/api/v1
 ```
 
 ### Scripts
+
 ```bash
 npm run dev         # Development server
 npm run build       # Production build
@@ -63,7 +70,7 @@ npm run type-check  # TypeScript checking
 
 ## 📁 Project Structure
 
-```
+```tree
 src/
 ├── components/
 │   ├── ui/              # Basic UI components (button, card, etc.)
@@ -95,6 +102,7 @@ DELETE /api/v1/repositories/{id}    // Delete repository
 ## 🎨 UI Components
 
 ### Repository Form
+
 ```tsx
 // Simple GitHub URL submission
 <form onSubmit={handleSubmit}>
@@ -108,6 +116,7 @@ DELETE /api/v1/repositories/{id}    // Delete repository
 ```
 
 ### Repository List
+
 ```tsx
 // Basic table with status indicators
 <table>
@@ -133,12 +142,15 @@ DELETE /api/v1/repositories/{id}    // Delete repository
 ## 🔧 Technical Decisions
 
 ### Why Keep It Simple?
-- **MCP-first architecture** - AI discovery happens in Claude Desktop
+
+- **MCP-first architecture** - AI discovery happens in Claude Desktop (our unique differentiator)
 - **Focused responsibility** - Repository management only
 - **Faster development** - Less complexity means faster iteration
 - **Better UX** - Users get powerful AI discovery without complex UI
+- **Unique positioning** - Only code discovery tool built entirely around MCP
 
 ### Technology Choices
+
 - **React 18** - Modern, stable, great TypeScript support
 - **TailwindCSS** - Utility-first, no complex CSS architecture needed
 - **Vite** - Fast development, simple configuration
@@ -147,18 +159,22 @@ DELETE /api/v1/repositories/{id}    // Delete repository
 ## 🚀 Deployment
 
 ### Development
+
 ```bash
 npm run dev  # http://localhost:5173
 ```
 
 ### Production Build
+
 ```bash
 npm run build    # Creates dist/ folder
 npm run preview  # Preview production build locally
 ```
 
 ### Static Hosting
+
 The built frontend is a static site that can be deployed to:
+
 - Vercel
 - Netlify  
 - GitHub Pages
@@ -169,6 +185,7 @@ Just set `VITE_API_BASE_URL` to your production backend URL.
 ## 🧪 Testing Strategy
 
 ### Manual Testing
+
 1. Start backend server
 2. Submit GitHub repository URL
 3. Verify repository appears in list
@@ -176,6 +193,7 @@ Just set `VITE_API_BASE_URL` to your production backend URL.
 5. Test delete functionality
 
 ### Integration with MCP
+
 1. Submit repository and wait for "completed" status
 2. Connect Claude Desktop to backend MCP server
 3. Ask questions about the repository through Claude

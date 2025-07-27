@@ -1,14 +1,24 @@
+"""
+CodeSage - MCP-First Code Discovery: Algolia Service
+
+This module provides search functionality for CodeSage - the only code discovery
+tool built entirely around the Model Context Protocol (MCP) for seamless AI integration.
+
+The Algolia service indexes code entities and provides search capabilities that
+are accessed through MCP tools by Claude Desktop and other MCP clients.
+
+This represents our core innovation: MCP-first architecture with powerful search integration.
+"""
+
 from sqlalchemy.orm import Session
 from typing import List, Dict, Any, Optional
 import structlog
 from algoliasearch.search_client import SearchClient
 from algoliasearch.exceptions import AlgoliaException
+import uuid
 
 from app.core.config import get_settings
-from app.models.repository import Repository
-from app.models.code_file import CodeFile
-from app.models.code_entity import CodeEntity
-from app.models.search_index import SearchIndex
+from app.services.code_parser import ParsedCodeEntity
 
 logger = structlog.get_logger()
 settings = get_settings()
@@ -20,14 +30,21 @@ class AlgoliaService:
     def __init__(self):
         """Initialize Algolia client with credentials from settings"""
         try:
+            if not settings.algolia_app_id or not settings.algolia_admin_api_key:
+                logger.warning("Algolia credentials not configured")
+                self.client = None
+                self.index = None
+                return
+
             self.client = SearchClient.create(
-                app_id=settings.ALGOLIA_APP_ID, api_key=settings.algolia_admin_api_key
+                app_id=settings.algolia_app_id, api_key=settings.algolia_admin_api_key
             )
-            self.index_name = settings.ALGOLIA_INDEX_NAME
+            self.index_name = settings.algolia_index_name
             self.index = self.client.init_index(self.index_name)
+
             logger.info(
                 "Algolia client initialized",
-                app_id=settings.ALGOLIA_APP_ID,
+                app_id=settings.algolia_app_id,
                 index=self.index_name,
             )
         except Exception as e:
@@ -49,373 +66,235 @@ class AlgoliaService:
             settings_config = {
                 # Searchable attributes with priority
                 "searchableAttributes": [
-                    "title",  # Highest priority
                     "entity_name",
+                    "description",
                     "content",
-                    "summary",
+                    "parameters",
                     "file_path",
-                    "keywords",
                 ],
                 # Attributes for faceting and filtering
                 "attributesForFaceting": [
-                    "language",
+                    "repository_id",
                     "entity_type",
-                    "repository_name",
-                    "security_score",
-                    "complexity_score",
-                    "tags",
-                    "categories",
+                    "language",
+                    "return_type",
                 ],
-                # Custom ranking for code relevance
+                # Custom ranking for relevance
                 "customRanking": [
-                    "desc(importance_score)",
-                    "desc(popularity_score)",
-                    "desc(security_score)",
-                    "asc(complexity_score)",
+                    "desc(entity_type)",  # Functions/classes ranked higher
+                    "asc(file_path)",  # Shorter paths ranked higher
                 ],
-                # Highlighting for search results
-                "attributesToHighlight": ["title", "content", "summary", "entity_name"],
-                # Snippet extraction
-                "attributesToSnippet": ["content:20", "summary:15"],
-                # Advanced settings for code search
-                "advancedSyntax": True,
-                "allowCompressionOfIntegerArray": True,
-                "minWordSizefor1Typo": 4,
-                "minWordSizefor2Typos": 8,
+                # Highlight settings for search results
+                "highlightPreTag": "<mark>",
+                "highlightPostTag": "</mark>",
+                # Performance settings
                 "hitsPerPage": 20,
                 "maxValuesPerFacet": 100,
-                # Enable features for better search
-                "removeWordsIfNoResults": "allOptional",
-                "separatorsToIndex": ".",
-                "queryType": "prefixAll",
             }
 
-            await self.index.set_settings(settings_config)
-            logger.info("Algolia index settings configured successfully")
+            self.index.set_settings(settings_config)
+            logger.info("Algolia index settings configured")
 
         except AlgoliaException as e:
-            logger.error("Failed to configure Algolia index settings", error=str(e))
+            logger.error("Failed to setup Algolia index settings", error=str(e))
 
-    async def index_repository(self, repository: Repository, db: Session) -> bool:
-        """Index all entities from a repository"""
+    async def batch_index_entities(
+        self,
+        entities: List[ParsedCodeEntity],
+        repository_id: int,
+        file_path: str,
+        language: str,
+    ) -> bool:
+        """
+        Index code entities in Algolia for search.
+        Based on architecture.md: Code Entity Structure for Algolia documents.
+        """
         if not self.is_available():
-            logger.warning("Algolia not available, skipping repository indexing")
+            logger.warning("Algolia not available, skipping indexing")
             return False
+
+        if not entities:
+            return True
 
         try:
-            # Get all code entities for this repository
-            entities = (
-                db.query(CodeEntity)
-                .join(CodeFile)
-                .filter(CodeFile.repository_id == repository.id)
-                .all()
-            )
-
-            algolia_objects = []
-
-            # Index repository-level information
-            repo_object = {
-                "objectID": f"repo_{repository.id}",
-                "title": f"Repository: {repository.name}",
-                "content": repository.description or f"Repository {repository.name}",
-                "summary": f"{repository.language} repository with {repository.total_files} files",
-                "entity_type": "repository",
-                "entity_name": repository.name,
-                "language": repository.language,
-                "file_path": "",
-                "line_number": None,
-                "repository_id": repository.id,
-                "repository_name": repository.name,
-                "tags": (
-                    [repository.language, repository.framework]
-                    if repository.framework
-                    else [repository.language]
-                ),
-                "categories": ["repository"],
-                "keywords": [repository.name, repository.language, "repository"],
-                "security_score": repository.security_score or 50,
-                "complexity_score": 5,  # Default for repositories
-                "importance_score": 10,  # High importance for repositories
-                "popularity_score": 0,
-            }
-            algolia_objects.append(repo_object)
-
-            # Index code entities
+            # Convert entities to Algolia documents
+            documents = []
             for entity in entities:
-                entity_object = {
-                    "objectID": f"entity_{entity.id}",
-                    "title": f"{entity.entity_type.title()}: {entity.name}",
-                    "content": entity.code_snippet or entity.signature or entity.name,
-                    "summary": entity.summary or f"{entity.entity_type} {entity.name}",
-                    "entity_type": entity.entity_type,
-                    "entity_name": entity.name,
-                    "language": entity.code_file.language,
-                    "file_path": entity.code_file.file_path,
-                    "line_number": entity.start_line,
-                    "repository_id": repository.id,
-                    "repository_name": repository.name,
-                    "tags": self._generate_tags(entity),
-                    "categories": [entity.entity_type, "code"],
-                    "keywords": self._generate_keywords(entity),
-                    "security_score": self._calculate_security_score(entity),
-                    "complexity_score": entity.complexity_score or 5,
-                    "importance_score": self._calculate_importance_score(entity),
-                    "popularity_score": 0,
-                }
-                algolia_objects.append(entity_object)
-
-                # Create/update search index record
-                search_index_record = (
-                    db.query(SearchIndex)
-                    .filter(SearchIndex.algolia_object_id == entity_object["objectID"])
-                    .first()
+                doc = self._create_algolia_document(
+                    entity, repository_id, file_path, language
                 )
+                documents.append(doc)
 
-                if not search_index_record:
-                    search_index_record = SearchIndex(
-                        repository_id=repository.id,
-                        algolia_object_id=entity_object["objectID"],
-                        index_name=self.index_name,
-                        entity_type=entity.entity_type,
-                        entity_id=str(entity.id),
-                        entity_name=entity.name,
-                        title=entity_object["title"],
-                        content=entity_object["content"],
-                        summary=entity_object["summary"],
-                        language=entity.code_file.language,
-                        file_path=entity.code_file.file_path,
-                        line_number=entity.start_line,
-                        tags=entity_object["tags"],
-                        categories=entity_object["categories"],
-                        keywords=entity_object["keywords"],
-                        security_score=entity_object["security_score"],
-                        complexity_score=entity_object["complexity_score"],
-                        importance_score=entity_object["importance_score"],
-                    )
-                    db.add(search_index_record)
+            # Batch index documents
+            result = self.index.save_objects(documents)
 
-            # Batch upload to Algolia
-            if algolia_objects:
-                response = await self.index.save_objects(algolia_objects)
-                logger.info(
-                    "Repository indexed successfully",
-                    repository_id=repository.id,
-                    objects_count=len(algolia_objects),
-                    task_id=response.get("taskID"),
-                )
+            # Handle different response types from Algolia
+            task_id = None
+            if hasattr(result, "taskID"):
+                task_id = result.taskID
+            elif hasattr(result, "__dict__") and "taskID" in result.__dict__:
+                task_id = result.__dict__["taskID"]
+            elif isinstance(result, dict) and "taskID" in result:
+                task_id = result["taskID"]
 
-                # Mark search index records as indexed
-                db.query(SearchIndex).filter(
-                    SearchIndex.repository_id == repository.id
-                ).update({"is_indexed": True})
-
-                db.commit()
-                return True
-
-        except Exception as e:
-            logger.error(
-                "Failed to index repository", repository_id=repository.id, error=str(e)
+            logger.info(
+                "Entities indexed in Algolia",
+                repository_id=repository_id,
+                file_path=file_path,
+                entities_count=len(entities),
+                algolia_task_id=task_id,
             )
-            db.rollback()
+
+            return True
+
+        except AlgoliaException as e:
+            logger.error(
+                "Failed to index entities in Algolia",
+                repository_id=repository_id,
+                file_path=file_path,
+                error=str(e),
+            )
             return False
 
-    async def search(
-        self, query: str, filters: Optional[str] = None, **kwargs
+    def _create_algolia_document(
+        self,
+        entity: ParsedCodeEntity,
+        repository_id: int,
+        file_path: str,
+        language: str,
     ) -> Dict[str, Any]:
-        """Perform search using Algolia"""
+        """
+        Create Algolia document from code entity.
+        Follows architecture.md structure exactly.
+        """
+        return {
+            "objectID": f"{repository_id}_{file_path}_{entity.name}_{entity.line_start}_{uuid.uuid4().hex[:8]}",
+            "repository_id": repository_id,
+            "file_path": file_path,
+            "entity_type": entity.entity_type,
+            "entity_name": entity.name,
+            "description": entity.description,
+            "parameters": entity.parameters or [],
+            "return_type": entity.return_type,
+            "line_start": entity.line_start,
+            "line_end": entity.line_end,
+            "language": language,
+            "content": entity.content or "",
+            # Additional fields for better search
+            "imports": entity.imports or [],
+            "parameter_count": len(entity.parameters) if entity.parameters else 0,
+            "lines_of_code": (
+                (entity.line_end - entity.line_start + 1)
+                if entity.line_end > entity.line_start
+                else 1
+            ),
+        }
+
+    async def search_code(
+        self,
+        query: str,
+        repository_id: int = None,
+        language: str = None,
+        entity_type: str = None,
+    ) -> Dict[str, Any]:
+        """
+        Search code entities in Algolia.
+        Used by MCP tools for natural language code discovery.
+        """
         if not self.is_available():
-            logger.warning("Algolia not available, returning empty results")
+            logger.warning("Algolia not available for search")
             return {"hits": [], "nbHits": 0, "query": query}
 
         try:
+            # Build search parameters
             search_params = {
                 "query": query,
-                "hitsPerPage": kwargs.get("per_page", 20),
-                "page": kwargs.get("page", 0),
+                "hitsPerPage": 20,
                 "highlightPreTag": "<mark>",
                 "highlightPostTag": "</mark>",
             }
 
-            # Add filters if provided
+            # Add filters
+            filters = []
+            if repository_id:
+                filters.append(f"repository_id:{repository_id}")
+            if language:
+                filters.append(f"language:{language}")
+            if entity_type:
+                filters.append(f"entity_type:{entity_type}")
+
             if filters:
-                search_params["filters"] = filters
+                search_params["filters"] = " AND ".join(filters)
 
-            # Add facets for filtering
-            if kwargs.get("facets"):
-                search_params["facets"] = kwargs["facets"]
-
-            response = await self.index.search(query, search_params)
+            # Perform search
+            results = self.index.search(query, search_params)
 
             logger.info(
-                "Search completed",
+                "Code search performed",
                 query=query,
-                hits=response.get("nbHits", 0),
-                processing_time=response.get("processingTimeMS", 0),
+                hits=results.get("nbHits", 0),
+                repository_id=repository_id,
+                language=language,
+                entity_type=entity_type,
             )
 
-            return response
+            return results
 
         except AlgoliaException as e:
-            logger.error("Search failed", query=query, error=str(e))
+            logger.error("Algolia search failed", query=query, error=str(e))
             return {"hits": [], "nbHits": 0, "query": query, "error": str(e)}
 
-    async def get_suggestions(self, query: str, limit: int = 10) -> List[str]:
-        """Get search suggestions based on partial query"""
+    async def delete_repository_index(self, repository_id: int) -> bool:
+        """Delete all indexed entities for a repository"""
         if not self.is_available():
-            return []
+            return True
 
         try:
-            # Use search for suggestions with specific parameters
-            response = await self.index.search(
-                query,
-                {
-                    "hitsPerPage": limit,
-                    "attributesToRetrieve": ["title", "entity_name"],
-                    "attributesToHighlight": [],
-                },
+            # Delete by repository_id filter
+            self.index.delete_by({"filters": f"repository_id:{repository_id}"})
+
+            logger.info(
+                "Repository entities deleted from Algolia", repository_id=repository_id
             )
+            return True
 
-            suggestions = []
-            for hit in response.get("hits", []):
-                suggestions.append(hit.get("title", ""))
-                if hit.get("entity_name") and hit["entity_name"] not in suggestions:
-                    suggestions.append(hit["entity_name"])
-
-            return suggestions[:limit]
-
-        except Exception as e:
-            logger.error("Failed to get suggestions", query=query, error=str(e))
-            return []
-
-    async def reindex_repository(self, repository_id: int, db: Session):
-        """Reindex specific repository"""
-        repository = db.query(Repository).filter(Repository.id == repository_id).first()
-        if not repository:
+        except AlgoliaException as e:
             logger.error(
-                "Repository not found for reindexing", repository_id=repository_id
-            )
-            return
-
-        # Delete existing index entries for this repository
-        await self.delete_repository_index(repository_id, db)
-
-        # Re-index the repository
-        await self.index_repository(repository, db)
-
-        logger.info("Repository reindexed successfully", repository_id=repository_id)
-
-    async def delete_repository_index(self, repository_id: int, db: Session):
-        """Remove repository from Algolia index"""
-        if not self.is_available():
-            return
-
-        try:
-            # Get all search index records for this repository
-            index_records = (
-                db.query(SearchIndex)
-                .filter(SearchIndex.repository_id == repository_id)
-                .all()
-            )
-
-            if index_records:
-                object_ids = [record.algolia_object_id for record in index_records]
-
-                # Delete from Algolia
-                await self.index.delete_objects(object_ids)
-
-                # Delete from our database
-                db.query(SearchIndex).filter(
-                    SearchIndex.repository_id == repository_id
-                ).delete()
-
-                db.commit()
-
-                logger.info(
-                    "Repository index deleted",
-                    repository_id=repository_id,
-                    objects_deleted=len(object_ids),
-                )
-
-        except Exception as e:
-            logger.error(
-                "Failed to delete repository index",
+                "Failed to delete repository from Algolia",
                 repository_id=repository_id,
                 error=str(e),
             )
-            db.rollback()
+            return False
 
-    async def reindex_all(self, db: Session):
-        """Reindex all repositories"""
-        repositories = (
-            db.query(Repository).filter(Repository.status == "completed").all()
-        )
+    async def get_repository_stats(self, repository_id: int) -> Dict[str, Any]:
+        """Get statistics for indexed repository entities"""
+        if not self.is_available():
+            return {}
 
-        for repository in repositories:
-            await self.reindex_repository(repository.id, db)
+        try:
+            # Search for all entities in this repository
+            results = self.index.search(
+                "",
+                {
+                    "filters": f"repository_id:{repository_id}",
+                    "hitsPerPage": 0,  # Just get facets, not actual hits
+                    "facets": ["entity_type", "language"],
+                    "maxValuesPerFacet": 100,
+                },
+            )
 
-    def _generate_tags(self, entity: CodeEntity) -> List[str]:
-        """Generate tags for code entity"""
-        tags = [entity.entity_type]
+            stats = {
+                "total_entities": results.get("nbHits", 0),
+                "entity_types": results.get("facets", {}).get("entity_type", {}),
+                "languages": results.get("facets", {}).get("language", {}),
+            }
 
-        if entity.code_file.language:
-            tags.append(entity.code_file.language)
+            return stats
 
-        if entity.visibility:
-            tags.append(entity.visibility)
-
-        if entity.is_async:
-            tags.append("async")
-
-        if entity.is_static:
-            tags.append("static")
-
-        if entity.has_security_issues:
-            tags.append("security-issue")
-
-        return list(set(tags))  # Remove duplicates
-
-    def _generate_keywords(self, entity: CodeEntity) -> List[str]:
-        """Generate keywords for code entity"""
-        keywords = [entity.name, entity.entity_type]
-
-        if entity.code_file.language:
-            keywords.append(entity.code_file.language)
-
-        # Extract keywords from signature
-        if entity.signature:
-            keywords.extend(entity.signature.split())
-
-        return list(set(keywords))  # Remove duplicates
-
-    def _calculate_security_score(self, entity: CodeEntity) -> int:
-        """Calculate security score for entity"""
-        base_score = 80
-
-        if entity.security_issues:
-            # Reduce score based on number and severity of issues
-            issue_count = len(entity.security_issues)
-            base_score -= min(issue_count * 10, 60)
-
-        return max(base_score, 10)  # Minimum score of 10
-
-    def _calculate_importance_score(self, entity: CodeEntity) -> int:
-        """Calculate importance score based on entity characteristics"""
-        score = 5  # Base score
-
-        # Higher score for classes and functions
-        if entity.entity_type in ["class", "function", "method"]:
-            score += 3
-
-        # Higher score for public entities
-        if entity.visibility == "public":
-            score += 2
-
-        # Higher score for documented entities
-        if entity.docstring:
-            score += 2
-
-        # Higher score for complex entities
-        if entity.complexity_score and entity.complexity_score > 7:
-            score += 1
-
-        return min(score, 10)  # Maximum score of 10
+        except AlgoliaException as e:
+            logger.error(
+                "Failed to get repository stats",
+                repository_id=repository_id,
+                error=str(e),
+            )
+            return {}

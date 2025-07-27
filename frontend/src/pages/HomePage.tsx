@@ -40,9 +40,10 @@ export function HomePage() {
       const repository = await api.createRepository(createRequest);
       console.log("✅ Repository created successfully:", repository);
 
-      // Start processing the repository
-      const processingStatus = await api.processRepository(repository.id);
-      console.log("🔄 Processing started:", processingStatus);
+      // Show message that processing starts automatically
+      alert(
+        "Repository created! Processing will start automatically. You will see progress on the next page."
+      );
 
       // Navigate to repository detail page
       navigate(`/repository/${repository.id}`);

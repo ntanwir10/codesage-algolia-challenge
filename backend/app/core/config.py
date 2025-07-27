@@ -1,12 +1,27 @@
+"""
+CodeSage - MCP-First Code Discovery: Configuration
+
+This module provides configuration management for CodeSage - the only code discovery
+tool built entirely around the Model Context Protocol (MCP) for seamless AI integration.
+
+The configuration includes MCP server settings, Algolia search integration,
+and all necessary parameters for MCP-first code discovery architecture.
+"""
+
 import os
 from typing import Optional, List
 from pydantic import Field
 from pydantic_settings import BaseSettings
 
+# Load environment variables from .env file
+from dotenv import load_dotenv
+
+load_dotenv()
+
 
 class Settings(BaseSettings):
     # Core FastAPI Settings
-    app_name: str = "CodeSage MCP Server"
+    app_name: str = "CodeSage - MCP-First Code Discovery"
     debug: bool = False
     environment: str = "development"
     secret_key: str = Field(
@@ -16,8 +31,8 @@ class Settings(BaseSettings):
 
     # Database Settings
     database_url: str = Field(
-        default="postgresql://codesage:codesage123@localhost:5432/codesage",
-        description="PostgreSQL database URL",
+        default="sqlite:///./codesage.db",
+        description="Database URL (SQLite by default)",
     )
     database_pool_size: int = 5
     database_max_overflow: int = 10
@@ -28,7 +43,7 @@ class Settings(BaseSettings):
     )
     mcp_server_version: str = Field(default="1.0.0", description="MCP server version")
     mcp_server_description: str = Field(
-        default="AI-powered code discovery through natural language",
+        default="AI-powered code discovery through natural language - MCP-First Architecture",
         description="MCP server description",
     )
     mcp_server_host: str = Field(default="0.0.0.0", description="MCP server host")
@@ -46,8 +61,26 @@ class Settings(BaseSettings):
         description="Algolia index name for code entities",
     )
 
+    # GitHub Settings
+    github_token: Optional[str] = Field(
+        default=None, description="GitHub personal access token for API access"
+    )
+
     # API Settings
-    cors_origins: List[str] = ["http://localhost:3000", "http://localhost:5173"]
+    cors_origins: str = Field(
+        default="http://localhost:3000,http://localhost:5173,http://localhost:5174",
+        description="Comma-separated list of CORS origins",
+    )
+
+    @property
+    def cors_origins_list(self) -> List[str]:
+        """Convert CORS origins string to list"""
+        if not self.cors_origins:
+            return []
+        return [
+            origin.strip() for origin in self.cors_origins.split(",") if origin.strip()
+        ]
+
     allowed_hosts: List[str] = ["localhost", "127.0.0.1"]
 
     # Rate Limiting (Essential only)
@@ -102,7 +135,7 @@ class Settings(BaseSettings):
         }
 
     class Config:
-        env_file = "../.env"  # Load from project root
+        env_file = ".env"  # Load from backend directory (project root .env will be found automatically)
         case_sensitive = False
         extra = "ignore"
 

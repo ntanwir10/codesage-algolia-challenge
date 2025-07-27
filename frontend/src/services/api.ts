@@ -2,7 +2,6 @@ import axios, { type AxiosInstance } from "axios";
 import type {
   Repository,
   CreateRepositoryRequest,
-  ProcessingStatus,
   RepositoryUpdate,
 } from "@/types/repository";
 import type {
@@ -19,7 +18,7 @@ class CodeSageAPI {
 
   constructor() {
     this.client = axios.create({
-      baseURL: import.meta.env.VITE_API_BASE_URL || "http://localhost:8000",
+      baseURL: import.meta.env.VITE_API_BASE_URL || "http://localhost:8001",
       timeout: 30000,
       headers: {
         "Content-Type": "application/json",
@@ -117,22 +116,31 @@ class CodeSageAPI {
     await this.client.delete(`/api/v1/repositories/${id}`);
   }
 
-  async processRepository(
-    id: number,
-    forceReprocess = false
-  ): Promise<ProcessingStatus> {
+  async reprocessRepository(id: number): Promise<{ message: string }> {
     const response = await this.client.post(
       `/api/v1/repositories/${id}/process`,
       {
-        force_reprocess: forceReprocess,
+        force_reprocess: true,
       }
     );
     return response.data;
   }
 
-  async getRepositoryStatus(id: number): Promise<ProcessingStatus> {
-    const response = await this.client.get(`/api/v1/repositories/${id}/status`);
-    return response.data;
+  async getRepositoryStatus(id: number): Promise<{
+    mcp_ready: boolean;
+    algolia_indexed: boolean;
+    message: string;
+  }> {
+    // For now, return a mock status since the endpoint doesn't exist yet
+    const repository = await this.getRepository(id);
+    return {
+      mcp_ready: repository.status === "completed",
+      algolia_indexed: repository.status === "completed",
+      message:
+        repository.status === "completed"
+          ? "Repository processing complete"
+          : "Repository is being processed",
+    };
   }
 
   // MCP Integration
@@ -163,12 +171,21 @@ class CodeSageAPI {
 
   // Search functionality
   async searchCode(query: SearchQuery): Promise<SearchResponse> {
-    const response = await this.client.post("/api/v1/search/", query);
-    return response.data;
+    const response = await this.callMCPTool("search_code", {
+      query: query.query,
+      repository_id: query.repository_id,
+      language: query.language,
+      entity_type: query.entity_type,
+    });
+    return {
+      hits: response.result.data.results || [],
+      total: response.result.data.total_hits || 0,
+      query: query.query,
+    };
   }
 
   async getSearchSuggestions(query: string): Promise<string[]> {
-    const response = await this.client.get("/api/v1/search/suggestions", {
+    const response = await this.client.get("/api/v1/ai/search/suggestions", {
       params: { query, limit: 10 },
     });
     return response.data.suggestions || [];

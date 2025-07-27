@@ -1,375 +1,400 @@
-from sqlalchemy.orm import Session
-from typing import List, Dict, Any, Optional
+"""
+CodeSage - MCP-First Code Discovery: AI Service
+
+This module implements the MCP Tools service for CodeSage - the only code discovery
+tool built entirely around the Model Context Protocol (MCP) for seamless AI integration.
+
+The MCP Tools provide natural language interfaces for:
+- Code search and discovery
+- Repository analysis and insights
+- Function exploration and relationships
+- Code explanation and documentation
+- Pattern detection and security analysis
+
+This represents our core innovation: MCP-first architecture for AI-powered code discovery.
+"""
+
+from typing import Dict, Any, List, Optional
 import structlog
 
-from app.core.config import get_settings
 from app.services.algolia_service import AlgoliaService
+from app.models.repository import Repository
 
 logger = structlog.get_logger()
-settings = get_settings()
 
 
 class MCPToolsService:
-    """Service for MCP (Model Context Protocol) Tools - NO DIRECT AI API CALLS
-
-    This service implements MCP tools that AI models can call through the MCP protocol.
-    All AI capabilities come through MCP clients, not direct API calls.
+    """
+    MCP Tools implementation for AI-powered code discovery.
+    Based on architecture.md: MCP Tools Implementation
+    
+    This service provides the core MCP tool functionality for CodeSage - MCP-First Code Discovery,
+    enabling natural language interactions with codebases through Claude Desktop and other MCP clients.
     """
 
-    def __init__(self):
+    def __init__(self, db_session):
+        self.db = db_session
         self.algolia_service = AlgoliaService()
 
     async def search_code(
         self,
         query: str,
-        repository: Optional[str] = None,
-        language: Optional[str] = None,
-        entity_type: Optional[str] = None,
+        repository: str = None,
+        language: str = None,
+        entity_type: str = None,
     ) -> Dict[str, Any]:
-        """MCP Tool: Search code using natural language queries
-
-        This tool is called by AI models through MCP protocol.
+        """
+        Natural language code search across repositories.
+        MCP tool: search_code
         """
         try:
-            # Build Algolia filters
-            filters = []
+            # Convert repository name to ID if provided
+            repository_id = None
             if repository:
-                filters.append(f"repository:'{repository}'")
-            if language:
-                filters.append(f"language:'{language}'")
-            if entity_type:
-                filters.append(f"type:'{entity_type}'")
+                repo_record = (
+                    self.db.query(Repository)
+                    .filter(Repository.name.ilike(f"%{repository}%"))
+                    .first()
+                )
+                if repo_record:
+                    repository_id = repo_record.id
 
-            filter_string = " AND ".join(filters) if filters else None
-
-            # Search via Algolia
-            response = await self.algolia_service.search(
-                query=query, filters=filter_string, per_page=20
+            # Search using Algolia
+            results = await self.algolia_service.search_code(
+                query=query,
+                repository_id=repository_id,
+                language=language,
+                entity_type=entity_type,
             )
+
+            # Format results for Claude Desktop
+            formatted_results = {
+                "query": query,
+                "total_hits": results.get("nbHits", 0),
+                "results": [],
+            }
+
+            for hit in results.get("hits", []):
+                formatted_results["results"].append(
+                    {
+                        "entity_name": hit.get("entity_name"),
+                        "entity_type": hit.get("entity_type"),
+                        "description": hit.get("description"),
+                        "file_path": hit.get("file_path"),
+                        "language": hit.get("language"),
+                        "line_start": hit.get("line_start"),
+                        "line_end": hit.get("line_end"),
+                        "parameters": hit.get("parameters", []),
+                        "return_type": hit.get("return_type"),
+                        "content": (
+                            hit.get("content", "")[:200] + "..."
+                            if len(hit.get("content", "")) > 200
+                            else hit.get("content", "")
+                        ),
+                        "relevance_score": hit.get("_rankingInfo", {}).get("words", 0),
+                    }
+                )
 
             logger.info(
-                "MCP search_code tool executed",
+                "Code search completed",
                 query=query,
-                results=response.get("nbHits", 0),
+                total_hits=formatted_results["total_hits"],
+                repository=repository,
+                language=language,
+                entity_type=entity_type,
             )
 
-            return {
-                "tool": "search_code",
-                "query": query,
-                "results": response.get("hits", []),
-                "total_hits": response.get("nbHits", 0),
-                "processing_time_ms": response.get("processingTimeMS", 0),
-                "filters_applied": filter_string,
-            }
+            return {"status": "success", "data": formatted_results}
 
         except Exception as e:
-            logger.error("MCP search_code tool failed", query=query, error=str(e))
-            return {"tool": "search_code", "error": str(e), "query": query}
+            logger.error("Code search failed", query=query, error=str(e))
+            return {"status": "error", "error": f"Search failed: {str(e)}"}
 
     async def analyze_repository(
-        self, repository_id: str, analysis_type: Optional[str] = "overview"
+        self, repository_id: str, analysis_type: str = "overview"
     ) -> Dict[str, Any]:
-        """MCP Tool: Analyze repository structure and patterns"""
+        """
+        Repository analysis and insights.
+        MCP tool: analyze_repository
+        """
         try:
-            # Get repository data from Algolia
-            response = await self.algolia_service.search(
-                query="*",
-                filters=f"repository_id:'{repository_id}'",
-                facets=["language", "type", "complexity", "tags"],
+
+            # Get repository
+            repo = (
+                self.db.query(Repository)
+                .filter(Repository.id == int(repository_id))
+                .first()
             )
+            if not repo:
+                return {
+                    "status": "error",
+                    "error": f"Repository {repository_id} not found",
+                }
 
-            hits = response.get("hits", [])
-            facets = response.get("facets", {})
+            # Get statistics from Algolia
+            stats = await self.algolia_service.get_repository_stats(repo.id)
 
-            # Analyze patterns
             analysis = {
-                "tool": "analyze_repository",
-                "repository_id": repository_id,
+                "repository_name": repo.name,
+                "repository_url": repo.url,
+                "language": repo.language,
+                "status": repo.status,
+                "total_files": repo.total_files,
+                "processed_files": repo.processed_files,
+                "total_entities": stats.get("total_entities", 0),
+                "entity_breakdown": stats.get("entity_types", {}),
+                "language_breakdown": stats.get("languages", {}),
                 "analysis_type": analysis_type,
-                "total_entities": len(hits),
-                "languages": list(facets.get("language", {}).keys()),
-                "entity_types": facets.get("type", {}),
-                "complexity_distribution": facets.get("complexity", {}),
-                "common_tags": facets.get("tags", {}),
-                "insights": self._generate_repository_insights(hits, facets),
             }
 
+            # Add insights based on analysis type
+            if analysis_type == "overview":
+                analysis["insights"] = [
+                    f"Repository contains {stats.get('total_entities', 0)} searchable code entities",
+                    f"Primary language: {repo.language or 'Unknown'}",
+                    f"Processing status: {repo.status}",
+                    f"File coverage: {repo.processed_files}/{repo.total_files} files processed",
+                ]
+            elif analysis_type == "security":
+                analysis["insights"] = [
+                    "Security analysis would require additional processing",
+                    "Currently showing basic entity structure",
+                    "Consider reviewing function parameters and return types for patterns",
+                ]
+            elif analysis_type == "performance":
+                analysis["insights"] = [
+                    "Performance analysis based on code structure",
+                    f"Large functions detected: {sum(1 for k,v in stats.get('entity_types', {}).items() if k == 'function')}",
+                    "Consider reviewing entity complexity in search results",
+                ]
+
             logger.info(
-                "MCP analyze_repository tool executed",
+                "Repository analysis completed",
                 repository_id=repository_id,
-                entities_found=len(hits),
+                analysis_type=analysis_type,
+                total_entities=stats.get("total_entities", 0),
             )
 
-            return analysis
+            return {"status": "success", "data": analysis}
 
         except Exception as e:
             logger.error(
-                "MCP analyze_repository tool failed",
-                repository_id=repository_id,
-                error=str(e),
+                "Repository analysis failed", repository_id=repository_id, error=str(e)
             )
-            return {
-                "tool": "analyze_repository",
-                "error": str(e),
-                "repository_id": repository_id,
-            }
+            return {"status": "error", "error": f"Analysis failed: {str(e)}"}
 
     async def explore_functions(
         self,
-        entity_name: Optional[str] = None,
-        repository: Optional[str] = None,
-        similarity_search: bool = False,
+        entity_name: str = None,
+        repository: str = None,
+        similarity_search: bool = True,
     ) -> Dict[str, Any]:
-        """MCP Tool: Explore functions and classes in codebase"""
-        try:
-            query = entity_name if entity_name else "*"
-            filters = []
-
-            if repository:
-                filters.append(f"repository:'{repository}'")
-
-            # Focus on functions and classes
-            filters.append("type:function OR type:class OR type:method")
-
-            filter_string = (
-                " AND ".join(filters)
-                if filters
-                else "type:function OR type:class OR type:method"
-            )
-
-            response = await self.algolia_service.search(
-                query=query, filters=filter_string, per_page=50
-            )
-
-            hits = response.get("hits", [])
-
-            result = {
-                "tool": "explore_functions",
-                "query": entity_name,
-                "repository": repository,
-                "functions_found": len(hits),
-                "entities": [
-                    {
-                        "name": hit.get("name"),
-                        "type": hit.get("type"),
-                        "file_path": hit.get("file_path"),
-                        "description": hit.get("description", ""),
-                        "complexity": hit.get("complexity", 0),
-                        "line_range": f"{hit.get('start_line', 0)}-{hit.get('end_line', 0)}",
-                    }
-                    for hit in hits
-                ],
-            }
-
-            logger.info(
-                "MCP explore_functions tool executed",
-                entity_name=entity_name,
-                functions_found=len(hits),
-            )
-
-            return result
-
-        except Exception as e:
-            logger.error(
-                "MCP explore_functions tool failed",
-                entity_name=entity_name,
-                error=str(e),
-            )
-            return {
-                "tool": "explore_functions",
-                "error": str(e),
-                "entity_name": entity_name,
-            }
-
-    async def explain_code(
-        self,
-        code_snippet: str,
-        context: Optional[str] = None,
-        detail_level: str = "brief",
-    ) -> Dict[str, Any]:
-        """MCP Tool: Explain code snippets and patterns
-
-        Note: This provides structural analysis only.
-        AI explanation comes through MCP client capabilities.
+        """
+        Function discovery and relationship mapping.
+        MCP tool: explore_functions
         """
         try:
-            # Basic code analysis without AI
-            analysis = {
-                "tool": "explain_code",
-                "code_length": len(code_snippet),
-                "line_count": len(code_snippet.split("\n")),
-                "context": context,
-                "detail_level": detail_level,
-                "structural_info": {
-                    "has_functions": "def " in code_snippet
-                    or "function " in code_snippet,
-                    "has_classes": "class " in code_snippet,
-                    "has_imports": "import " in code_snippet
-                    or "#include" in code_snippet,
-                    "has_comments": "#" in code_snippet
-                    or "//" in code_snippet
-                    or "/*" in code_snippet,
-                },
-                "note": "Full explanation provided by MCP client AI capabilities",
-            }
+            # Build search query
+            if entity_name:
+                query = f"function {entity_name}"
+            else:
+                query = "function"
 
-            # Find similar patterns in codebase
-            if len(code_snippet) > 50:  # Only for substantial code snippets
-                similar_response = await self.algolia_service.search(
-                    query=code_snippet[:200],  # Use first 200 chars for similarity
-                    per_page=5,
-                )
+            # Search for functions
+            results = await self.algolia_service.search_code(
+                query=query, entity_type="function"
+            )
 
-                analysis["similar_patterns"] = [
-                    {
-                        "file_path": hit.get("file_path"),
-                        "name": hit.get("name"),
-                        "similarity_score": hit.get("_highlightResult", {}).get(
-                            "_score", 0
-                        ),
-                    }
-                    for hit in similar_response.get("hits", [])
-                ]
-
-            logger.info("MCP explain_code tool executed", code_length=len(code_snippet))
-            return analysis
-
-        except Exception as e:
-            logger.error("MCP explain_code tool failed", error=str(e))
-            return {"tool": "explain_code", "error": str(e)}
-
-    async def find_patterns(
-        self, repository_id: str, pattern_type: str = "security"
-    ) -> Dict[str, Any]:
-        """MCP Tool: Find code patterns and anti-patterns"""
-        try:
-            # Define pattern search queries
-            pattern_queries = {
-                "security": [
-                    "password",
-                    "secret",
-                    "token",
-                    "auth",
-                    "crypto",
-                    "sql injection",
-                    "xss",
-                    "csrf",
-                    "vulnerability",
-                ],
-                "performance": [
-                    "loop",
-                    "optimization",
-                    "cache",
-                    "async",
-                    "parallel",
-                    "performance",
-                    "bottleneck",
-                ],
-                "architecture": [
-                    "pattern",
-                    "design",
-                    "architecture",
-                    "structure",
-                    "class",
-                    "interface",
-                    "factory",
-                    "singleton",
-                ],
-            }
-
-            queries = pattern_queries.get(pattern_type, ["pattern"])
-            all_patterns = []
-
-            for query in queries:
-                response = await self.algolia_service.search(
-                    query=query, filters=f"repository_id:'{repository_id}'", per_page=10
-                )
-
-                for hit in response.get("hits", []):
-                    all_patterns.append(
+            functions = []
+            for hit in results.get("hits", []):
+                if hit.get("entity_type") == "function":
+                    functions.append(
                         {
-                            "pattern_type": pattern_type,
-                            "query_matched": query,
-                            "entity_name": hit.get("name"),
+                            "name": hit.get("entity_name"),
+                            "description": hit.get("description"),
                             "file_path": hit.get("file_path"),
-                            "description": hit.get("description", ""),
-                            "tags": hit.get("tags", []),
+                            "language": hit.get("language"),
+                            "parameters": hit.get("parameters", []),
+                            "return_type": hit.get("return_type"),
+                            "lines_of_code": hit.get("lines_of_code", 1),
+                            "complexity_indicator": (
+                                "high"
+                                if len(hit.get("parameters", [])) > 5
+                                else (
+                                    "medium"
+                                    if len(hit.get("parameters", [])) > 2
+                                    else "low"
+                                )
+                            ),
                         }
                     )
 
             result = {
-                "tool": "find_patterns",
-                "repository_id": repository_id,
-                "pattern_type": pattern_type,
-                "patterns_found": len(all_patterns),
-                "patterns": all_patterns[:20],  # Limit to top 20
+                "query": query,
+                "total_functions": len(functions),
+                "functions": functions[:20],  # Limit to 20 for readability
+                "exploration_type": "similarity" if similarity_search else "exact",
             }
 
             logger.info(
-                "MCP find_patterns tool executed",
-                repository_id=repository_id,
-                pattern_type=pattern_type,
-                patterns_found=len(all_patterns),
+                "Function exploration completed",
+                entity_name=entity_name,
+                total_functions=len(functions),
+                repository=repository,
             )
 
-            return result
+            return {"status": "success", "data": result}
 
         except Exception as e:
             logger.error(
-                "MCP find_patterns tool failed",
-                repository_id=repository_id,
-                error=str(e),
+                "Function exploration failed", entity_name=entity_name, error=str(e)
             )
-            return {
-                "tool": "find_patterns",
-                "error": str(e),
-                "repository_id": repository_id,
-                "pattern_type": pattern_type,
+            return {"status": "error", "error": f"Exploration failed: {str(e)}"}
+
+    async def explain_code(
+        self, code_snippet: str, context: str = None, detail_level: str = "brief"
+    ) -> Dict[str, Any]:
+        """
+        Code explanation and documentation.
+        MCP tool: explain_code
+        """
+        try:
+            # For now, provide basic structure analysis
+            # In a full implementation, this could use additional AI services
+
+            lines = code_snippet.split("\n")
+            explanation = {
+                "code_snippet": (
+                    code_snippet[:300] + "..."
+                    if len(code_snippet) > 300
+                    else code_snippet
+                ),
+                "context": context,
+                "detail_level": detail_level,
+                "analysis": {
+                    "lines_of_code": len(lines),
+                    "estimated_complexity": (
+                        "low"
+                        if len(lines) < 10
+                        else "medium" if len(lines) < 50 else "high"
+                    ),
+                    "contains_functions": any(
+                        "def " in line or "function " in line for line in lines
+                    ),
+                    "contains_classes": any("class " in line for line in lines),
+                    "contains_imports": any(
+                        "import " in line or "from " in line for line in lines
+                    ),
+                },
             }
 
-    def _generate_repository_insights(
-        self, hits: List[Dict], facets: Dict
+            if detail_level == "detailed":
+                explanation["suggestions"] = [
+                    "Consider adding comments for complex logic",
+                    "Review function parameters for clarity",
+                    "Ensure proper error handling",
+                    "Consider breaking down large functions",
+                ]
+
+            return {"status": "success", "data": explanation}
+
+        except Exception as e:
+            logger.error("Code explanation failed", error=str(e))
+            return {"status": "error", "error": f"Explanation failed: {str(e)}"}
+
+    async def find_patterns(
+        self, repository_id: str, pattern_type: str = "security"
+    ) -> Dict[str, Any]:
+        """
+        Pattern detection across codebase.
+        MCP tool: find_patterns
+        """
+        try:
+            # Search for patterns based on type
+            if pattern_type == "security":
+                query = "password secret token auth key"
+            elif pattern_type == "performance":
+                query = "loop iterate recursive"
+            elif pattern_type == "architecture":
+                query = "class interface abstract"
+            else:
+                query = pattern_type
+
+            results = await self.algolia_service.search_code(
+                query=query, repository_id=int(repository_id)
+            )
+
+            patterns = []
+            for hit in results.get("hits", []):
+                patterns.append(
+                    {
+                        "entity_name": hit.get("entity_name"),
+                        "entity_type": hit.get("entity_type"),
+                        "file_path": hit.get("file_path"),
+                        "language": hit.get("language"),
+                        "pattern_type": pattern_type,
+                        "description": hit.get("description"),
+                        "relevance": (
+                            "high"
+                            if hit.get("_rankingInfo", {}).get("words", 0) > 2
+                            else "medium"
+                        ),
+                    }
+                )
+
+            result = {
+                "repository_id": repository_id,
+                "pattern_type": pattern_type,
+                "total_patterns": len(patterns),
+                "patterns": patterns[:15],  # Limit results
+                "recommendations": self._get_pattern_recommendations(
+                    pattern_type, patterns
+                ),
+            }
+
+            logger.info(
+                "Pattern finding completed",
+                repository_id=repository_id,
+                pattern_type=pattern_type,
+                total_patterns=len(patterns),
+            )
+
+            return {"status": "success", "data": result}
+
+        except Exception as e:
+            logger.error(
+                "Pattern finding failed", repository_id=repository_id, error=str(e)
+            )
+            return {"status": "error", "error": f"Pattern finding failed: {str(e)}"}
+
+    def _get_pattern_recommendations(
+        self, pattern_type: str, patterns: List[Dict]
     ) -> List[str]:
-        """Generate insights from repository analysis"""
-        insights = []
-
-        total_entities = len(hits)
-        if total_entities == 0:
-            return ["No code entities found in this repository"]
-
-        # Language insights
-        languages = facets.get("language", {})
-        if languages:
-            primary_language = max(languages, key=languages.get)
-            insights.append(
-                f"Primary language: {primary_language} ({languages[primary_language]} entities)"
-            )
-
-        # Entity type insights
-        entity_types = facets.get("type", {})
-        if entity_types:
-            most_common_type = max(entity_types, key=entity_types.get)
-            insights.append(
-                f"Most common entity type: {most_common_type} ({entity_types[most_common_type]} occurrences)"
-            )
-
-        # Complexity insights
-        complexity_data = facets.get("complexity", {})
-        if complexity_data:
-            high_complexity = sum(
-                count
-                for level, count in complexity_data.items()
-                if level and int(level) > 7
-            )
-            if high_complexity > 0:
-                insights.append(f"{high_complexity} entities have high complexity (>7)")
-
-        # Tag insights
-        tags = facets.get("tags", {})
-        if tags:
-            common_tags = sorted(tags.items(), key=lambda x: x[1], reverse=True)[:3]
-            insights.append(
-                f"Common tags: {', '.join([tag for tag, _ in common_tags])}"
-            )
-
-        return insights
+        """Generate recommendations based on found patterns"""
+        if pattern_type == "security":
+            return [
+                "Review hardcoded secrets and credentials",
+                "Consider using environment variables for sensitive data",
+                "Implement proper authentication mechanisms",
+                "Audit token handling and validation",
+            ]
+        elif pattern_type == "performance":
+            return [
+                "Review loop complexity and efficiency",
+                "Consider caching for expensive operations",
+                "Optimize recursive functions if present",
+                "Profile critical code paths",
+            ]
+        elif pattern_type == "architecture":
+            return [
+                "Review class design and responsibilities",
+                "Consider interface segregation",
+                "Evaluate inheritance hierarchies",
+                "Ensure proper abstraction levels",
+            ]
+        else:
+            return [
+                f"Review {pattern_type} patterns found",
+                "Consider best practices for this pattern type",
+                "Ensure consistency across the codebase",
+            ]

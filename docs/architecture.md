@@ -1,10 +1,10 @@
-# CodeSage Technical Architecture
+# CodeSage - MCP-First Code Discovery: Technical Architecture
 
 **Built for the [Algolia MCP Server Challenge](https://dev.to/challenges/algolia-2025-07-09)** 🏆
 
 ## 🎯 System Overview
 
-CodeSage is a **MCP-first code discovery platform** that transforms GitHub repositories into AI-searchable knowledge bases through the Model Context Protocol.
+**CodeSage - MCP-First Code Discovery** is a **MCP-first code discovery platform** that transforms GitHub repositories into AI-searchable knowledge bases through the Model Context Protocol. This architecture represents the only code discovery tool built entirely around MCP standards.
 
 ## 📊 Complete Data Flow Architecture
 

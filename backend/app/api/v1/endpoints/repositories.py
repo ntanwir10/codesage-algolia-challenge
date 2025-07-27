@@ -4,6 +4,7 @@ from fastapi import (
     Depends,
     HTTPException,
     Query,
+    UploadFile,
 )
 from sqlalchemy.orm import Session
 import structlog
@@ -12,6 +13,7 @@ from app.core.database import get_db
 from app.models.repository import Repository
 from app.schemas.repository import (
     RepositoryCreate,
+    RepositoryUpdate,
     RepositoryResponse,
 )
 from app.services.repository_service import RepositoryService
@@ -135,6 +137,47 @@ async def get_repository(repository_id: int, db: Session = Depends(get_db)):
         )
 
 
+@router.put(
+    "/{repository_id}",
+    response_model=RepositoryResponse,
+    summary="Update Repository",
+    description="Update a repository's details",
+)
+async def update_repository(
+    repository_id: int,
+    repository_update: RepositoryUpdate,
+    db: Session = Depends(get_db),
+):
+    """Update a repository's details"""
+    try:
+        repository = db.query(Repository).filter(Repository.id == repository_id).first()
+        if not repository:
+            raise HTTPException(
+                status_code=404, detail=f"Repository {repository_id} not found"
+            )
+
+        # Update repository fields
+        update_data = repository_update.dict(exclude_unset=True)
+        for key, value in update_data.items():
+            setattr(repository, key, value)
+
+        db.commit()
+        db.refresh(repository)
+
+        logger.info("Repository updated", repository_id=repository_id)
+        return repository
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(
+            "Failed to update repository", repository_id=repository_id, error=str(e)
+        )
+        raise HTTPException(
+            status_code=500, detail=f"Failed to update repository: {str(e)}"
+        )
+
+
 @router.delete(
     "/{repository_id}",
     summary="Delete Repository",
@@ -163,4 +206,143 @@ async def delete_repository(repository_id: int, db: Session = Depends(get_db)):
         )
         raise HTTPException(
             status_code=500, detail=f"Failed to delete repository: {str(e)}"
+        )
+
+
+@router.post(
+    "/{repository_id}/upload",
+    summary="Upload Files to Repository",
+    description="Upload code files to a repository for analysis",
+)
+async def upload_files_to_repository(
+    repository_id: int, files: List[UploadFile], db: Session = Depends(get_db)
+):
+    """Upload files to a repository"""
+    try:
+        repository = db.query(Repository).filter(Repository.id == repository_id).first()
+        if not repository:
+            raise HTTPException(
+                status_code=404, detail=f"Repository {repository_id} not found"
+            )
+
+        service = RepositoryService(db)
+        updated_repository = await service.upload_files(repository, files)
+
+        logger.info(
+            "Files uploaded to repository",
+            repository_id=repository_id,
+            file_count=len(files),
+        )
+        return {
+            "message": f"{len(files)} files uploaded successfully to repository {repository_id}",
+            "repository": RepositoryResponse.from_orm(updated_repository).dict(),
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(
+            "Failed to upload files", repository_id=repository_id, error=str(e)
+        )
+        raise HTTPException(status_code=500, detail=f"Failed to upload files: {str(e)}")
+
+
+@router.get(
+    "/{repository_id}/status",
+    summary="Get Repository Status",
+    description="Get the current processing status of a repository",
+)
+async def get_repository_status(repository_id: int, db: Session = Depends(get_db)):
+    """Get the status of a repository"""
+    try:
+        repository = db.query(Repository).filter(Repository.id == repository_id).first()
+        if not repository:
+            raise HTTPException(
+                status_code=404, detail=f"Repository {repository_id} not found"
+            )
+
+        return {
+            "repository_id": repository.id,
+            "status": repository.status,
+            "processed_files": repository.processed_files,
+            "total_files": repository.total_files,
+            "progress": repository.processing_progress,
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(
+            "Failed to get repository status", repository_id=repository_id, error=str(e)
+        )
+        raise HTTPException(
+            status_code=500, detail=f"Failed to get repository status: {str(e)}"
+        )
+
+
+@router.get(
+    "/{repository_id}/stats",
+    summary="Get Repository Statistics",
+    description="Get processing statistics for a repository",
+)
+async def get_repository_stats(repository_id: int, db: Session = Depends(get_db)):
+    """Get statistics for a repository"""
+    try:
+        repository = db.query(Repository).filter(Repository.id == repository_id).first()
+        if not repository:
+            raise HTTPException(
+                status_code=404, detail=f"Repository {repository_id} not found"
+            )
+
+        service = RepositoryService(db)
+        stats = await service.get_repository_statistics(repository)
+
+        return stats
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(
+            "Failed to get repository stats", repository_id=repository_id, error=str(e)
+        )
+        raise HTTPException(
+            status_code=500, detail=f"Failed to get repository stats: {str(e)}"
+        )
+
+
+@router.post(
+    "/{repository_id}/process",
+    summary="Process Repository",
+    description="Process a repository to extract code entities and index in Algolia",
+)
+@rate_limit_default
+async def process_repository(
+    repository_id: int,
+    force_reprocess: bool = False,
+    db: Session = Depends(get_db),
+):
+    """Process a repository"""
+    try:
+        # Get repository
+        repository = db.query(Repository).filter(Repository.id == repository_id).first()
+        if not repository:
+            raise HTTPException(
+                status_code=404, detail=f"Repository {repository_id} not found"
+            )
+
+        # Start processing
+        service = RepositoryService(db)
+        await service.process_repository(repository, force_reprocess)
+
+        logger.info("Repository processing started", repository_id=repository_id)
+        return {"message": f"Processing started for repository {repository_id}"}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(
+            "Failed to process repository", repository_id=repository_id, error=str(e)
+        )
+        raise HTTPException(
+            status_code=500, detail=f"Failed to process repository: {str(e)}"
         )

@@ -1,0 +1,25 @@
+{
+  "mcpServers": {
+    "codesage-mcp-first": {
+      "command": "/path/to/your/codesage-algolia-challenge/mcp_launcher.sh",
+      "args": [],
+      "env": {
+        "MCP_SERVER_URL": "http://127.0.0.1:8001",
+        "ALGOLIA_APP_ID": "your-algolia-app-id-here",
+        "ALGOLIA_ADMIN_API_KEY": "your-algolia-admin-api-key-here",
+        "ALGOLIA_INDEX_NAME": "codesage_code_entities",
+        "GITHUB_TOKEN": "your-github-personal-access-token-here",
+        "DATABASE_URL": "sqlite:///./codesage.db",
+        "SECRET_KEY": "your-secret-key-here-change-this-in-production",
+        "PYTHONPATH": "/path/to/your/codesage-algolia-challenge",
+        "PATH": "/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:/opt/homebrew/Caskroom/miniconda/base/bin"
+      }
+    }
+  },
+  "global": {
+    "allowAllServers": true,
+    "logging": {
+      "level": "debug"
+    }
+  }
+}

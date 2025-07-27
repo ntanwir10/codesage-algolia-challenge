@@ -84,14 +84,6 @@ Thumbs.db
 logs/
 *.log
 
-# AI/ML
-models/
-*.pkl
-*.model
-embeddings/
-
-# Algolia
-algolia-config.json
 
 # Secrets
 secrets/
@@ -117,11 +109,11 @@ build/
 .next/
 out/ 
 
-development-roadmap.md
-plan.md 
-
-# Misc
-.cursorrules
-
 #env files
-.env
+.env*.db
+
+# Database files
+*.db
+*.sqlite*
+backend/*.db
+backend/*.sqlite*

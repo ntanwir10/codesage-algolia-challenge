@@ -318,6 +318,27 @@ class TestClass:
             self.log(f"❌ Repository Deletion Failed: {response.status_code}", "ERROR")
             return False
 
+    def test_github_url_parsing(self):
+        """Test GitHub URL parsing with different formats"""
+        self.log("\n=== Testing GitHub URL Parsing ===", "INFO")
+        urls_to_test = {
+            "https://github.com/owner/repo": ("owner", "repo"),
+            "https://github.com/owner/repo.git": ("owner", "repo"),
+            "git@github.com:owner/repo.git": ("owner", "repo"),
+            "git@github.com:owner/repo": ("owner", "repo"),
+        }
+        from app.services.github_service import GitHubService
+        github_service = GitHubService()
+        all_passed = True
+        for url, expected in urls_to_test.items():
+            owner, repo = github_service._parse_github_url(url)
+            if (owner, repo) == expected:
+                self.log(f"  ✅ PASSED: {url}", "SUCCESS")
+            else:
+                self.log(f"  ❌ FAILED: {url} -> Expected {expected}, got ({owner}, {repo})", "ERROR")
+                all_passed = False
+        return all_passed
+
     def run_repository_tests(self):
         """Run all repository management tests"""
         start_time = time.time()

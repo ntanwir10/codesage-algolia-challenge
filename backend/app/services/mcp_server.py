@@ -1,3 +1,17 @@
+"""
+CodeSage - MCP-First Code Discovery: MCP Server Service
+
+This module implements the core MCP (Model Context Protocol) server functionality
+for CodeSage - the only code discovery tool built entirely around MCP standards.
+
+The MCP server provides:
+- Tool-based AI interactions (search, analysis, exploration)
+- Resource-based data access (repositories, files, entities)
+- Seamless integration with Claude Desktop and other MCP clients
+
+This represents our unique differentiator: MCP-first architecture for code discovery.
+"""
+
 from typing import Dict, List, Any, Optional
 from sqlalchemy.orm import Session
 import structlog
@@ -33,7 +47,8 @@ class MCPResourcesService:
                     "language": repo.language,
                     "status": repo.status,
                     "total_files": repo.total_files,
-                    "mcp_indexed": getattr(repo, "mcp_indexed", False),
+                    "mcp_indexed": repo.status
+                    == "completed",  # Use status to determine if indexed
                 }
                 for repo in repositories
             ]
@@ -140,7 +155,7 @@ class MCPServerService:
 
     def __init__(self, db: Session):
         self.db = db
-        self.tools_service = MCPToolsService()
+        self.tools_service = MCPToolsService(db)
         self.resources_service = MCPResourcesService(db)
         self.config = settings.MCP_SERVER_CONFIG
 
