@@ -22,11 +22,14 @@ const githubUrlSchema = z.object({
       /^https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/?$/,
       "Must be a valid GitHub repository URL (https://github.com/owner/repo)"
     ),
-  branch: z.string().min(1, "Branch is required"),
+  // Empty means "use the repository's default branch"; never sent when empty.
+  branch: z.string().optional(),
   description: z.string().optional(),
 });
 
 type GitHubFormData = z.infer<typeof githubUrlSchema>;
+
+export type { GitHubFormData };
 
 interface GitHubFormProps {
   onSubmit: (data: GitHubFormData) => void | Promise<void>;
@@ -45,7 +48,7 @@ export function GitHubForm({ onSubmit, isLoading = false }: GitHubFormProps) {
     resolver: zodResolver(githubUrlSchema),
     defaultValues: {
       url: "",
-      branch: "main",
+      branch: "",
       description: "",
     },
     mode: "onChange",
@@ -70,9 +73,8 @@ export function GitHubForm({ onSubmit, isLoading = false }: GitHubFormProps) {
           .filter(Boolean)
           .join("; ");
         setError("root.server", { message: messages || "Validation failed" });
-      } else {
-        console.error("Submit error:", error);
       }
+      // Other failures (409, 429, ...) are toasted by the caller.
     }
   };
 
@@ -115,7 +117,7 @@ export function GitHubForm({ onSubmit, isLoading = false }: GitHubFormProps) {
             </label>
             <Input
               id="branch"
-              placeholder="main"
+              placeholder="Default branch (leave empty)"
               {...register("branch")}
               className={errors.branch ? "border-destructive" : ""}
             />

@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { api } from "@/services/api";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -9,9 +9,17 @@ import { StatusBadge } from "@/components/ui/status-badge";
 import { EmptyState } from "@/components/ui/empty-state";
 import { AnimatedProgress } from "@/components/ui/animated-progress";
 import { DeleteConfirmationDialog } from "@/components/ui/delete-confirmation-dialog";
+import { useQueryClient } from "@tanstack/react-query";
+import { useToast } from "@/components/ui/toast";
+import { useRealtimeStatus } from "@/hooks/useRealtimeStatus";
+import { describeError } from "@/lib/errors";
+import { isActiveStatus, pollWhileAnyActive } from "@/lib/polling";
+import { isHttpUrl } from "@/lib/utils";
 import type { Repository } from "@/types/repository";
 
 export function DashboardPage() {
+  const { addToast } = useToast();
+  const queryClient = useQueryClient();
   const [deleteDialog, setDeleteDialog] = useState<{
     isOpen: boolean;
     repository: Repository | null;
@@ -30,10 +38,17 @@ export function DashboardPage() {
   } = useQuery({
     queryKey: ["repositories"],
     queryFn: () => api.getRepositories(),
+    // Poll every ~3s while any repository is pending/processing.
+    refetchInterval: (query) => pollWhileAnyActive(query.state.data),
   });
 
-  // Enable real-time updates for all repositories
-  // Note: Notifications are handled globally in Layout.tsx
+  // Live updates for repositories still being processed.
+  // Completion toasts are handled globally in Layout.
+  const activeIds = useMemo(
+    () => repositories.filter((r) => isActiveStatus(r.status)).map((r) => r.id),
+    [repositories]
+  );
+  useRealtimeStatus({ repositoryIds: activeIds });
 
   const handleDeleteClick = (repository: Repository) => {
     setDeleteDialog({
@@ -58,16 +73,25 @@ export function DashboardPage() {
         isDeleting: false,
       });
 
-      // Refresh the repository list
+      addToast({ type: "success", title: "Repository deleted" });
+      queryClient.removeQueries({
+        queryKey: ["repository", deleteDialog.repository.id],
+      });
       refetch();
-
-      console.log("✅ Repository deleted successfully");
     } catch (error) {
-      console.error("❌ Failed to delete repository:", error);
-      setDeleteDialog((prev) => ({ ...prev, isDeleting: false }));
-
-      // Show error message (you could replace this with a toast notification)
-      alert("Failed to delete repository. Please try again.");
+      const { message, status } = describeError(error);
+      setDeleteDialog({ isOpen: false, repository: null, isDeleting: false });
+      addToast({
+        type: "error",
+        title:
+          status === 409
+            ? "Cannot delete while processing"
+            : status === 502
+            ? "Delete failed; nothing was deleted"
+            : "Failed to delete repository",
+        description: message,
+        duration: 8000,
+      });
     }
   };
 
@@ -297,7 +321,7 @@ export function DashboardPage() {
                     <div className="flex items-center gap-2">
                       <span className="text-gray-500">🌿</span>
                       <span>
-                        <strong>{repo.branch}</strong>
+                        <strong>{repo.branch ?? "default"}</strong>
                       </span>
                     </div>
                   </div>
@@ -337,7 +361,7 @@ export function DashboardPage() {
                     )}
 
                   {/* Repository URL */}
-                  {repo.url && (
+                  {isHttpUrl(repo.url) && (
                     <div className="mt-3 pt-3 border-t">
                       <a
                         href={repo.url}

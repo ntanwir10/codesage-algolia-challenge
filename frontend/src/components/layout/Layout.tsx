@@ -1,8 +1,7 @@
 import { Link, useLocation } from "react-router-dom";
-// import { Button } from "@/components/ui/button";
 import { ConnectionStatus } from "@/components/ui/connection-status";
 import { usePageTitle } from "@/hooks/usePageTitle";
-// import { useRealtimeStatus } from "@/hooks/useRealtimeStatus";
+import { useGlobalToasts } from "@/hooks/useStatusToasts";
 
 interface LayoutProps {
   children: React.ReactNode;
@@ -14,8 +13,8 @@ export function Layout({ children }: LayoutProps) {
   // Enable dynamic page titles
   usePageTitle();
 
-  // Enable global real-time status updates with notifications
-  // const { connectionStatus } = useRealtimeStatus({ enableNotifications: true });
+  // Single app-wide listener for completion/failure/401 toasts
+  useGlobalToasts();
 
   const navigation = [
     { name: "Home", href: "/", current: location.pathname === "/" },
@@ -63,26 +62,6 @@ export function Layout({ children }: LayoutProps) {
             </div>
 
             <div className="flex items-center gap-2">
-              {/* Real-time Updates Status */}
-              {/* <div className="hidden sm:flex items-center gap-2 text-xs text-muted-foreground">
-                <div
-                  className={`w-2 h-2 rounded-full ${
-                    connectionStatus === "connected"
-                      ? "bg-green-500"
-                      : connectionStatus === "connecting"
-                      ? "bg-yellow-500"
-                      : "bg-gray-400"
-                  }`}
-                />
-                <span>
-                  {connectionStatus === "connected"
-                    ? "Live Updates"
-                    : connectionStatus === "connecting"
-                    ? "Connecting..."
-                    : "No Live Updates"}
-                </span>
-              </div> */}
-
               <span className="text-sm text-muted-foreground hidden sm:block">
                 Powered by Algolia MCP
               </span>
@@ -117,14 +96,6 @@ export function Layout({ children }: LayoutProps) {
                 className="hover:text-foreground transition-colors"
               >
                 Algolia
-              </a>
-              <a
-                href="http://localhost:8001/docs"
-                target="_blank"
-                rel="noopener noreferrer"
-                className="hover:text-foreground transition-colors"
-              >
-                API Docs
               </a>
             </div>
           </div>

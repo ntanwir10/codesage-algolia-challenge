@@ -1,88 +1,57 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { GitHubForm } from "@/components/forms/github-form";
+import { GitHubForm, type GitHubFormData } from "@/components/forms/github-form";
+import { useToast } from "@/components/ui/toast";
 import { api } from "@/services/api";
+import { describeError } from "@/lib/errors";
+import { isAxiosError } from "axios";
 import type { CreateRepositoryRequest } from "@/types/repository";
 
 export function HomePage() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const navigate = useNavigate();
+  const { addToast } = useToast();
 
-  const handleRepositorySubmit = async (data: {
-    url: string;
-    branch: string;
-    description?: string;
-  }) => {
+  const handleRepositorySubmit = async (data: GitHubFormData) => {
     setIsSubmitting(true);
     try {
-      // Extract repository name from URL for the API
-      const urlParts = data.url.match(/github\.com\/([^/]+)\/([^/]+)/);
-
-      if (!urlParts) {
-        throw new Error(
-          "Invalid GitHub URL format. Please use: https://github.com/owner/repository"
-        );
-      }
-
-      const name = `${urlParts[1]}/${urlParts[2].replace(/\.git$/, "")}`;
-
-      const createRequest: CreateRepositoryRequest = {
-        name: name.trim(),
-        description: data.description?.trim() || `Repository from ${data.url}`,
-        url: data.url.trim(),
-        branch: (data.branch || "main").trim(),
-      };
-
-      console.log("🔍 Form data received:", data);
-      console.log("🔍 Parsed URL parts:", urlParts);
-      console.log("🚀 Creating repository with request:", createRequest);
+      // The server normalises the URL and derives the name; empty optional
+      // fields are omitted (an empty branch means the default branch).
+      const createRequest: CreateRepositoryRequest = { url: data.url.trim() };
+      const branch = data.branch?.trim();
+      if (branch) createRequest.branch = branch;
+      const description = data.description?.trim();
+      if (description) createRequest.description = description;
 
       const repository = await api.createRepository(createRequest);
-      console.log("✅ Repository created successfully:", repository);
-
-      // Show message that processing starts automatically
-      alert(
-        "Repository created! Processing will start automatically. You will see progress on the next page."
-      );
-
-      // Navigate to repository detail page
+      addToast({
+        type: "success",
+        title: "Repository added",
+        description: "Processing has started. Progress appears on this page.",
+      });
       navigate(`/repository/${repository.id}`);
     } catch (error: unknown) {
-      console.error("❌ Repository creation error:", error);
-
-      let errorMessage = "Failed to create repository. Please try again.";
-
-      // Type guard for axios error
-      if (error && typeof error === "object" && "response" in error) {
-        const axiosError = error as {
-          response?: { status?: number; data?: unknown };
-        };
-        if (axiosError.response?.status === 400) {
-          const errorData = axiosError.response?.data;
-          if (typeof errorData === "string") {
-            errorMessage = `Validation error: ${errorData}`;
-          } else if (
-            errorData &&
-            typeof errorData === "object" &&
-            "detail" in errorData
-          ) {
-            errorMessage = `Validation error: ${JSON.stringify(
-              errorData.detail
-            )}`;
-          } else if (
-            errorData &&
-            typeof errorData === "object" &&
-            "message" in errorData
-          ) {
-            const msgData = errorData as { message: string };
-            errorMessage = `Error: ${msgData.message}`;
-          }
-        }
-      } else if (error instanceof Error) {
-        errorMessage = error.message;
+      const { message, status } = describeError(error);
+      // 422 details are shown inline by the form; everything else is toasted.
+      const inlineByForm =
+        status === 422 &&
+        isAxiosError(error) &&
+        Array.isArray(error.response?.data?.detail);
+      if (!inlineByForm) {
+        addToast({
+          type: status === 409 ? "warning" : "error",
+          title:
+            status === 409
+              ? "Repository already exists"
+              : status === 429
+              ? "Slow down"
+              : "Failed to add repository",
+          description: message,
+          duration: 8000,
+        });
       }
-
-      alert(errorMessage);
+      // Rethrow so the form keeps the user's input.
+      throw error;
     } finally {
       setIsSubmitting(false);
     }
