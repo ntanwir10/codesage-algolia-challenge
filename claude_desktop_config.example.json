@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "codesage": {
+      "command": "/absolute/path/to/codesage-algolia-challenge/mcp_launcher.sh",
+      "env": {
+        "MCP_SERVER_URL": "http://127.0.0.1:8001",
+        "CODESAGE_API_KEY": "your-api-key"
+      }
+    }
+  }
+}

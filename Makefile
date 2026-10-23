@@ -1,4 +1,4 @@
-.PHONY: help build up down restart logs shell test clean clean-all start stop start-backend start-frontend prod-build prod-up status
+.PHONY: help build up down restart logs shell test clean clean-all start stop start-backend start-frontend prod-build prod-up status install-claude
 
 COMPOSE      = docker compose -f deployment/docker-compose.yml
 COMPOSE_PROD = docker compose -f deployment/docker-compose.prod.yml
@@ -27,6 +27,7 @@ help:
 	@echo "  start-backend   - Start backend development server"
 	@echo "  start-frontend  - Start frontend development server"
 	@echo "  health          - Check backend health and MCP status"
+	@echo "  install-claude  - Add the CodeSage MCP server to Claude Desktop (merges config, keeps a backup)"
 	@echo ""
 	@echo "🧪 Testing:"
 	@echo "  test            - Run API tests"
@@ -175,3 +176,7 @@ challenge-setup: setup install-local
 	@echo "   4. Connect Claude Desktop to MCP endpoint"
 	@echo ""
 	@echo "🔗 Challenge: https://dev.to/challenges/algolia-2025-07-09"
+
+# Register the MCP server with Claude Desktop (use ARGS='--dry-run' to preview)
+install-claude:
+	.venv/bin/python scripts/install_claude_desktop.py $(ARGS)
