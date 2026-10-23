@@ -27,6 +27,15 @@ from app.services import github_service as github_module
 from app.services.algolia_service import AlgoliaService
 
 
+@pytest.fixture(autouse=True)
+def reset_rate_limits():
+    """Rate-limit counters are process-wide; start every test from zero"""
+    from app.core.security import limiter
+
+    limiter.reset()
+    yield
+
+
 @pytest.fixture
 def db_engine():
     """A fresh in-memory SQLite database per test"""

@@ -90,15 +90,6 @@ class Settings(BaseSettings):
     # Logging Settings
     log_level: str = "INFO"
 
-    # MCP Tools Configuration
-    mcp_tools_enabled: list[str] = [
-        "search_code",
-        "analyze_repository",
-        "explore_functions",
-        "explain_code",
-        "find_patterns",
-    ]
-
     @property
     def MCP_SERVER_CONFIG(self) -> dict:
         """MCP server configuration for protocol compliance"""
@@ -111,7 +102,6 @@ class Settings(BaseSettings):
                 "resources": True,
                 "prompts": False,
             },
-            "tools_enabled": self.mcp_tools_enabled,
         }
 
     # Load from the backend directory's .env (load_dotenv() above also searches upward)

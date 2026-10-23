@@ -26,6 +26,7 @@ from app.core.security import limiter
 from app.models import code_entity, code_file, repository  # noqa: F401  registers tables
 from app.services.algolia_service import AlgoliaService
 from app.services.repository_service import recover_interrupted_jobs
+from codesage_mcp import schemas as mcp_schemas
 
 # Get application settings
 settings = get_settings()
@@ -259,7 +260,7 @@ async def mcp_info():
         "version": settings.MCP_SERVER_CONFIG["version"],
         "description": settings.MCP_SERVER_CONFIG["description"],
         "capabilities": settings.MCP_SERVER_CONFIG["capabilities"],
-        "tools_available": len(settings.mcp_tools_enabled),
+        "tools_available": len(mcp_schemas.TOOLS),
         "realtime_features": {
             "websocket_endpoint": "/ws",
             "real_time_processing": True,

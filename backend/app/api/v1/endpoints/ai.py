@@ -3,13 +3,14 @@
 from typing import Any
 
 import structlog
-from fastapi import APIRouter, Body, Depends, HTTPException, Query
+from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request
 from fastapi.encoders import jsonable_encoder
 from pydantic import BaseModel, Field, ValidationError
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
 from app.core.database import get_db
+from app.core.security import limiter, require_api_key
 from app.services import algolia_service, mcp_tools
 from app.services.mcp_tools import ToolError
 from codesage_mcp import schemas
@@ -73,23 +74,28 @@ async def list_mcp_tools():
     return {"tools": tools, "count": len(tools)}
 
 
-# TODO(phase-2-merge): add the API-key dependency and the AI rate limit to this route
-@router.post("/mcp/tools/call", summary="Call MCP Tool")
+@router.post(
+    "/mcp/tools/call",
+    summary="Call MCP Tool",
+    dependencies=[Depends(require_api_key)],
+)
+@limiter.limit(lambda: settings.rate_limit_ai)
 async def call_mcp_tool(
-    request: MCPToolCallRequest = Body(...),
+    request: Request,  # slowapi needs the request under this name
+    payload: MCPToolCallRequest = Body(...),
     db: Session = Depends(get_db),
 ):
-    if request.tool_name not in schemas.TOOLS:
-        raise HTTPException(status_code=404, detail=f"Unknown tool '{request.tool_name}'")
+    if payload.tool_name not in schemas.TOOLS:
+        raise HTTPException(status_code=404, detail=f"Unknown tool '{payload.tool_name}'")
     try:
-        result = await mcp_tools.call_tool(db, request.tool_name, request.arguments)
+        result = await mcp_tools.call_tool(db, payload.tool_name, payload.arguments)
     except ValidationError as exc:
         raise HTTPException(
             status_code=422, detail=jsonable_encoder(exc.errors(include_url=False, include_context=False))
         ) from exc
     except ToolError as exc:
-        return {"tool": request.tool_name, "result": None, "is_error": True, "error": str(exc)}
-    return {"tool": request.tool_name, "result": result, "is_error": False, "error": None}
+        return {"tool": payload.tool_name, "result": None, "is_error": True, "error": str(exc)}
+    return {"tool": payload.tool_name, "result": result, "is_error": False, "error": None}
 
 
 @router.get("/mcp/resources", summary="List MCP Resources")
