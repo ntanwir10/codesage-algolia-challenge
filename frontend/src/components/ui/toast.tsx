@@ -1,4 +1,12 @@
-import { useState, useEffect, createContext, useContext } from "react";
+import {
+  useState,
+  useEffect,
+  useRef,
+  useCallback,
+  useMemo,
+  createContext,
+  useContext,
+} from "react";
 import type { ReactNode } from "react";
 import { Card, CardContent } from "@/components/ui/card";
 
@@ -20,28 +28,50 @@ const ToastContext = createContext<ToastContextType | undefined>(undefined);
 
 export function ToastProvider({ children }: { children: ReactNode }) {
   const [toasts, setToasts] = useState<Toast[]>([]);
+  const timers = useRef(new Map<string, ReturnType<typeof setTimeout>>());
 
-  const addToast = (toast: Omit<Toast, "id">) => {
-    const id = Math.random().toString(36).substring(2);
-    const newToast = { ...toast, id };
-
-    setToasts((prev) => [...prev, newToast]);
-
-    // Auto remove after duration (default 5 seconds)
-    const duration = toast.duration ?? 5000;
-    if (duration > 0) {
-      setTimeout(() => {
-        removeToast(id);
-      }, duration);
+  const removeToast = useCallback((id: string) => {
+    const timer = timers.current.get(id);
+    if (timer !== undefined) {
+      clearTimeout(timer);
+      timers.current.delete(id);
     }
-  };
-
-  const removeToast = (id: string) => {
     setToasts((prev) => prev.filter((toast) => toast.id !== id));
-  };
+  }, []);
+
+  const addToast = useCallback(
+    (toast: Omit<Toast, "id">) => {
+      const id = Math.random().toString(36).substring(2);
+      setToasts((prev) => [...prev, { ...toast, id }]);
+
+      // Auto remove after duration (default 5 seconds)
+      const duration = toast.duration ?? 5000;
+      if (duration > 0) {
+        timers.current.set(
+          id,
+          setTimeout(() => removeToast(id), duration)
+        );
+      }
+    },
+    [removeToast]
+  );
+
+  // Clear all pending timers on unmount
+  useEffect(() => {
+    const pending = timers.current;
+    return () => {
+      pending.forEach((timer) => clearTimeout(timer));
+      pending.clear();
+    };
+  }, []);
+
+  const value = useMemo(
+    () => ({ toasts, addToast, removeToast }),
+    [toasts, addToast, removeToast]
+  );
 
   return (
-    <ToastContext.Provider value={{ toasts, addToast, removeToast }}>
+    <ToastContext.Provider value={value}>
       {children}
       <ToastContainer />
     </ToastContext.Provider>
@@ -76,9 +106,15 @@ function ToastItem({ toast, onClose }: { toast: Toast; onClose: () => void }) {
     return () => clearTimeout(timer);
   }, []);
 
+  const closeTimer = useRef<ReturnType<typeof setTimeout> | undefined>(
+    undefined
+  );
+  useEffect(() => () => clearTimeout(closeTimer.current), []);
+
   const handleClose = () => {
     setIsVisible(false);
-    setTimeout(onClose, 200); // Allow exit animation
+    clearTimeout(closeTimer.current);
+    closeTimer.current = setTimeout(onClose, 200); // Allow exit animation
   };
 
   const getToastStyles = (type: Toast["type"]) => {
@@ -132,6 +168,7 @@ function ToastItem({ toast, onClose }: { toast: Toast; onClose: () => void }) {
               e.stopPropagation();
               handleClose();
             }}
+            aria-label="Dismiss notification"
             className="text-xs opacity-50 hover:opacity-100 transition-opacity"
           >
             ✕
@@ -142,6 +179,7 @@ function ToastItem({ toast, onClose }: { toast: Toast; onClose: () => void }) {
   );
 }
 
+// eslint-disable-next-line react-refresh/only-export-components -- useToast is imported by files outside the ui/ scope; moving it would require editing them
 export function useToast() {
   const context = useContext(ToastContext);
   if (!context) {
