@@ -21,7 +21,7 @@ class Repository(Base):
     # Processing status
     status = Column(
         String(50), default="pending", index=True
-    )  # pending, processing, completed, error
+    )  # pending, processing, completed, failed
     error_message = Column(Text, nullable=True)
 
     # Statistics

@@ -317,11 +317,13 @@ export function SearchInterface({
                       </span>
                     </div>
 
-                    {result.signature && (
-                      <code className="block text-xs font-mono break-all">
-                        {result.signature}
-                      </code>
-                    )}
+                    {/* The snippet usually starts with the signature; don't show it twice */}
+                    {result.signature &&
+                      !result.snippet?.trimStart().startsWith(result.signature.trim()) && (
+                        <code className="block text-xs font-mono break-all">
+                          {result.signature}
+                        </code>
+                      )}
 
                     {result.snippet && (
                       <div className="mt-2 p-2 bg-gray-50 rounded text-xs font-mono overflow-x-auto">

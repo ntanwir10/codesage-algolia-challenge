@@ -8,14 +8,13 @@ services:
       - "8001:8001" # HTTP API and WebSocket on same port
     volumes:
       - ../backend:/app
-      - backend_uploads:/app/uploads
       - backend_data:/app/data # SQLite database storage (writable by appuser)
     env_file:
       - ../backend/.env
     environment:
       - MCP_SERVER_HOST=0.0.0.0
       - MCP_SERVER_PORT=8001
-      - CORS_ORIGINS=["http://localhost", "http://localhost:3000", "http://localhost:5173"]
+      - CORS_ORIGINS=http://localhost,http://localhost:3000,http://localhost:5173 # comma-separated
       - DATABASE_URL=sqlite:///./data/codesage.db
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
@@ -45,7 +44,6 @@ services:
     restart: unless-stopped
 
 volumes:
-  backend_uploads:
   backend_data: # Persistent SQLite database storage
 
 networks:

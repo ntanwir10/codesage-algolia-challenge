@@ -8,7 +8,6 @@ services:
     ports:
       - "8001:8001"
     volumes:
-      - backend_uploads_prod:/app/uploads
       - backend_data_prod:/app/data # SQLite database storage
     env_file:
       - ../backend/.env
@@ -17,7 +16,7 @@ services:
       - MCP_SERVER_HOST=0.0.0.0
       - MCP_SERVER_PORT=8001
       - ENVIRONMENT=production
-      - CORS_ORIGINS=["https://yourdomain.com"] # Update with your domain
+      - CORS_ORIGINS=https://yourdomain.com # comma-separated; update with your domain
     networks:
       - codesage_network
     healthcheck:
@@ -52,7 +51,6 @@ services:
     restart: unless-stopped
 
 volumes:
-  backend_uploads_prod:
   backend_data_prod: # Persistent SQLite database storage
 
 networks:

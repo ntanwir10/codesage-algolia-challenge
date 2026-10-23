@@ -88,7 +88,7 @@ export function HomePage() {
               </div>
               <h4 className="font-medium">Submit Repository</h4>
               <p className="text-sm text-muted-foreground">
-                Enter a GitHub URL and we'll clone and analyze your code
+                Enter a GitHub URL and we'll fetch and parse its code
               </p>
             </div>
             <div className="text-center space-y-2">
@@ -123,10 +123,10 @@ export function HomePage() {
             </p>
           </div>
           <div className="bg-card border rounded-lg p-6">
-            <h3 className="text-lg font-semibold mb-2">📁 File Explorer</h3>
+            <h3 className="text-lg font-semibold mb-2">🤖 Claude Desktop</h3>
             <p className="text-muted-foreground">
-              Browse your repository structure, view file contents, and
-              understand the relationships between different components.
+              Connect Claude Desktop over MCP to search code, read files, list
+              definitions and find patterns in your indexed repositories.
             </p>
           </div>
         </div>

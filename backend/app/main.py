@@ -94,7 +94,10 @@ async def lifespan(app: FastAPI):
 # Create FastAPI application - CodeSage - MCP-First Code Discovery Server
 app = FastAPI(
     title="CodeSage - MCP-First Code Discovery",
-    description="AI-Powered Code Discovery Platform built entirely around the Model Context Protocol (MCP) for seamless integration with Claude Desktop and other AI clients. The only code discovery tool with MCP-first architecture.",
+    description=(
+        "Indexes GitHub repositories into Algolia and serves code search to Claude "
+        "Desktop and other clients through the Model Context Protocol (MCP)."
+    ),
     version="1.0.0",
     docs_url="/docs" if settings.environment != "production" else None,
     redoc_url="/redoc" if settings.environment != "production" else None,

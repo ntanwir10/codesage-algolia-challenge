@@ -32,7 +32,7 @@ DEFAULT_SERVER_URL = "http://127.0.0.1:8001"
 API_PREFIX = "/api/v1/ai"
 REQUEST_TIMEOUT = 30.0
 SERVER_NAME = "codesage"
-SERVER_VERSION = "0.1.0"
+SERVER_VERSION = "1.0.0"
 
 
 @dataclass(frozen=True)

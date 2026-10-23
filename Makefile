@@ -39,14 +39,20 @@ help:
 # Setup development environment
 setup:
 	@echo "🏆 Setting up CodeSage - MCP-First Code Discovery for Algolia Challenge..."
-	@cp .env.example .env 2>/dev/null || echo "⚠️  .env.example not found, create .env manually"
+	@test -f backend/.env || cp .env.example backend/.env
+	@if [ ! -x .venv/bin/python ]; then \
+		if command -v uv >/dev/null; then uv venv --python 3.13 .venv; else python3.13 -m venv .venv; fi; \
+	fi
+	@if command -v uv >/dev/null; then uv pip install --python .venv/bin/python -r backend/requirements-dev.txt; \
+	else .venv/bin/python -m pip install -r backend/requirements-dev.txt; fi
+	@cd frontend && npm ci
 	@echo ""
-	@echo "📋 Required environment variables:"
-	@echo "   ALGOLIA_APP_ID=your_app_id"
-	@echo "   ALGOLIA_ADMIN_API_KEY=your_admin_key"
-	@echo "   SECRET_KEY=your_secret_key"
+	@echo "📋 Edit backend/.env and set at least:"
+	@echo "   ALGOLIA_APP_ID, ALGOLIA_ADMIN_API_KEY  (Algolia dashboard)"
+	@echo "   GITHUB_TOKEN                           (optional; raises GitHub rate limits)"
+	@echo "   CODESAGE_API_KEY                       (required unless bound to 127.0.0.1)"
 	@echo ""
-	@echo "🎯 Next: Edit .env file and run 'make start'"
+	@echo "🎯 Next: 'make start', then 'make install-claude' for Claude Desktop"
 
 # Quick start commands  
 start:
