@@ -18,7 +18,7 @@ engine = create_engine(
     ),
     pool_pre_ping=True,
     pool_recycle=300,
-    echo=settings.debug,
+    echo=settings.sql_echo,
 )
 
 if settings.database_url.startswith("sqlite") and ":memory:" not in settings.database_url:

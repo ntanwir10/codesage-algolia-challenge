@@ -21,6 +21,7 @@ from app.models.code_entity import CodeEntity
 from app.models.code_file import CodeFile
 from app.models.repository import Repository
 from app.schemas.repository import RepositoryCreate
+from app.services.performance_monitor import monitor_repository_processing
 
 logger = structlog.get_logger()
 
@@ -146,7 +147,8 @@ class RepositoryService:
         await self._broadcast_repository_status(repository)
 
         try:
-            await self.process_repository_files(repository)
+            async with monitor_repository_processing(repository.id):
+                await self.process_repository_files(repository)
         except Exception as e:
             # Discard any half-written work so recording the failure can't fail too
             self.db.rollback()

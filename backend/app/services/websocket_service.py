@@ -6,6 +6,8 @@ from typing import Any
 import structlog
 from fastapi import WebSocket, WebSocketDisconnect
 
+from app.core.security import api_key_is_valid
+
 logger = structlog.get_logger()
 
 VALID_MESSAGE_TYPES = {"subscribe", "unsubscribe", "ping"}
@@ -157,6 +159,11 @@ async def _send_json(websocket: WebSocket, frame: dict):
 
 async def repository_status_websocket(websocket: WebSocket):
     """WebSocket endpoint for repository status updates"""
+    # Browsers can't set headers on a WebSocket, so the key comes as a query parameter
+    if not api_key_is_valid(websocket.query_params.get("api_key")):
+        await websocket.close(code=1008)
+        return
+
     await websocket_manager.connect(websocket)
 
     try:
