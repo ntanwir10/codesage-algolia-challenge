@@ -1,15 +1,16 @@
 from sqlalchemy import (
+    JSON,
+    Boolean,
     Column,
+    DateTime,
+    ForeignKey,
     Integer,
     String,
     Text,
-    DateTime,
-    Boolean,
-    ForeignKey,
-    JSON,
 )
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
+
 from app.core.database import Base
 
 

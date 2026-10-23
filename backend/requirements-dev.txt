@@ -1,0 +1,7 @@
+# CodeSage backend dev and test tools
+-r requirements.txt
+
+pytest==9.1.1
+pytest-asyncio==1.4.0
+httpx2==2.16.0  # starlette's TestClient transport
+ruff==0.17.2

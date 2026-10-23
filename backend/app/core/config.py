@@ -8,13 +8,10 @@ The configuration includes MCP server settings, Algolia search integration,
 and all necessary parameters for MCP-first code discovery architecture.
 """
 
-import os
-from typing import Optional, List
-from pydantic import Field
-from pydantic_settings import BaseSettings
-
 # Load environment variables from .env file
 from dotenv import load_dotenv
+from pydantic import Field
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 load_dotenv()
 
@@ -50,10 +47,10 @@ class Settings(BaseSettings):
     mcp_server_port: int = Field(default=8001, description="MCP server port")
 
     # Algolia Settings (Primary Search Engine)
-    algolia_app_id: Optional[str] = Field(
+    algolia_app_id: str | None = Field(
         default=None, description="Algolia application ID"
     )
-    algolia_admin_api_key: Optional[str] = Field(
+    algolia_admin_api_key: str | None = Field(
         default=None, description="Algolia admin API key (required for indexing)"
     )
     algolia_index_name: str = Field(
@@ -62,7 +59,7 @@ class Settings(BaseSettings):
     )
 
     # GitHub Settings
-    github_token: Optional[str] = Field(
+    github_token: str | None = Field(
         default=None, description="GitHub personal access token for API access"
     )
 
@@ -73,7 +70,7 @@ class Settings(BaseSettings):
     )
 
     @property
-    def cors_origins_list(self) -> List[str]:
+    def cors_origins_list(self) -> list[str]:
         """Convert CORS origins string to list"""
         if not self.cors_origins:
             return []
@@ -81,7 +78,7 @@ class Settings(BaseSettings):
             origin.strip() for origin in self.cors_origins.split(",") if origin.strip()
         ]
 
-    allowed_hosts: List[str] = ["localhost", "127.0.0.1"]
+    allowed_hosts: list[str] = ["localhost", "127.0.0.1"]
 
     # Rate Limiting (Essential only)
     enable_rate_limiting: bool = True
@@ -93,7 +90,7 @@ class Settings(BaseSettings):
     log_format: str = "json"
 
     # MCP Tools Configuration
-    mcp_tools_enabled: List[str] = [
+    mcp_tools_enabled: list[str] = [
         "search_code",
         "analyze_repository",
         "explore_functions",
@@ -102,7 +99,7 @@ class Settings(BaseSettings):
     ]
 
     # Supported Programming Languages
-    supported_languages: List[str] = [
+    supported_languages: list[str] = [
         "python",
         "javascript",
         "typescript",
@@ -134,14 +131,12 @@ class Settings(BaseSettings):
             "tools_enabled": self.mcp_tools_enabled,
         }
 
-    class Config:
-        env_file = ".env"  # Load from backend directory (project root .env will be found automatically)
-        case_sensitive = False
-        extra = "ignore"
+    # Load from the backend directory's .env (load_dotenv() above also searches upward)
+    model_config = SettingsConfigDict(env_file=".env", case_sensitive=False, extra="ignore")
 
 
 # Global settings instance
-_settings: Optional[Settings] = None
+_settings: Settings | None = None
 
 
 def get_settings() -> Settings:

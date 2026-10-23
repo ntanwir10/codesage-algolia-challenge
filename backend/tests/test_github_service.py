@@ -56,7 +56,7 @@ def file_entry(api, path, raw_name, size):
 
 
 async def test_content_is_decoded_and_unwanted_files_are_never_downloaded(github_api):
-    app_py = "﻿def café():\n    return 'é'\n".encode("utf-8")
+    app_py = "﻿def café():\n    return 'é'\n".encode()
     util_py = b"def helper():\n    pass\n"
     binary_json = b'{"a": 1}\x00\x01'
     github_api["raw"] = {"app.py": app_py, "util.py": util_py, "data.json": binary_json}

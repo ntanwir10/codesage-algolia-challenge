@@ -1,4 +1,5 @@
-from typing import List, Optional
+
+import structlog
 from fastapi import (
     APIRouter,
     Depends,
@@ -7,14 +8,13 @@ from fastapi import (
     UploadFile,
 )
 from sqlalchemy.orm import Session
-import structlog
 
 from app.core.database import get_db
 from app.models.repository import Repository
 from app.schemas.repository import (
     RepositoryCreate,
-    RepositoryUpdate,
     RepositoryResponse,
+    RepositoryUpdate,
 )
 from app.services.repository_service import RepositoryService
 from app.services.security_service import rate_limit_default
@@ -25,7 +25,7 @@ router = APIRouter()
 
 @router.get(
     "/",
-    response_model=List[RepositoryResponse],
+    response_model=list[RepositoryResponse],
     summary="List Repositories",
     description="List all repositories with optional filtering",
 )
@@ -34,8 +34,8 @@ async def list_repositories(
     limit: int = Query(
         default=100, le=500, description="Maximum number of repositories to return"
     ),
-    language: Optional[str] = Query(None, description="Filter by programming language"),
-    status: Optional[str] = Query(None, description="Filter by processing status"),
+    language: str | None = Query(None, description="Filter by programming language"),
+    status: str | None = Query(None, description="Filter by processing status"),
     db: Session = Depends(get_db),
 ):
     """List all repositories with optional filtering"""
@@ -157,7 +157,7 @@ async def update_repository(
             )
 
         # Update repository fields
-        update_data = repository_update.dict(exclude_unset=True)
+        update_data = repository_update.model_dump(exclude_unset=True)
         for key, value in update_data.items():
             setattr(repository, key, value)
 
@@ -215,7 +215,7 @@ async def delete_repository(repository_id: int, db: Session = Depends(get_db)):
     description="Upload code files to a repository for analysis",
 )
 async def upload_files_to_repository(
-    repository_id: int, files: List[UploadFile], db: Session = Depends(get_db)
+    repository_id: int, files: list[UploadFile], db: Session = Depends(get_db)
 ):
     """Upload files to a repository"""
     try:
@@ -235,7 +235,7 @@ async def upload_files_to_repository(
         )
         return {
             "message": f"{len(files)} files uploaded successfully to repository {repository_id}",
-            "repository": RepositoryResponse.from_orm(updated_repository).dict(),
+            "repository": RepositoryResponse.model_validate(updated_repository).model_dump(),
         }
 
     except HTTPException:

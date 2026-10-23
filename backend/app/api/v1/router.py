@@ -1,9 +1,9 @@
 from fastapi import APIRouter
 
 from app.api.v1.endpoints import (
-    repositories,
     ai,
     performance,
+    repositories,
 )
 
 api_router = APIRouter()

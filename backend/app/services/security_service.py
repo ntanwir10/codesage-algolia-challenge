@@ -1,7 +1,4 @@
-from sqlalchemy.orm import Session
-from typing import Optional, Dict, Any
 import structlog
-import functools
 
 from app.core.config import get_settings
 
@@ -31,7 +28,7 @@ class RateLimitingService:
 
 
 # Global rate limiting service instance
-_rate_limiting_service: Optional[RateLimitingService] = None
+_rate_limiting_service: RateLimitingService | None = None
 
 
 def get_rate_limiting_service() -> RateLimitingService:

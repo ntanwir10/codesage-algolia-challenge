@@ -10,12 +10,12 @@ are accessed through MCP tools by Claude Desktop and other MCP clients.
 This represents our core innovation: MCP-first architecture with powerful search integration.
 """
 
-from sqlalchemy.orm import Session
-from typing import List, Dict, Any, Optional
-import structlog
-from algoliasearch.search_client import SearchClient
-from algoliasearch.exceptions import AlgoliaException
 import hashlib
+from typing import Any
+
+import structlog
+from algoliasearch.exceptions import AlgoliaException
+from algoliasearch.search_client import SearchClient
 
 from app.core.config import get_settings
 from app.services.code_parser import ParsedCodeEntity
@@ -109,7 +109,7 @@ class AlgoliaService:
 
     async def batch_index_entities(
         self,
-        entities: List[ParsedCodeEntity],
+        entities: list[ParsedCodeEntity],
         repository_id: int,
         file_path: str,
         language: str,
@@ -171,7 +171,7 @@ class AlgoliaService:
         repository_id: int,
         file_path: str,
         language: str,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Create Algolia document from code entity.
         Follows architecture.md structure exactly.
@@ -207,7 +207,7 @@ class AlgoliaService:
         repository_id: int = None,
         language: str = None,
         entity_type: str = None,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Search code entities in Algolia.
         Used by MCP tools for natural language code discovery.
@@ -286,7 +286,7 @@ class AlgoliaService:
             )
             return False
 
-    async def get_repository_stats(self, repository_id: int) -> Dict[str, Any]:
+    async def get_repository_stats(self, repository_id: int) -> dict[str, Any]:
         """Get statistics for indexed repository entities"""
         if not self.is_available():
             return {}

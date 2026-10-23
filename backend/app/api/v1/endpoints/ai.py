@@ -1,8 +1,9 @@
-from typing import Dict, Any, Optional
-from fastapi import APIRouter, Depends, HTTPException, Query, Body
-from sqlalchemy.orm import Session
+from typing import Any
+
 import structlog
+from fastapi import APIRouter, Body, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
+from sqlalchemy.orm import Session
 
 from app.core.database import get_db
 from app.services.mcp_server import MCPServerService
@@ -15,11 +16,11 @@ router = APIRouter()
 # Request/Response Models for MCP protocol
 class MCPToolCallRequest(BaseModel):
     tool_name: str = Field(..., description="Name of the MCP tool to execute")
-    arguments: Dict[str, Any] = Field(..., description="Arguments for the MCP tool")
+    arguments: dict[str, Any] = Field(..., description="Arguments for the MCP tool")
 
 
 class MCPToolCallResponse(BaseModel):
-    result: Dict[str, Any] = Field(..., description="Tool execution result")
+    result: dict[str, Any] = Field(..., description="Tool execution result")
     status: str = Field(..., description="Success or error status")
 
 
@@ -33,7 +34,7 @@ class MCPToolCallResponse(BaseModel):
 async def get_search_suggestions(
     query: str = Query(..., description="Query string to get suggestions for"),
     limit: int = Query(default=10, le=20, description="Maximum number of suggestions"),
-    repository_id: Optional[int] = Query(None, description="Optional repository ID filter"),
+    repository_id: int | None = Query(None, description="Optional repository ID filter"),
     db: Session = Depends(get_db),
 ):
     """Get search suggestions for auto-complete"""

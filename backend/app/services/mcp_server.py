@@ -12,17 +12,17 @@ The MCP server provides:
 This represents our unique differentiator: MCP-first architecture for code discovery.
 """
 
-from typing import Dict, List, Any, Optional
-from sqlalchemy.orm import Session
+from typing import Any
+
 import structlog
-import asyncio
+from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
+from app.models.code_entity import CodeEntity
+from app.models.code_file import CodeFile
+from app.models.repository import Repository
 from app.services.ai_service import MCPToolsService
 from app.services.algolia_service import AlgoliaService
-from app.models.repository import Repository
-from app.models.code_file import CodeFile
-from app.models.code_entity import CodeEntity
 
 logger = structlog.get_logger()
 settings = get_settings()
@@ -35,7 +35,7 @@ class MCPResourcesService:
         self.db = db
         self.algolia_service = AlgoliaService()
 
-    async def get_repositories(self) -> List[Dict[str, Any]]:
+    async def get_repositories(self) -> list[dict[str, Any]]:
         """MCP Resource: Available code repositories"""
         try:
             repositories = self.db.query(Repository).all()
@@ -57,8 +57,8 @@ class MCPResourcesService:
             return []
 
     async def get_files(
-        self, repository_id: Optional[str] = None
-    ) -> List[Dict[str, Any]]:
+        self, repository_id: str | None = None
+    ) -> list[dict[str, Any]]:
         """MCP Resource: Code files within repositories"""
         try:
             query = self.db.query(CodeFile)
@@ -86,8 +86,8 @@ class MCPResourcesService:
             return []
 
     async def get_entities(
-        self, repository_id: Optional[str] = None
-    ) -> List[Dict[str, Any]]:
+        self, repository_id: str | None = None
+    ) -> list[dict[str, Any]]:
         """MCP Resource: Functions, classes, variables"""
         try:
             query = self.db.query(CodeEntity).join(CodeFile)
@@ -115,7 +115,7 @@ class MCPResourcesService:
             )
             return []
 
-    async def get_search_indexes(self) -> List[Dict[str, Any]]:
+    async def get_search_indexes(self) -> list[dict[str, Any]]:
         """MCP Resource: Algolia search indices status"""
         try:
             if not self.algolia_service.is_available():
@@ -159,7 +159,7 @@ class MCPServerService:
         self.resources_service = MCPResourcesService(db)
         self.config = settings.MCP_SERVER_CONFIG
 
-    async def get_capabilities(self) -> Dict[str, Any]:
+    async def get_capabilities(self) -> dict[str, Any]:
         """Return MCP server capabilities"""
         return {
             "implementation": {
@@ -179,7 +179,7 @@ class MCPServerService:
             },
         }
 
-    async def list_tools(self) -> List[Dict[str, Any]]:
+    async def list_tools(self) -> list[dict[str, Any]]:
         """List available MCP tools"""
         tools = []
 
@@ -311,8 +311,8 @@ class MCPServerService:
         return tools
 
     async def call_tool(
-        self, tool_name: str, arguments: Dict[str, Any]
-    ) -> Dict[str, Any]:
+        self, tool_name: str, arguments: dict[str, Any]
+    ) -> dict[str, Any]:
         """Execute an MCP tool call"""
         try:
             if tool_name == "search_code":
@@ -359,7 +359,7 @@ class MCPServerService:
             logger.error("MCP tool call failed", tool_name=tool_name, error=str(e))
             return {"error": f"Tool execution failed: {str(e)}", "tool": tool_name}
 
-    async def list_resources(self) -> List[Dict[str, Any]]:
+    async def list_resources(self) -> list[dict[str, Any]]:
         """List available MCP resources"""
         resources = []
 
@@ -401,7 +401,7 @@ class MCPServerService:
 
         return resources
 
-    async def read_resource(self, uri: str) -> Dict[str, Any]:
+    async def read_resource(self, uri: str) -> dict[str, Any]:
         """Read an MCP resource"""
         try:
             if uri == "codesage://repositories":

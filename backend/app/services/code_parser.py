@@ -1,8 +1,8 @@
 import ast
 import re
-from typing import List, Dict, Any, Optional
-import structlog
 from dataclasses import dataclass
+
+import structlog
 
 logger = structlog.get_logger()
 
@@ -15,10 +15,10 @@ class ParsedCodeEntity:
     description: str
     line_start: int
     line_end: int
-    parameters: List[str] = None
+    parameters: list[str] = None
     return_type: str = None
     content: str = None
-    imports: List[str] = None
+    imports: list[str] = None
 
 
 class CodeParser:
@@ -37,7 +37,7 @@ class CodeParser:
             "go": self._parse_go,
         }
         
-    async def extract_entities(self, file_path: str, content: str, language: str) -> List[ParsedCodeEntity]:
+    async def extract_entities(self, file_path: str, content: str, language: str) -> list[ParsedCodeEntity]:
         """
         Extract code entities from file content.
         Returns list of functions, classes, imports for Algolia indexing.
@@ -64,7 +64,7 @@ class CodeParser:
             logger.error("Failed to parse code file", file_path=file_path, error=str(e))
             return []
             
-    def _parse_python(self, content: str, file_path: str) -> List[ParsedCodeEntity]:
+    def _parse_python(self, content: str, file_path: str) -> list[ParsedCodeEntity]:
         """Parse Python code for functions, classes, imports"""
         try:
             tree = ast.parse(content)
@@ -94,8 +94,8 @@ class CodeParser:
         return entities
 
     def _collect_python_definitions(
-        self, parent: ast.AST, lines: List[str], scope: str, in_class: bool,
-        entities: List[ParsedCodeEntity]
+        self, parent: ast.AST, lines: list[str], scope: str, in_class: bool,
+        entities: list[ParsedCodeEntity]
     ):
         """Walk definitions in source order, recording each one with its full line range"""
         for node in ast.iter_child_nodes(parent):
@@ -134,7 +134,7 @@ class CodeParser:
                 self._collect_python_definitions(node, lines, scope, in_class, entities)
 
     @staticmethod
-    def _python_parameters(args: ast.arguments) -> List[str]:
+    def _python_parameters(args: ast.arguments) -> list[str]:
         """Render parameters as 'name' or 'name: annotation', with * and ** prefixes"""
         def render(arg: ast.arg, prefix: str = "") -> str:
             if arg.annotation:
@@ -149,7 +149,7 @@ class CodeParser:
             parameters.append(render(args.kwarg, "**"))
         return parameters
 
-    def _parse_python_lines(self, content: str) -> List[ParsedCodeEntity]:
+    def _parse_python_lines(self, content: str) -> list[ParsedCodeEntity]:
         """Line-based fallback for Python that ast can't parse.
 
         Keeps a stack of open definitions so every def/class is recorded, and
@@ -213,7 +213,7 @@ class CodeParser:
 
         return entities
         
-    def _parse_javascript(self, content: str, file_path: str) -> List[ParsedCodeEntity]:
+    def _parse_javascript(self, content: str, file_path: str) -> list[ParsedCodeEntity]:
         """Parse JavaScript code for functions, classes, imports"""
         entities = []
         lines = content.split('\n')
@@ -285,11 +285,11 @@ class CodeParser:
                 
         return entities
         
-    def _parse_typescript(self, content: str, file_path: str) -> List[ParsedCodeEntity]:
+    def _parse_typescript(self, content: str, file_path: str) -> list[ParsedCodeEntity]:
         """Parse TypeScript (similar to JavaScript but with types)"""
         return self._parse_javascript(content, file_path)  # Reuse JS parser for now
         
-    def _parse_java(self, content: str, file_path: str) -> List[ParsedCodeEntity]:
+    def _parse_java(self, content: str, file_path: str) -> list[ParsedCodeEntity]:
         """Parse Java code for classes, methods, imports"""
         entities = []
         lines = content.split('\n')
@@ -345,7 +345,7 @@ class CodeParser:
                 
         return entities
         
-    def _parse_go(self, content: str, file_path: str) -> List[ParsedCodeEntity]:
+    def _parse_go(self, content: str, file_path: str) -> list[ParsedCodeEntity]:
         """Parse Go code for functions, structs, imports"""
         entities = []
         lines = content.split('\n')
@@ -405,7 +405,7 @@ class CodeParser:
                 
         return entities
         
-    def _parse_generic(self, content: str, file_path: str) -> List[ParsedCodeEntity]:
+    def _parse_generic(self, content: str, file_path: str) -> list[ParsedCodeEntity]:
         """Generic parser for unsupported languages - extract basic patterns"""
         entities = []
         lines = content.split('\n')

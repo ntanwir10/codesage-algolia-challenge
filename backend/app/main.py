@@ -1,30 +1,20 @@
-import asyncio
+from contextlib import asynccontextmanager
+
 import structlog
-from fastapi import FastAPI, Request, HTTPException
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
 
 # Load environment variables from .env file
 from dotenv import load_dotenv
+from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 
 load_dotenv()
 
+from app.api.v1.router import api_router
 from app.core.config import get_settings
 from app.core.database import Base, engine, get_db
-from app.models import repository, code_entity, code_file
-from app.api.v1.router import api_router
+from app.models import code_entity, code_file, repository  # noqa: F401  registers tables
 from app.services.algolia_service import AlgoliaService
 from app.services.security_service import get_rate_limiting_service
-
-# Optional Sentry imports - only import if sentry is available
-try:
-    import sentry_sdk
-    from sentry_sdk.integrations.fastapi import FastApiIntegration
-    from sentry_sdk.integrations.sqlalchemy import SqlalchemyIntegration
-
-    SENTRY_AVAILABLE = True
-except ImportError:
-    SENTRY_AVAILABLE = False
 
 # Configure structured logging
 structlog.configure(
@@ -50,17 +40,37 @@ logger = structlog.get_logger()
 # Get application settings
 settings = get_settings()
 
-# Initialize Sentry for error monitoring
-if hasattr(settings, "sentry_dsn") and settings.sentry_dsn and SENTRY_AVAILABLE:
-    sentry_sdk.init(
-        dsn=settings.sentry_dsn,
-        integrations=[
-            FastApiIntegration(auto_enable=True),
-            SqlalchemyIntegration(),
-        ],
-        traces_sample_rate=0.1,
-        environment=settings.environment,
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Initialize the MCP server on startup and log shutdown"""
+    logger.info(
+        "Starting CodeSage MCP Server",
+        mcp_config=settings.MCP_SERVER_CONFIG,
+        algolia_configured=bool(
+            settings.algolia_app_id and settings.algolia_admin_api_key
+        ),
     )
+
+    # Create database tables
+    Base.metadata.create_all(bind=engine)
+    logger.info("Database tables created")
+
+    # Validate MCP server requirements
+    if not settings.algolia_app_id or not settings.algolia_admin_api_key:
+        logger.error(
+            "Algolia credentials not configured - MCP server cannot function properly"
+        )
+    else:
+        logger.info("Algolia credentials configured - MCP server ready")
+
+    # Log WebSocket configuration
+    logger.info("WebSocket endpoint configured at /ws for real-time updates")
+
+    yield
+
+    logger.info("Shutting down CodeSage MCP Server")
+
 
 # Create FastAPI application - CodeSage - MCP-First Code Discovery Server
 app = FastAPI(
@@ -69,6 +79,7 @@ app = FastAPI(
     version="1.0.0",
     docs_url="/docs" if settings.environment != "production" else None,
     redoc_url="/redoc" if settings.environment != "production" else None,
+    lifespan=lifespan,
     servers=[
         {
             "url": f"http://{settings.mcp_server_host}:{settings.mcp_server_port}",
@@ -103,41 +114,8 @@ app.include_router(api_router, prefix="/api/v1")
 # Add WebSocket endpoints directly to main app
 from app.services.websocket_service import repository_status_websocket, websocket_health
 
-app.add_websocket_route("/ws", repository_status_websocket)
+app.add_api_websocket_route("/ws", repository_status_websocket)
 app.add_api_route("/api/v1/ws/health", websocket_health, methods=["GET"])
-
-
-@app.on_event("startup")
-async def startup_event():
-    """Initialize MCP server on startup"""
-    logger.info(
-        "Starting CodeSage MCP Server",
-        mcp_config=settings.MCP_SERVER_CONFIG,
-        algolia_configured=bool(
-            settings.algolia_app_id and settings.algolia_admin_api_key
-        ),
-    )
-
-    # Create database tables
-    Base.metadata.create_all(bind=engine)
-    logger.info("Database tables created")
-
-    # Validate MCP server requirements
-    if not settings.algolia_app_id or not settings.algolia_admin_api_key:
-        logger.error(
-            "Algolia credentials not configured - MCP server cannot function properly"
-        )
-    else:
-        logger.info("Algolia credentials configured - MCP server ready")
-
-    # Log WebSocket configuration
-    logger.info("WebSocket endpoint configured at /ws for real-time updates")
-
-
-@app.on_event("shutdown")
-async def shutdown_event():
-    """Cleanup on shutdown"""
-    logger.info("Shutting down CodeSage MCP Server")
 
 
 # Root endpoint
@@ -171,8 +149,6 @@ async def root():
 @app.get("/health")
 async def health_check():
     """Comprehensive health check for all system components"""
-    from sqlalchemy.orm import Session
-
     health_status = {
         "status": "healthy",
         "timestamp": "2024-01-01T00:00:00Z",  # This would be actual timestamp
@@ -217,7 +193,6 @@ async def health_check():
 
     # Check MCP server functionality
     try:
-        from app.services.mcp_server import MCPServerService
 
         # This would test MCP server functionality
         health_status["components"]["mcp_server"] = {
@@ -257,8 +232,6 @@ async def health_check():
     if overall_healthy:
         return health_status
     else:
-        from fastapi import HTTPException
-
         raise HTTPException(status_code=503, detail=health_status)
 
 

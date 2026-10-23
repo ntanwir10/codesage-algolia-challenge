@@ -1,8 +1,7 @@
-import asyncio
 import json
-from typing import Dict, List, Set
-from fastapi import WebSocket, WebSocketDisconnect
+
 import structlog
+from fastapi import WebSocket, WebSocketDisconnect
 
 logger = structlog.get_logger()
 
@@ -12,9 +11,9 @@ class WebSocketManager:
 
     def __init__(self):
         # Store active connections
-        self.active_connections: Set[WebSocket] = set()
+        self.active_connections: set[WebSocket] = set()
         # Store connections by repository ID for targeted updates
-        self.repository_connections: Dict[int, Set[WebSocket]] = {}
+        self.repository_connections: dict[int, set[WebSocket]] = {}
 
     async def connect(self, websocket: WebSocket):
         """Accept a new WebSocket connection"""

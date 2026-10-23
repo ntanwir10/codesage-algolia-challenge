@@ -10,14 +10,14 @@ AI discovery through Claude Desktop and other MCP clients.
 This represents our core innovation: MCP-first architecture for code discovery.
 """
 
-from sqlalchemy.orm import Session
-from typing import List
-import structlog
 import asyncio
-import time
 import os
-from contextlib import asynccontextmanager
+import time
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import asynccontextmanager
+
+import structlog
+from sqlalchemy.orm import Session
 
 from app.models.repository import Repository
 from app.schemas.repository import RepositoryCreate
@@ -82,7 +82,7 @@ class RepositoryService:
             )
 
     async def _process_files_batch(
-        self, files_batch: List, repository: Repository
+        self, files_batch: list, repository: Repository
     ) -> int:
         """Process a batch of files with optimizations"""
         processed_count = 0
@@ -144,7 +144,7 @@ class RepositoryService:
 
         return processed_count
 
-    def _parse_file_content(self, file_data) -> List:
+    def _parse_file_content(self, file_data) -> list:
         """Parse file content - runs in thread pool for CPU-bound work"""
         try:
             if not self.code_parser:
@@ -162,7 +162,7 @@ class RepositoryService:
             return []
 
     async def _process_large_repository_optimized(
-        self, repository: Repository, files: List
+        self, repository: Repository, files: list
     ):
         """Optimized processing for large repositories"""
         total_files = len(files)
@@ -233,6 +233,7 @@ class RepositoryService:
 
         # Start processing in the background with proper task management
         import asyncio
+
         from app.core.database import get_db
 
         async def background_process():
@@ -305,10 +306,11 @@ class RepositoryService:
         )
         return db_repo
 
-    async def upload_files(self, repository: Repository, files: List) -> Repository:
+    async def upload_files(self, repository: Repository, files: list) -> Repository:
         """Upload files to repository and save them to database"""
-        from app.models.code_file import CodeFile
         import os
+
+        from app.models.code_file import CodeFile
 
         uploaded_count = 0
         total_files = len(files)
@@ -669,9 +671,10 @@ class RepositoryService:
         """
         try:
             import os
-            from app.services.github_service import GitHubService
-            from app.services.code_parser import CodeParser
+
             from app.services.algolia_service import AlgoliaService
+            from app.services.code_parser import CodeParser
+            from app.services.github_service import GitHubService
 
             logger.info(
                 "Starting repository processing",
@@ -726,8 +729,9 @@ class RepositoryService:
             for file in files:
                 try:
                     # Save file to database
-                    from app.models.code_file import CodeFile
                     import os
+
+                    from app.models.code_file import CodeFile
 
                     code_file = CodeFile(
                         repository_id=repository.id,

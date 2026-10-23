@@ -14,11 +14,12 @@ The MCP Tools provide natural language interfaces for:
 This represents our core innovation: MCP-first architecture for AI-powered code discovery.
 """
 
-from typing import Dict, Any, List, Optional
+from typing import Any
+
 import structlog
 
-from app.services.algolia_service import AlgoliaService
 from app.models.repository import Repository
+from app.services.algolia_service import AlgoliaService
 
 logger = structlog.get_logger()
 
@@ -42,7 +43,7 @@ class MCPToolsService:
         repository: str = None,
         language: str = None,
         entity_type: str = None,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Natural language code search across repositories.
         MCP tool: search_code
@@ -112,7 +113,7 @@ class MCPToolsService:
 
     async def analyze_repository(
         self, repository_id: str, analysis_type: str = "overview"
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Repository analysis and insights.
         MCP tool: analyze_repository
@@ -188,7 +189,7 @@ class MCPToolsService:
         entity_name: str = None,
         repository: str = None,
         similarity_search: bool = True,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Function discovery and relationship mapping.
         MCP tool: explore_functions
@@ -253,7 +254,7 @@ class MCPToolsService:
 
     async def explain_code(
         self, code_snippet: str, context: str = None, detail_level: str = "brief"
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Code explanation and documentation.
         MCP tool: explain_code
@@ -304,7 +305,7 @@ class MCPToolsService:
 
     async def find_patterns(
         self, repository_id: str, pattern_type: str = "security"
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Pattern detection across codebase.
         MCP tool: find_patterns
@@ -368,8 +369,8 @@ class MCPToolsService:
             return {"status": "error", "error": f"Pattern finding failed: {str(e)}"}
 
     def _get_pattern_recommendations(
-        self, pattern_type: str, patterns: List[Dict]
-    ) -> List[str]:
+        self, pattern_type: str, patterns: list[dict]
+    ) -> list[str]:
         """Generate recommendations based on found patterns"""
         if pattern_type == "security":
             return [

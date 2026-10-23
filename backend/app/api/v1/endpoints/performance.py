@@ -3,10 +3,11 @@ Performance monitoring API endpoints.
 Provides real-time performance metrics and system monitoring.
 """
 
-from typing import Dict, Any
+from typing import Any
+
+import structlog
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
-import structlog
 
 from app.services.performance_monitor import performance_monitor
 
@@ -20,8 +21,8 @@ class PerformanceReportResponse(BaseModel):
     timestamp: float
     active_operations: int
     total_operations: int
-    operations_summary: Dict[str, Any]
-    system_metrics: Dict[str, Any]
+    operations_summary: dict[str, Any]
+    system_metrics: dict[str, Any]
     recent_operations: list
 
 

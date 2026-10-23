@@ -3,15 +3,15 @@ Performance monitoring service for CodeSage operations.
 Tracks processing times, memory usage, and throughput metrics.
 """
 
+import json
 import time
-import asyncio
+from collections import defaultdict
+from contextlib import asynccontextmanager
+from dataclasses import dataclass, field
+from typing import Any
+
 import psutil
 import structlog
-from typing import Dict, Any, Optional, List
-from dataclasses import dataclass, field
-from contextlib import asynccontextmanager
-from collections import defaultdict
-import json
 
 logger = structlog.get_logger()
 
@@ -22,14 +22,14 @@ class PerformanceMetrics:
 
     operation_name: str
     start_time: float
-    end_time: Optional[float] = None
-    duration: Optional[float] = None
-    memory_start: Optional[float] = None
-    memory_end: Optional[float] = None
-    memory_peak: Optional[float] = None
+    end_time: float | None = None
+    duration: float | None = None
+    memory_start: float | None = None
+    memory_end: float | None = None
+    memory_peak: float | None = None
     items_processed: int = 0
     errors_count: int = 0
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    metadata: dict[str, Any] = field(default_factory=dict)
 
     def finalize(self):
         """Finalize metrics calculation"""
@@ -47,7 +47,7 @@ class PerformanceMetrics:
             return self.items_processed / self.duration
         return 0.0
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for logging/storage"""
         return {
             "operation": self.operation_name,
@@ -71,8 +71,8 @@ class PerformanceMonitor:
     """
 
     def __init__(self):
-        self.metrics_history: List[PerformanceMetrics] = []
-        self.active_operations: Dict[str, PerformanceMetrics] = {}
+        self.metrics_history: list[PerformanceMetrics] = []
+        self.active_operations: dict[str, PerformanceMetrics] = {}
         self.operation_stats = defaultdict(list)
         self._process = psutil.Process()
 
@@ -85,7 +85,7 @@ class PerformanceMonitor:
 
     @asynccontextmanager
     async def monitor_operation(
-        self, operation_name: str, metadata: Optional[Dict[str, Any]] = None
+        self, operation_name: str, metadata: dict[str, Any] | None = None
     ):
         """Context manager for monitoring an operation"""
         operation_id = f"{operation_name}_{int(time.time() * 1000)}"
@@ -132,7 +132,7 @@ class PerformanceMonitor:
                 items=metrics.items_processed,
             )
 
-    def get_operation_summary(self, operation_name: str) -> Dict[str, Any]:
+    def get_operation_summary(self, operation_name: str) -> dict[str, Any]:
         """Get performance summary for an operation type"""
         ops = self.operation_stats.get(operation_name, [])
         if not ops:
@@ -163,7 +163,7 @@ class PerformanceMonitor:
             ),
         }
 
-    def get_system_metrics(self) -> Dict[str, Any]:
+    def get_system_metrics(self) -> dict[str, Any]:
         """Get current system performance metrics"""
         try:
             cpu_percent = psutil.cpu_percent(interval=1)
@@ -191,7 +191,7 @@ class PerformanceMonitor:
             logger.error(f"Failed to get system metrics: {e}")
             return {}
 
-    def get_performance_report(self) -> Dict[str, Any]:
+    def get_performance_report(self) -> dict[str, Any]:
         """Generate comprehensive performance report"""
         operations_summary = {}
         for op_name in self.operation_stats.keys():

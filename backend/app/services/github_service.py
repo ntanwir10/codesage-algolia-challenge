@@ -1,16 +1,13 @@
+import asyncio
 import os
 import re
-import tempfile
-import shutil
-from typing import List, Dict, Any, Optional
-import asyncio
-import aiohttp
-import structlog
-from urllib.parse import urlparse
-import base64
+import time
 from dataclasses import dataclass
 from functools import lru_cache
-import time
+from typing import Any
+
+import aiohttp
+import structlog
 
 logger = structlog.get_logger()
 
@@ -117,7 +114,7 @@ class GitHubService:
             )
         return self.session
 
-    async def _make_request_with_retries(self, url: str, **kwargs) -> Dict[str, Any]:
+    async def _make_request_with_retries(self, url: str, **kwargs) -> dict[str, Any]:
         """Make GitHub API request with retries and rate limiting"""
         async with self._semaphore:  # Limit concurrent requests
             for attempt in range(MAX_RETRIES):
@@ -145,7 +142,7 @@ class GitHubService:
                                 f"GitHub API error {response.status} for {url}"
                             )
 
-                except asyncio.TimeoutError:
+                except TimeoutError:
                     logger.warning(f"Timeout for {url}, attempt {attempt + 1}")
                     if attempt < MAX_RETRIES - 1:
                         await asyncio.sleep(2**attempt)  # Exponential backoff
@@ -175,7 +172,7 @@ class GitHubService:
         except Exception:
             return None, None
 
-    async def get_repository_files(self, repo_url: str) -> List[GitHubFile]:
+    async def get_repository_files(self, repo_url: str) -> list[GitHubFile]:
         """
         Download files from GitHub repository for processing.
         Based on our architecture: GitHub API → File Extraction → Algolia Indexing
@@ -261,7 +258,7 @@ class GitHubService:
         }
         return language_map.get(ext, "text")
 
-    async def _get_file_tree(self, owner: str, repo: str) -> List[GitHubFile]:
+    async def _get_file_tree(self, owner: str, repo: str) -> list[GitHubFile]:
         """Get repository file tree using GitHub API"""
         files = []
 
@@ -289,7 +286,7 @@ class GitHubService:
         return f"GitHub API error {status} while reading {target}"
 
     @staticmethod
-    def _decode_content(raw: bytes) -> Optional[str]:
+    def _decode_content(raw: bytes) -> str | None:
         """Decode downloaded bytes to text, or None for empty and binary files"""
         if not raw or b"\x00" in raw:
             return None
@@ -301,7 +298,7 @@ class GitHubService:
         owner: str,
         repo: str,
         path: str,
-        files: List[GitHubFile],
+        files: list[GitHubFile],
     ):
         """Recursively fetch directory contents.
 
