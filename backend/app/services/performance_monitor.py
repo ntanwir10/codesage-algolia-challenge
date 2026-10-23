@@ -3,9 +3,10 @@ Performance monitoring service for CodeSage operations.
 Tracks processing times, memory usage, and throughput metrics.
 """
 
+import itertools
 import json
 import time
-from collections import defaultdict
+from collections import defaultdict, deque
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from typing import Any
@@ -14,6 +15,12 @@ import psutil
 import structlog
 
 logger = structlog.get_logger()
+
+MAX_HISTORY = 1000
+MAX_SAMPLES_PER_OPERATION = 200
+
+# Prime psutil's non-blocking CPU counter; the first call returns a meaningless 0.0
+psutil.cpu_percent(interval=None)
 
 
 @dataclass
@@ -71,9 +78,12 @@ class PerformanceMonitor:
     """
 
     def __init__(self):
-        self.metrics_history: list[PerformanceMetrics] = []
+        self.metrics_history: deque[PerformanceMetrics] = deque(maxlen=MAX_HISTORY)
         self.active_operations: dict[str, PerformanceMetrics] = {}
-        self.operation_stats = defaultdict(list)
+        self.operation_stats: defaultdict[str, deque[PerformanceMetrics]] = (
+            defaultdict(lambda: deque(maxlen=MAX_SAMPLES_PER_OPERATION))
+        )
+        self._counter = itertools.count(1)
         self._process = psutil.Process()
 
     def _get_memory_usage(self) -> float:
@@ -88,7 +98,7 @@ class PerformanceMonitor:
         self, operation_name: str, metadata: dict[str, Any] | None = None
     ):
         """Context manager for monitoring an operation"""
-        operation_id = f"{operation_name}_{int(time.time() * 1000)}"
+        operation_id = f"{operation_name}_{next(self._counter)}"
 
         # Start monitoring
         metrics = PerformanceMetrics(
@@ -119,7 +129,7 @@ class PerformanceMonitor:
             # Store metrics
             self.metrics_history.append(metrics)
             self.operation_stats[operation_name].append(metrics)
-            del self.active_operations[operation_id]
+            self.active_operations.pop(operation_id, None)
 
             # Log completion
             logger.info(
@@ -166,7 +176,7 @@ class PerformanceMonitor:
     def get_system_metrics(self) -> dict[str, Any]:
         """Get current system performance metrics"""
         try:
-            cpu_percent = psutil.cpu_percent(interval=1)
+            cpu_percent = psutil.cpu_percent(interval=None)
             memory = psutil.virtual_memory()
             disk = psutil.disk_usage("/")
 
@@ -191,10 +201,12 @@ class PerformanceMonitor:
             logger.error(f"Failed to get system metrics: {e}")
             return {}
 
-    def get_performance_report(self) -> dict[str, Any]:
+    def get_performance_report(
+        self, system_metrics: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
         """Generate comprehensive performance report"""
         operations_summary = {}
-        for op_name in self.operation_stats.keys():
+        for op_name in list(self.operation_stats):
             operations_summary[op_name] = self.get_operation_summary(op_name)
 
         return {
@@ -202,9 +214,11 @@ class PerformanceMonitor:
             "active_operations": len(self.active_operations),
             "total_operations": len(self.metrics_history),
             "operations_summary": operations_summary,
-            "system_metrics": self.get_system_metrics(),
+            "system_metrics": (
+                system_metrics if system_metrics is not None else self.get_system_metrics()
+            ),
             "recent_operations": [
-                op.to_dict() for op in self.metrics_history[-10:]  # Last 10 operations
+                op.to_dict() for op in list(self.metrics_history)[-10:]
             ],
         }
 
@@ -230,22 +244,22 @@ performance_monitor = PerformanceMonitor()
 
 
 # Convenience functions
-async def monitor_repository_processing(repo_name: str, file_count: int):
-    """Monitor repository processing operation"""
+def monitor_repository_processing(repo_name: str | int, file_count: int = 0):
+    """Monitor repository processing (use with `async with`)"""
     return performance_monitor.monitor_operation(
         "repository_processing",
         metadata={"repo_name": repo_name, "file_count": file_count},
     )
 
 
-async def monitor_github_api_call(endpoint: str):
+def monitor_github_api_call(endpoint: str):
     """Monitor GitHub API call"""
     return performance_monitor.monitor_operation(
         "github_api_call", metadata={"endpoint": endpoint}
     )
 
 
-async def monitor_algolia_indexing(index_name: str, item_count: int):
+def monitor_algolia_indexing(index_name: str, item_count: int):
     """Monitor Algolia indexing operation"""
     return performance_monitor.monitor_operation(
         "algolia_indexing",
@@ -253,7 +267,7 @@ async def monitor_algolia_indexing(index_name: str, item_count: int):
     )
 
 
-async def monitor_code_parsing(language: str, file_count: int):
+def monitor_code_parsing(language: str, file_count: int):
     """Monitor code parsing operation"""
     return performance_monitor.monitor_operation(
         "code_parsing", metadata={"language": language, "file_count": file_count}
