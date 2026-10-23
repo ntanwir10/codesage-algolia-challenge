@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 interface AnimatedProgressProps {
   value: number; // 0-100
@@ -22,36 +22,36 @@ export function AnimatedProgress({
   indeterminate = false,
 }: AnimatedProgressProps) {
   const [displayValue, setDisplayValue] = useState(0);
+  const displayRef = useRef(0);
 
-  // Animate to target value
+  // Animate from the previous displayed value to the target value
   useEffect(() => {
+    const endValue = Math.min(value, max);
+
     if (!animated) {
-      setDisplayValue(value);
+      displayRef.current = endValue;
+      setDisplayValue(endValue);
       return;
     }
 
-    const startValue = displayValue;
-    const endValue = Math.min(value, max);
-    const duration = 800; // ms
+    const startValue = displayRef.current;
     const steps = 60;
-    const stepValue = (endValue - startValue) / steps;
-    const stepDuration = duration / steps;
-
+    const stepDuration = 800 / steps; // 800ms total
     let currentStep = 0;
+
     const timer = setInterval(() => {
       currentStep++;
-      const newValue = startValue + stepValue * currentStep;
-
-      if (currentStep >= steps) {
-        setDisplayValue(endValue);
-        clearInterval(timer);
-      } else {
-        setDisplayValue(newValue);
-      }
+      const next =
+        currentStep >= steps
+          ? endValue
+          : startValue + ((endValue - startValue) * currentStep) / steps;
+      displayRef.current = next;
+      setDisplayValue(next);
+      if (currentStep >= steps) clearInterval(timer);
     }, stepDuration);
 
     return () => clearInterval(timer);
-  }, [value, max, animated, displayValue]);
+  }, [value, max, animated]);
 
   const percentage = Math.min((displayValue / max) * 100, 100);
 

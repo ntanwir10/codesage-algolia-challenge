@@ -56,4 +56,5 @@ function Button({
   )
 }
 
+// eslint-disable-next-line react-refresh/only-export-components -- buttonVariants is imported by files outside the ui/ scope; moving it would require editing them
 export { Button, buttonVariants }
