@@ -52,6 +52,15 @@ describe("CodeSageAPI", () => {
     expect(`${calls[0].baseURL}${calls[0].url}`).not.toMatch(/api\/v1.*api\/v1/);
   });
 
+  it("appends /api/v1 when VITE_API_BASE_URL is a bare origin", async () => {
+    vi.stubEnv("VITE_API_BASE_URL", "http://localhost:8001/");
+    const { api, calls } = makeApi([]);
+    await api.getRepositories();
+    expect(`${calls[0].baseURL}${calls[0].url}`).toBe(
+      "http://localhost:8001/api/v1/repositories/"
+    );
+  });
+
   it("honours VITE_API_BASE_URL and sends /health at the origin", async () => {
     vi.stubEnv("VITE_API_BASE_URL", "https://api.example.com/api/v1/");
     const { api, calls } = makeApi({ status: "ok" });

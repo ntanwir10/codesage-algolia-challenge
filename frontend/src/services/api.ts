@@ -44,10 +44,12 @@ function notifyAuthError(): void {
 }
 
 function resolveBaseURL(): string {
-  return (import.meta.env.VITE_API_BASE_URL || DEFAULT_BASE_URL).replace(
+  const base = (import.meta.env.VITE_API_BASE_URL || DEFAULT_BASE_URL).replace(
     /\/+$/,
     ""
   );
+  // Also accept a bare backend origin (e.g. http://localhost:8001), the older convention
+  return base.endsWith("/api/v1") ? base : `${base}/api/v1`;
 }
 
 /** Origin hosting /health: the API base's origin, or "" for same-origin. */
