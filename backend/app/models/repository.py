@@ -13,7 +13,7 @@ class Repository(Base):
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String(255), nullable=False, index=True)
     description = Column(Text, nullable=True)
-    url = Column(String(500), nullable=True)
+    url = Column(String(500), nullable=True, unique=True)
     branch = Column(String(100), nullable=True)  # None: the repository's default branch
     language = Column(String(50), nullable=True, index=True)
     framework = Column(String(100), nullable=True, index=True)
@@ -44,9 +44,6 @@ class Repository(Base):
     # Relationships
     code_files = relationship(
         "CodeFile", back_populates="repository", cascade="all, delete-orphan"
-    )
-    search_indexes = relationship(
-        "SearchIndex", back_populates="repository", cascade="all, delete-orphan"
     )
 
     def __repr__(self):
