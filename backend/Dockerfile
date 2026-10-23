@@ -1,44 +1,35 @@
 FROM python:3.13-slim
 
-# Set environment variables
-ENV PYTHONDONTWRITEBYTECODE=1
-ENV PYTHONUNBUFFERED=1
-ENV PIP_NO_CACHE_DIR=1
-ENV PIP_DISABLE_PIP_VERSION_CHECK=1
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1
 
-# Set work directory
 WORKDIR /app
 
-# Install system dependencies (minimal - no PostgreSQL needed for SQLite)
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends \
-        build-essential \
-        curl \
-        gcc \
-        git \
-    && rm -rf /var/lib/apt/lists/*
+    && apt-get install -y --no-install-recommends build-essential curl gcc git \
+    && apt-get clean && find /var/lib/apt/lists -type f -delete
 
-# Install Python dependencies
+# Runtime dependencies only
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install -r requirements.txt
 
-# Copy project
+# Non-root user (uid 1000 matches prod)
+RUN adduser --disabled-password --gecos '' --uid 1000 appuser
+
 COPY . .
 
-# Create SQLite database directory with proper permissions
-RUN mkdir -p /app/data && chmod 755 /app/data
-
-# Create non-root user
-RUN adduser --disabled-password --gecos '' appuser
-RUN chown -R appuser:appuser /app
+# SQLite + uploads dirs must be writable by appuser. Named volumes mounted here
+# inherit this ownership on first creation.
+RUN mkdir -p /app/data /app/uploads \
+    && chown -R appuser:appuser /app
 USER appuser
 
-# Expose port for HTTP and WebSocket
 EXPOSE 8001
 
-# Health check
-HEALTHCHECK --interval=30s --timeout=30s --start-period=5s --retries=3 \
+HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
     CMD curl -f http://localhost:8001/health || exit 1
 
-# Run the MCP server with WebSocket support
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8001", "--reload"] 
+# Single worker: WebSocket, rate-limit and job state are in-process.
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8001", "--reload", "--reload-dir", "app"]

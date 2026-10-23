@@ -1,4 +1,7 @@
-.PHONY: help build up down restart logs shell test clean start stop start-backend start-frontend
+.PHONY: help build up down restart logs shell test clean clean-all start stop start-backend start-frontend prod-build prod-up status
+
+COMPOSE      = docker compose -f deployment/docker-compose.yml
+COMPOSE_PROD = docker compose -f deployment/docker-compose.prod.yml
 
 # CodeSage - MCP-First Code Discovery Makefile
 # 
@@ -16,7 +19,7 @@ help:
 	@echo ""
 	@echo "🐳 Docker Commands:"
 	@echo "  build           - Build all Docker containers"
-	@echo "  up              - Start services (backend + database)"
+	@echo "  up              - Start services (backend + nginx/frontend on http://localhost)"
 	@echo "  down            - Stop all services"
 	@echo "  logs            - Show logs for all services"
 	@echo ""
@@ -55,7 +58,7 @@ start:
 start-backend:
 	@echo "🔧 Starting CodeSage - MCP-First Code Discovery backend server..."
 	@echo "📍 Make sure your virtual environment is active: source .venv/bin/activate"
-	cd backend && python -m uvicorn app.main:app --reload --port 8001
+	cd backend && ../.venv/bin/python -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8001
 
 start-frontend:
 	@echo "🎨 Starting frontend development server..."
@@ -63,17 +66,19 @@ start-frontend:
 
 stop:
 	@echo "🛑 Stopping development servers..."
-	@pkill -f "uvicorn app.main:app" || echo "Backend not running"
-	@pkill -f "vite" || echo "Frontend not running"
+	@# Only kill listeners on the dev ports, never every vite on the machine
+	@pids=$$(lsof -ti tcp:8001 -sTCP:LISTEN); if [ -n "$$pids" ]; then echo "$$pids" | xargs kill; else echo "Backend not running"; fi
+	@pids=$$(lsof -ti tcp:5173 -sTCP:LISTEN); if [ -n "$$pids" ]; then echo "$$pids" | xargs kill; else echo "Frontend not running"; fi
 	@echo "✅ Servers stopped"
 
 # Docker commands
 build:
-	docker-compose build
+	$(COMPOSE) build
 
 up:
-	docker-compose up -d
+	$(COMPOSE) up -d
 	@echo "✅ CodeSage - MCP-First Code Discovery is running!"
+	@echo "🌐 App (nginx): http://localhost"
 	@echo "🚀 Backend API: http://localhost:8001"
 	@echo "📚 API Docs: http://localhost:8001/docs"
 	@echo "🔌 MCP Endpoint: http://localhost:8001/api/v1/ai/mcp/capabilities"
@@ -81,21 +86,21 @@ up:
 	@echo "💡 Test with: curl http://localhost:8001/health"
 
 down:
-	docker-compose -f deployment/docker-compose.yml down
+	$(COMPOSE) down
 
 restart:
-	docker-compose -f deployment/docker-compose.yml restart
+	$(COMPOSE) restart
 
 # Logs
 logs:
-	docker-compose -f deployment/docker-compose.yml logs -f
+	$(COMPOSE) logs -f
 
 logs-backend:
-	docker-compose -f deployment/docker-compose.yml logs -f backend
+	$(COMPOSE) logs -f backend
 
 # Development  
 shell:
-	docker-compose -f deployment/docker-compose.yml exec backend bash
+	$(COMPOSE) exec backend bash
 
 health:
 	@echo "🏥 CodeSage - MCP-First Code Discovery Health Check:"
@@ -107,7 +112,7 @@ health:
 # Testing
 test:
 	@echo "🧪 Running CodeSage API tests..."
-	cd backend && python -m pytest tests/ -v
+	.venv/bin/python -m pytest backend/tests -v
 
 test-mcp:
 	@echo "🤖 Testing MCP protocol endpoints..."
@@ -119,8 +124,9 @@ test-mcp:
 # Database
 db-reset:
 	@echo "🗄️  Resetting SQLite database..."
-	rm -f backend/codesage.db 2>/dev/null || true
-	rm -f codesage.db 2>/dev/null || true
+	@# Dev DB default is sqlite:///./codesage.db relative to the backend dir
+	@echo "Deleting: backend/codesage.db (and -journal/-wal/-shm if present)"
+	rm -f backend/codesage.db backend/codesage.db-journal backend/codesage.db-wal backend/codesage.db-shm
 	@echo "✅ SQLite database reset complete"
 
 db-migrate:
@@ -133,24 +139,24 @@ db-migration:
 
 # Cleanup
 clean:
-	docker-compose down -v
+	$(COMPOSE) down -v
 	docker system prune -f
 
 clean-all:
-	docker-compose down -v  
+	$(COMPOSE) down -v
 	docker system prune -a -f
 
 # Production
 prod-build:
-	docker-compose -f docker-compose.prod.yml build
+	$(COMPOSE_PROD) build
 
 prod-up:
-	docker-compose -f docker-compose.prod.yml up -d
+	$(COMPOSE_PROD) up -d
 
 # Status
 status:
 	@echo "📊 CodeSage MCP Server Status:"
-	@docker-compose ps
+	@$(COMPOSE) ps
 
 # Install dependencies locally (for IDE support)
 install-local:
