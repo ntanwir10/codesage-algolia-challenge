@@ -1,183 +1,82 @@
-import { useEffect, useCallback, useState } from "react";
+import { useEffect, useCallback, useMemo, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import {
   websocketService,
+  type ConnectionStatus,
   type RepositoryStatusUpdate,
 } from "@/services/websocket";
-import { useToast } from "@/components/ui/toast";
-import type { Repository, ProcessingStatus } from "@/types/repository";
+import type { Repository } from "@/types/repository";
 
 interface UseRealtimeStatusOptions {
-  repositoryId?: number;
-  enableNotifications?: boolean;
+  /** Repositories to subscribe to. The socket only opens while non-empty. */
+  repositoryIds?: number[];
 }
 
+/**
+ * Subscribes to live status for the given repositories, mirrors updates into
+ * the TanStack Query cache and invalidates the affected queries. Completion
+ * and failure toasts live in Layout (one global listener), not here.
+ */
 export function useRealtimeStatus({
-  repositoryId,
-  enableNotifications = true,
-}: UseRealtimeStatusOptions = {}) {
+  repositoryIds = [],
+}: UseRealtimeStatusOptions = {}): { connectionStatus: ConnectionStatus } {
   const queryClient = useQueryClient();
-  const { addToast } = useToast();
-
-  // Track connection status with real-time updates
-  const [connectionStatus, setConnectionStatus] = useState(
-    websocketService.getStatus()
+  const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>(
+    () => websocketService.getStatus()
   );
 
-  // Subscribe to connection status changes for real-time updates
-  useEffect(() => {
-    const unsubscribe = websocketService.onConnectionStatusChange((status) => {
-      setConnectionStatus(status);
-    });
+  useEffect(
+    () =>
+      websocketService.onConnectionStatusChange(setConnectionStatus),
+    []
+  );
 
-    return unsubscribe;
-  }, []);
-
-  // Enable WebSocket when monitoring a repository
-  useEffect(() => {
-    if (repositoryId) {
-      console.log(
-        "Enabling WebSocket for repository monitoring:",
-        repositoryId
-      );
-      websocketService.enableForRepository(repositoryId);
-
-      return () => {
-        // Don't disable immediately - let other components decide when to disable
-      };
-    }
-  }, [repositoryId]);
-
-  const updateRepositoryData = useCallback(
+  const handleUpdate = useCallback(
     (update: RepositoryStatusUpdate) => {
-      const { repository_id, status, processed_files, message } = update;
+      const { repository_id: id, status } = update;
+      const patch = (repo: Repository): Repository => ({
+        ...repo,
+        status,
+        processed_files: update.processed_files ?? repo.processed_files,
+        total_files: update.total_files ?? repo.total_files,
+      });
 
-      // Update repository data in cache
-      queryClient.setQueryData(
-        ["repository", repository_id],
-        (oldData: Repository | undefined) => {
-          if (!oldData) return oldData;
-
-          return {
-            ...oldData,
-            status,
-            processed_files: processed_files ?? oldData.processed_files,
-            updated_at: new Date().toISOString(),
-          };
-        }
+      const previous = queryClient.getQueryData<Repository>(["repository", id]);
+      queryClient.setQueryData<Repository | undefined>(
+        ["repository", id],
+        (old) => (old ? patch(old) : old)
       );
-
-      // Update repository status in cache
-      queryClient.setQueryData(
-        ["repository-status", repository_id],
-        (oldData: ProcessingStatus | undefined) => ({
-          repository_id,
-          status,
-          message,
-          processing_progress: update.processing_progress,
-          algolia_indexed: update.algolia_indexed ?? oldData?.algolia_indexed,
-          mcp_ready: update.mcp_ready ?? oldData?.mcp_ready,
-        })
-      );
-
-      // Update repositories list in cache
-      queryClient.setQueryData(
+      queryClient.setQueryData<Repository[] | undefined>(
         ["repositories"],
-        (oldData: Repository[] | undefined) => {
-          if (!oldData) return oldData;
-
-          return oldData.map((repo) =>
-            repo.id === repository_id
-              ? {
-                  ...repo,
-                  status,
-                  processed_files: processed_files ?? repo.processed_files,
-                  updated_at: new Date().toISOString(),
-                }
-              : repo
-          );
-        }
+        (old) => old?.map((repo) => (repo.id === id ? patch(repo) : repo))
       );
+
+      // Progress ticks are patched in place; a status change (or a terminal
+      // state, which brings final totals) refetches the authoritative data.
+      const changed = !previous || previous.status !== status;
+      if (changed || status === "completed" || status === "failed") {
+        queryClient.invalidateQueries({ queryKey: ["repository", id] });
+        queryClient.invalidateQueries({ queryKey: ["repository-status", id] });
+        queryClient.invalidateQueries({ queryKey: ["repository-stats", id] });
+        queryClient.invalidateQueries({ queryKey: ["repositories"] });
+      }
     },
     [queryClient]
   );
 
-  const handleStatusUpdate = useCallback(
-    (update: RepositoryStatusUpdate) => {
-      updateRepositoryData(update);
-
-      // Show notification for significant status changes
-      if (enableNotifications) {
-        // Get repository name from cache for better notification text
-        // First try repositories list, then individual repository cache
-        const repositories = queryClient.getQueryData(["repositories"]) as
-          | Repository[]
-          | undefined;
-        let repository = repositories?.find(
-          (repo) => repo.id === update.repository_id
-        );
-
-        // If not found in repositories list, try individual repository cache
-        if (!repository) {
-          repository = queryClient.getQueryData([
-            "repository",
-            update.repository_id,
-          ]) as Repository | undefined;
-        }
-
-        const repositoryName =
-          repository?.name || `Repository ${update.repository_id}`;
-
-        console.log("🔔 Notification triggered:", {
-          repositoryId: update.repository_id,
-          repositoryName,
-          status: update.status,
-          foundInCache: !!repository,
-        });
-
-        if (update.status === "completed") {
-          addToast({
-            type: "success",
-            title: "🎉 Repository analysis complete!",
-            description: `${repositoryName} is ready for AI-powered search.`,
-            duration: 6000,
-          });
-        } else if (update.status === "failed") {
-          addToast({
-            type: "error",
-            title: "Repository analysis failed",
-            description:
-              update.message || `Failed to process ${repositoryName}.`,
-            duration: 8000,
-          });
-        }
-      }
-    },
-    [updateRepositoryData, enableNotifications, addToast, queryClient]
+  // Stable primitive key so a new array identity doesn't re-run the effect.
+  const idsKey = useMemo(
+    () => [...new Set(repositoryIds)].sort((a, b) => a - b).join(","),
+    [repositoryIds]
   );
 
   useEffect(() => {
-    let unsubscribe: (() => void) | undefined;
+    const ids = idsKey ? idsKey.split(",").map(Number) : [];
+    const unsubscribers = ids.map((id) =>
+      websocketService.onRepositoryUpdate(id, handleUpdate)
+    );
+    return () => unsubscribers.forEach((unsubscribe) => unsubscribe());
+  }, [idsKey, handleUpdate]);
 
-    if (repositoryId) {
-      // Subscribe to specific repository updates
-      unsubscribe = websocketService.onRepositoryUpdate(
-        repositoryId,
-        handleStatusUpdate
-      );
-    } else {
-      // Subscribe to all repository updates
-      unsubscribe = websocketService.onStatusUpdate(handleStatusUpdate);
-    }
-
-    return () => {
-      unsubscribe?.();
-    };
-  }, [repositoryId, handleStatusUpdate]);
-
-  // Return connection status and manual controls
-  return {
-    connectionStatus,
-    reconnect: websocketService.reconnect.bind(websocketService),
-  };
+  return { connectionStatus };
 }

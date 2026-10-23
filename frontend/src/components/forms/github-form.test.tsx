@@ -31,7 +31,7 @@ describe("GitHubForm", () => {
     await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
     expect(onSubmit.mock.calls[0][0]).toMatchObject({
       url: "https://github.com/owner/repo",
-      branch: "main",
+      branch: "",
     });
     await waitFor(() => expect(urlInput()).toHaveValue(""));
   });

@@ -65,17 +65,15 @@ export function ConnectionStatus() {
   if (status === "connected" && !showDetails) {
     // Minimal indicator when connected
     return (
-      <div
-        className="fixed bottom-4 right-4 z-40 cursor-pointer"
+      <button
+        type="button"
+        aria-label="Show real-time connection details"
+        className={`fixed bottom-4 right-4 z-40 cursor-pointer px-2 py-1 rounded-full text-xs border ${config.color} flex items-center gap-1`}
         onClick={() => setShowDetails(true)}
       >
-        <div
-          className={`px-2 py-1 rounded-full text-xs border ${config.color} flex items-center gap-1`}
-        >
-          <span>{config.icon}</span>
-          <span className="hidden sm:inline">Live</span>
-        </div>
-      </div>
+        <span>{config.icon}</span>
+        <span className="hidden sm:inline">Live</span>
+      </button>
     );
   }
 
