@@ -8,7 +8,16 @@ async def test_search_scopes_by_repository_with_a_numeric_filter(algolia_index):
 
     await service.search_code("debounce", repository_id=2, language="javascript")
 
-    assert algolia_index.searches[-1]["filters"] == "repository_id=2 AND language:javascript"
+    assert algolia_index.searches[-1]["filters"] == 'repository_id=2 AND language:"javascript"'
+
+
+async def test_facet_values_cannot_add_filter_clauses(algolia_index):
+    service = algolia_module.AlgoliaService()
+
+    await service.search_code("x", repository_id=2, entity_type='function" OR repository_id=3 OR "')
+
+    filters = algolia_index.searches[-1]["filters"]
+    assert filters == 'repository_id=2 AND entity_type:"function\\" OR repository_id=3 OR \\""'
 
 
 async def test_repository_stats_use_a_numeric_filter(algolia_index):
