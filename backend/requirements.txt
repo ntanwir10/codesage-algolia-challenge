@@ -27,3 +27,4 @@ slowapi==0.1.10
 
 # Form parsing (FastAPI uploads)
 python-multipart==0.0.32
+tree-sitter-language-pack==1.22.1
