@@ -9,7 +9,9 @@ class RepositoryBase(BaseModel):
     name: str = Field(..., description="Repository name")
     description: str | None = Field(None, description="Repository description")
     url: str | None = Field(None, description="Repository URL")
-    branch: str = Field(default="main", description="Repository branch")
+    branch: str | None = Field(
+        default=None, description="Branch to index; empty means the repository's default branch"
+    )
     language: str | None = Field(None, description="Primary programming language")
     framework: str | None = Field(None, description="Primary framework")
 

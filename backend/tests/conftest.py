@@ -28,7 +28,7 @@ from app.services.algolia_service import AlgoliaService
 
 
 @pytest.fixture
-def db_session():
+def db_engine():
     """A fresh in-memory SQLite database per test"""
     engine = create_engine(
         "sqlite://",
@@ -36,12 +36,47 @@ def db_session():
         poolclass=StaticPool,
     )
     Base.metadata.create_all(bind=engine)
-    session = sessionmaker(bind=engine)()
+    try:
+        yield engine
+    finally:
+        engine.dispose()
+
+
+@pytest.fixture
+def db_session(db_engine):
+    session = sessionmaker(bind=db_engine)()
     try:
         yield session
     finally:
         session.close()
-        engine.dispose()
+
+
+@pytest.fixture
+def job_sessions(db_engine, monkeypatch):
+    """Background jobs open their sessions on the test database"""
+    from app.services import repository_service
+
+    factory = sessionmaker(bind=db_engine)
+    monkeypatch.setattr(repository_service, "SessionLocal", factory)
+    return factory
+
+
+@pytest.fixture
+def client(db_session):
+    """API client whose requests use the test database"""
+    from fastapi.testclient import TestClient
+
+    from app.core.database import get_db
+    from app.main import app
+
+    def override_get_db():
+        yield db_session
+
+    app.dependency_overrides[get_db] = override_get_db
+    try:
+        yield TestClient(app)
+    finally:
+        app.dependency_overrides.clear()
 
 
 class _CompletedTask:
@@ -58,6 +93,7 @@ class FakeAlgoliaIndex:
         self.fail_deletes = False
         self.waited_deletes = 0
         self.searches = []
+        self.save_batch_sizes = []
 
     @staticmethod
     def _repository_id(filters: str) -> int:
@@ -77,6 +113,7 @@ class FakeAlgoliaIndex:
     def save_objects(self, objects):
         if self.fail_saves:
             raise AlgoliaException("save_objects failed")
+        self.save_batch_sizes.append(len(objects))
         for record in objects:
             self.records[record["objectID"]] = record
         return _CompletedTask()
@@ -121,6 +158,7 @@ class FakeGitHub:
     def __init__(self):
         self.files = []
         self.error = None
+        self.calls = []  # (repo_url, branch) per fetch
 
 
 @pytest.fixture
@@ -128,7 +166,8 @@ def github(monkeypatch):
     fake = FakeGitHub()
 
     class FakeGitHubService:
-        async def get_repository_files(self, repo_url):
+        async def get_repository_files(self, repo_url, branch=None):
+            fake.calls.append((repo_url, branch))
             if fake.error:
                 raise fake.error
             return list(fake.files)

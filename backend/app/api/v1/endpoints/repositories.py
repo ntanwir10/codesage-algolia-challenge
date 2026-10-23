@@ -1,11 +1,9 @@
-
 import structlog
 from fastapi import (
     APIRouter,
     Depends,
     HTTPException,
     Query,
-    UploadFile,
 )
 from sqlalchemy.orm import Session
 
@@ -16,7 +14,11 @@ from app.schemas.repository import (
     RepositoryResponse,
     RepositoryUpdate,
 )
-from app.services.repository_service import RepositoryService
+from app.services.repository_service import (
+    RepositoryBusyError,
+    RepositoryService,
+    start_processing,
+)
 from app.services.security_service import rate_limit_default
 
 logger = structlog.get_logger()
@@ -192,8 +194,15 @@ async def delete_repository(repository_id: int, db: Session = Depends(get_db)):
                 status_code=404, detail=f"Repository {repository_id} not found"
             )
 
-        service = RepositoryService(db)
-        await service.delete_repository(repository_id)
+        try:
+            deleted = await RepositoryService(db).delete_repository(repository)
+        except RepositoryBusyError as e:
+            raise HTTPException(status_code=409, detail=str(e)) from e
+        if not deleted:
+            raise HTTPException(
+                status_code=502,
+                detail="Could not remove the repository's records from Algolia; nothing was deleted",
+            )
 
         logger.info("Repository deleted", repository_id=repository_id)
         return {"message": f"Repository {repository_id} deleted successfully"}
@@ -207,44 +216,6 @@ async def delete_repository(repository_id: int, db: Session = Depends(get_db)):
         raise HTTPException(
             status_code=500, detail=f"Failed to delete repository: {str(e)}"
         )
-
-
-@router.post(
-    "/{repository_id}/upload",
-    summary="Upload Files to Repository",
-    description="Upload code files to a repository for analysis",
-)
-async def upload_files_to_repository(
-    repository_id: int, files: list[UploadFile], db: Session = Depends(get_db)
-):
-    """Upload files to a repository"""
-    try:
-        repository = db.query(Repository).filter(Repository.id == repository_id).first()
-        if not repository:
-            raise HTTPException(
-                status_code=404, detail=f"Repository {repository_id} not found"
-            )
-
-        service = RepositoryService(db)
-        updated_repository = await service.upload_files(repository, files)
-
-        logger.info(
-            "Files uploaded to repository",
-            repository_id=repository_id,
-            file_count=len(files),
-        )
-        return {
-            "message": f"{len(files)} files uploaded successfully to repository {repository_id}",
-            "repository": RepositoryResponse.model_validate(updated_repository).model_dump(),
-        }
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(
-            "Failed to upload files", repository_id=repository_id, error=str(e)
-        )
-        raise HTTPException(status_code=500, detail=f"Failed to upload files: {str(e)}")
 
 
 @router.get(
@@ -312,8 +283,12 @@ async def get_repository_stats(repository_id: int, db: Session = Depends(get_db)
 
 @router.post(
     "/{repository_id}/process",
+    status_code=202,
     summary="Process Repository",
-    description="Process a repository to extract code entities and index in Algolia",
+    description=(
+        "Schedule processing that extracts code entities and indexes them in Algolia. "
+        "Returns immediately; follow progress via /status or the WebSocket."
+    ),
 )
 @rate_limit_default
 async def process_repository(
@@ -321,21 +296,29 @@ async def process_repository(
     force_reprocess: bool = False,
     db: Session = Depends(get_db),
 ):
-    """Process a repository"""
+    """Schedule a repository processing job"""
     try:
-        # Get repository
         repository = db.query(Repository).filter(Repository.id == repository_id).first()
         if not repository:
             raise HTTPException(
                 status_code=404, detail=f"Repository {repository_id} not found"
             )
+        if repository.status == "completed" and not force_reprocess:
+            raise HTTPException(
+                status_code=409,
+                detail="Repository is already processed; pass force_reprocess=true to reprocess it",
+            )
 
-        # Start processing
-        service = RepositoryService(db)
-        await service.process_repository(repository, force_reprocess)
+        try:
+            start_processing(repository_id, force_reprocess=force_reprocess)
+        except RepositoryBusyError as e:
+            raise HTTPException(status_code=409, detail=str(e)) from e
 
-        logger.info("Repository processing started", repository_id=repository_id)
-        return {"message": f"Processing started for repository {repository_id}"}
+        logger.info("Repository processing scheduled", repository_id=repository_id)
+        return {
+            "message": f"Processing started for repository {repository_id}",
+            "repository_id": repository_id,
+        }
 
     except HTTPException:
         raise

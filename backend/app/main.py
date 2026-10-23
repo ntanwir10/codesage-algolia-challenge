@@ -11,9 +11,10 @@ load_dotenv()
 
 from app.api.v1.router import api_router
 from app.core.config import get_settings
-from app.core.database import Base, engine, get_db
+from app.core.database import Base, SessionLocal, engine, get_db
 from app.models import code_entity, code_file, repository  # noqa: F401  registers tables
 from app.services.algolia_service import AlgoliaService
+from app.services.repository_service import recover_interrupted_jobs
 from app.services.security_service import get_rate_limiting_service
 
 # Configure structured logging
@@ -55,6 +56,10 @@ async def lifespan(app: FastAPI):
     # Create database tables
     Base.metadata.create_all(bind=engine)
     logger.info("Database tables created")
+
+    # Jobs run in-process, so any run a previous process left open died with it
+    with SessionLocal() as db:
+        recover_interrupted_jobs(db)
 
     # Validate MCP server requirements
     if not settings.algolia_app_id or not settings.algolia_admin_api_key:

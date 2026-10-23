@@ -14,7 +14,7 @@ class Repository(Base):
     name = Column(String(255), nullable=False, index=True)
     description = Column(Text, nullable=True)
     url = Column(String(500), nullable=True)
-    branch = Column(String(100), default="main")
+    branch = Column(String(100), nullable=True)  # None: the repository's default branch
     language = Column(String(50), nullable=True, index=True)
     framework = Column(String(100), nullable=True, index=True)
 
