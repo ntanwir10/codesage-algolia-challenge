@@ -1,25 +1,39 @@
+import asyncio
+import logging
+import time
+import uuid
 from contextlib import asynccontextmanager
+from datetime import UTC, datetime
 
 import structlog
 
 # Load environment variables from .env file
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from slowapi import _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+from sqlalchemy import text
 
 load_dotenv()
 
 from app.api.v1.router import api_router
-from app.core.config import get_settings
-from app.core.database import Base, SessionLocal, engine, get_db
+from app.core.config import get_settings, validate_runtime_settings
+from app.core.database import Base, SessionLocal, engine
+from app.core.security import limiter
 from app.models import code_entity, code_file, repository  # noqa: F401  registers tables
 from app.services.algolia_service import AlgoliaService
 from app.services.repository_service import recover_interrupted_jobs
-from app.services.security_service import get_rate_limiting_service
 
-# Configure structured logging
+# Get application settings
+settings = get_settings()
+
+# Configure structured logging once
+logging.basicConfig(level=settings.log_level.upper(), format="%(message)s")
 structlog.configure(
     processors=[
+        structlog.contextvars.merge_contextvars,
         structlog.stdlib.filter_by_level,
         structlog.stdlib.add_logger_name,
         structlog.stdlib.add_log_level,
@@ -38,13 +52,11 @@ structlog.configure(
 
 logger = structlog.get_logger()
 
-# Get application settings
-settings = get_settings()
-
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Initialize the MCP server on startup and log shutdown"""
+    validate_runtime_settings(settings)
     logger.info(
         "Starting CodeSage MCP Server",
         mcp_config=settings.MCP_SERVER_CONFIG,
@@ -93,8 +105,8 @@ app = FastAPI(
     ],
 )
 
-# Initialize rate limiting service (simplified for MCP-first)
-rate_limiting_service = get_rate_limiting_service()
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 logger.info(
     "CodeSage MCP Server configured",
@@ -102,7 +114,37 @@ logger.info(
     rate_limiting=settings.enable_rate_limiting,
 )
 
-# Health check endpoint
+
+
+@app.middleware("http")
+async def request_id_middleware(request: Request, call_next):
+    """Reuse an incoming X-Request-ID or generate one, and echo it back"""
+    request_id = request.headers.get("x-request-id") or uuid.uuid4().hex
+    request.state.request_id = request_id
+    structlog.contextvars.clear_contextvars()
+    structlog.contextvars.bind_contextvars(request_id=request_id)
+    response = await call_next(request)
+    response.headers["X-Request-ID"] = request_id
+    return response
+
+
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request: Request, exc: Exception):
+    """Log the real error with the request ID; never leak it to the client"""
+    request_id = getattr(request.state, "request_id", None)
+    logger.error(
+        "Unhandled exception",
+        request_id=request_id,
+        path=request.url.path,
+        exc_info=exc,
+    )
+    headers = {"X-Request-ID": request_id} if request_id else {}
+    return JSONResponse(
+        status_code=500,
+        content={"detail": "Internal server error", "request_id": request_id},
+        headers=headers,
+    )
+
 
 # Add middleware
 app.add_middleware(
@@ -151,93 +193,60 @@ async def root():
     }
 
 
+_ALGOLIA_CHECK_TTL = 30.0
+_algolia_check: tuple[float, dict] | None = None
+
+
+async def _check_algolia() -> dict:
+    """Probe Algolia, caching the result for 30 seconds"""
+    global _algolia_check
+    now = time.monotonic()
+    if _algolia_check and now - _algolia_check[0] < _ALGOLIA_CHECK_TTL:
+        return _algolia_check[1]
+
+    client = AlgoliaService().client
+    if client is None:
+        result = {"status": "not_configured"}
+    else:
+        try:
+            await asyncio.wait_for(asyncio.to_thread(client.list_indices), 5)
+            result = {"status": "healthy"}
+        except Exception as e:
+            logger.warning("Algolia health check failed", error=str(e))
+            result = {"status": "degraded", "message": "Algolia is unreachable"}
+    _algolia_check = (now, result)
+    return result
+
+
 @app.get("/health")
 async def health_check():
-    """Comprehensive health check for all system components"""
-    health_status = {
-        "status": "healthy",
-        "timestamp": "2024-01-01T00:00:00Z",  # This would be actual timestamp
-        "version": "1.0.0",
-        "architecture": "MCP-first - Simplified",
-        "components": {},
-    }
+    """Health check: the database decides 200 vs 503, Algolia only degrades"""
+    components: dict[str, dict] = {}
 
-    overall_healthy = True
-
-    # Check database
     try:
-        from sqlalchemy import text
-
-        db = next(get_db())
-        db.execute(text("SELECT 1"))
-        health_status["components"]["database"] = {
-            "status": "healthy",
-            "message": "SQLite connection successful",
-        }
+        with SessionLocal() as db:
+            db.execute(text("SELECT 1"))
+        components["database"] = {"status": "healthy"}
     except Exception as e:
-        health_status["components"]["database"] = {
-            "status": "unhealthy",
-            "message": f"Database connection failed: {str(e)}",
-        }
-        overall_healthy = False
+        logger.error("Database health check failed", error=str(e))
+        components["database"] = {"status": "unhealthy"}
 
-    # Check Algolia
-    try:
-        algolia_service = AlgoliaService()
-        # This would be an actual health check method
-        health_status["components"]["algolia"] = {
-            "status": "healthy",
-            "message": "Algolia connection successful",
-        }
-    except Exception as e:
-        health_status["components"]["algolia"] = {
-            "status": "unhealthy",
-            "message": f"Algolia connection failed: {str(e)}",
-        }
-        overall_healthy = False
+    components["algolia"] = await _check_algolia()
 
-    # Check MCP server functionality
-    try:
-
-        # This would test MCP server functionality
-        health_status["components"]["mcp_server"] = {
-            "status": "healthy",
-            "message": "MCP server operational",
-        }
-    except Exception as e:
-        health_status["components"]["mcp_server"] = {
-            "status": "degraded",
-            "message": f"MCP server issues: {str(e)}",
-        }
-        overall_healthy = False
-
-    # Check WebSocket service
-    try:
-        ws_health = await websocket_health()
-        health_status["components"]["websocket"] = {
-            "status": ws_health["status"],
-            "message": "WebSocket service operational",
-            "connections": ws_health["active_connections"],
-            "repository_subscriptions": ws_health["repository_subscriptions"],
-        }
-    except Exception as e:
-        health_status["components"]["websocket"] = {
-            "status": "degraded",
-            "message": f"WebSocket service issues: {str(e)}",
-        }
-        overall_healthy = False
-
-    # Set overall status
-    if not overall_healthy:
-        health_status["status"] = "unhealthy"
-
-    logger.info("Health check performed", status=health_status["status"])
-
-    # Return appropriate HTTP status
-    if overall_healthy:
-        return health_status
+    if components["database"]["status"] != "healthy":
+        overall = "unhealthy"
+    elif components["algolia"]["status"] == "degraded":
+        overall = "degraded"
     else:
-        raise HTTPException(status_code=503, detail=health_status)
+        overall = "healthy"
+
+    body = {
+        "status": overall,
+        "timestamp": datetime.now(UTC).isoformat(),
+        "version": "1.0.0",
+        "components": components,
+    }
+    return JSONResponse(body, status_code=503 if overall == "unhealthy" else 200)
 
 
 @app.get("/mcp")
@@ -250,7 +259,6 @@ async def mcp_info():
         "description": settings.MCP_SERVER_CONFIG["description"],
         "capabilities": settings.MCP_SERVER_CONFIG["capabilities"],
         "tools_available": len(settings.mcp_tools_enabled),
-        "resources_available": len(settings.mcp_resources_enabled),
         "realtime_features": {
             "websocket_endpoint": "/ws",
             "real_time_processing": True,
@@ -261,24 +269,7 @@ async def mcp_info():
                 "processing_failed",
             ],
         },
-        "setup_instructions": {
-            "claude_desktop": {
-                "config_file": "claude_desktop_config.json",
-                "configuration": {
-                    "mcpServers": {
-                        "codesage": {
-                            "command": "python",
-                            "args": ["-m", "codesage_mcp_server"],
-                            "env": {
-                                "ALGOLIA_APP_ID": "your_app_id",
-                                "ALGOLIA_ADMIN_API_KEY": "your_admin_api_key",
-                                "MCP_SERVER_URL": f"http://{settings.mcp_server_host}:{settings.mcp_server_port}",
-                            },
-                        }
-                    }
-                },
-            }
-        },
+        "setup_instructions": "See docs/MCP_INTEGRATION_GUIDE.md",
     }
 
 

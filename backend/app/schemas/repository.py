@@ -1,12 +1,17 @@
 from datetime import datetime
+from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+from app.services.github_service import parse_github_url
+
+RepositoryStatus = Literal["pending", "processing", "completed", "failed"]
 
 
 class RepositoryBase(BaseModel):
     """Base repository schema"""
 
-    name: str = Field(..., description="Repository name")
+    name: str = Field(default="", description="Repository name")
     description: str | None = Field(None, description="Repository description")
     url: str | None = Field(None, description="Repository URL")
     branch: str | None = Field(
@@ -19,7 +24,17 @@ class RepositoryBase(BaseModel):
 class RepositoryCreate(RepositoryBase):
     """Schema for creating a repository"""
 
-    pass
+    url: str = Field(..., description="GitHub repository URL")
+
+    @model_validator(mode="after")
+    def normalise(self) -> "RepositoryCreate":
+        owner, repo, url_branch = parse_github_url(self.url)
+        self.url = f"https://github.com/{owner}/{repo}"
+        if url_branch and not self.branch:
+            self.branch = url_branch
+        if not self.name.strip():
+            self.name = f"{owner}/{repo}"
+        return self
 
 
 class RepositoryUpdate(BaseModel):
@@ -27,11 +42,9 @@ class RepositoryUpdate(BaseModel):
 
     name: str | None = None
     description: str | None = None
-    url: str | None = None
     branch: str | None = None
     language: str | None = None
     framework: str | None = None
-    status: str | None = None
 
 
 class RepositoryResponse(RepositoryBase):
@@ -40,7 +53,7 @@ class RepositoryResponse(RepositoryBase):
     model_config = ConfigDict(from_attributes=True)
 
     id: int
-    status: str = Field(..., description="Processing status")
+    status: RepositoryStatus = Field(..., description="Processing status")
     total_files: int = Field(default=0, description="Total number of files")
     processed_files: int = Field(default=0, description="Number of processed files")
     total_lines: int = Field(default=0, description="Total lines of code")
