@@ -1,4 +1,5 @@
 import structlog
+from fastapi import HTTPException
 from sqlalchemy import create_engine, event
 from sqlalchemy.orm import declarative_base, sessionmaker
 
@@ -43,6 +44,10 @@ def get_db():
     db = SessionLocal()
     try:
         yield db
+    except HTTPException:
+        # A deliberate 4xx from the endpoint, not a database problem
+        db.rollback()
+        raise
     except Exception as e:
         logger.error("Database session error", error=str(e))
         db.rollback()

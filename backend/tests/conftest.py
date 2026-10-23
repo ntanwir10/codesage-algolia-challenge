@@ -103,6 +103,9 @@ class FakeAlgoliaIndex:
         self.waited_deletes = 0
         self.searches = []
         self.save_batch_sizes = []
+        self.settings = {}
+        self.settings_writes = 0
+        self.stuck_tasks = set()  # task ids get_task never reports as published
 
     @staticmethod
     def _repository_id(filters: str) -> int:
@@ -113,7 +116,15 @@ class FakeAlgoliaIndex:
         return int(value)
 
     def set_settings(self, settings):
+        self.settings = dict(settings)
+        self.settings_writes += 1
         return _CompletedTask()
+
+    def get_settings(self):
+        return dict(self.settings)
+
+    def get_task(self, task_id):
+        return {"status": "notPublished" if task_id in self.stuck_tasks else "published"}
 
     def search(self, query, params):
         self.searches.append(params)

@@ -222,3 +222,15 @@ class TestEndpoints:
     def test_upload_route_is_gone(self, client, db_session):
         repo = make_repository(db_session, status="completed")
         assert client.post(f"/api/v1/repositories/{repo.id}/upload").status_code in (404, 405)
+
+
+async def test_failed_run_reports_its_reason_through_the_api(client, db_session, github, algolia_index):
+    from app.services.github_service import GitHubAPIError
+
+    repo = make_repository(db_session, status="pending")
+    github.error = GitHubAPIError(404, "GitHub repository or path not found (404): octo/demo")
+    await RepositoryService(db_session).process_repository(repo)
+
+    body = client.get(f"/api/v1/repositories/{repo.id}").json()
+    assert body["status"] == "failed"
+    assert body["error_message"] == "GitHubAPIError: GitHub repository or path not found (404): octo/demo"

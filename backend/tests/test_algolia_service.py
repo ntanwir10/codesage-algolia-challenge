@@ -35,3 +35,40 @@ async def test_delete_removes_only_that_repositorys_records(algolia_index):
     assert await algolia_module.AlgoliaService().delete_repository_index(2, wait=True)
 
     assert set(algolia_index.records) == {"3_b"}
+
+
+class _PendingTask:
+    """An indexing response whose task Algolia hasn't published"""
+
+    def __init__(self, task_id):
+        self.raw_responses = [{"taskID": task_id}]
+
+    def wait(self):  # the v3 client's wait() would loop forever
+        raise AssertionError("unbounded wait() must not be called")
+
+
+async def test_settings_are_written_only_when_they_differ(algolia_index, monkeypatch):
+    monkeypatch.setattr(algolia_module, "_configured_indexes", set())
+    await algolia_module.AlgoliaService().setup_index_settings()
+    assert algolia_index.settings_writes == 1
+
+    # A new process with the settings already live writes nothing (and never waits)
+    monkeypatch.setattr(algolia_module, "_configured_indexes", set())
+    await algolia_module.AlgoliaService().setup_index_settings()
+    assert algolia_index.settings_writes == 1
+
+
+async def test_an_unpublished_delete_fails_instead_of_hanging(algolia_index, monkeypatch):
+    monkeypatch.setattr(algolia_module, "DELETE_WAIT_SECONDS", 0.3)
+    algolia_index.stuck_tasks = {7}
+    monkeypatch.setattr(algolia_index, "delete_by", lambda params: _PendingTask(7))
+
+    assert await algolia_module.AlgoliaService().delete_repository_index(2, wait=True) is False
+
+
+async def test_an_unpublished_save_does_not_hang_indexing(algolia_index, monkeypatch):
+    monkeypatch.setattr(algolia_module, "INDEX_WAIT_SECONDS", 0.3)
+    algolia_index.stuck_tasks = {8}
+    monkeypatch.setattr(algolia_index, "save_objects", lambda objects: _PendingTask(8))
+
+    assert await algolia_module.AlgoliaService().index_documents([{"objectID": "a"}]) is True

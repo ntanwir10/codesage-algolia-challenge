@@ -10,6 +10,7 @@ to keep the event loop (API, WebSocket, MCP) responsive.
 
 import asyncio
 import hashlib
+import time
 from typing import Any
 
 import structlog
@@ -23,6 +24,10 @@ settings = get_settings()
 
 # Records per save_objects request (Algolia's recommended batch size)
 INDEX_BATCH_SIZE = 1000
+
+# Longest waits for Algolia to publish a task; Algolia's v3 wait() has no limit
+INDEX_WAIT_SECONDS = 300
+DELETE_WAIT_SECONDS = 120
 
 # Characters of entity body stored with each record, well under the 10 KB record limit
 MAX_BODY_CHARS = 2000
@@ -90,18 +95,46 @@ class AlgoliaService:
         """
         return f"repository_id={int(repository_id)}"
 
+    def _wait_for_task(self, response, timeout: float):
+        """Block until an indexing response's tasks are published, or raise TimeoutError.
+
+        The v3 client's response.wait() polls forever, and Algolia can leave a
+        task unpublished indefinitely (an unchanged set_settings does), so poll
+        get_task ourselves with a deadline.
+        """
+        task_ids = [raw["taskID"] for raw in getattr(response, "raw_responses", []) if "taskID" in raw]
+        if not task_ids:
+            response.wait()
+            return
+        deadline = time.monotonic() + timeout
+        for task_id in task_ids:
+            delay = 0.1
+            while self.index.get_task(task_id).get("status") != "published":
+                if time.monotonic() > deadline:
+                    raise TimeoutError(f"Algolia task {task_id} not published after {timeout:.0f}s")
+                time.sleep(delay)
+                delay = min(delay * 2, 2.0)
+
     async def setup_index_settings(self):
-        """Apply the index settings once per process and wait until they're live"""
+        """Apply the index settings once per process, only when the live ones differ.
+
+        Not waited on: Algolia applies an index's tasks in order, and an
+        unchanged settings task may never be reported as published.
+        """
         if not self.is_available() or self.index_name in _configured_indexes:
             return
 
-        def apply():
-            self.index.set_settings(INDEX_SETTINGS).wait()
+        def apply() -> bool:
+            live = self.index.get_settings()
+            if all(live.get(key) == value for key, value in INDEX_SETTINGS.items()):
+                return False
+            self.index.set_settings(INDEX_SETTINGS)
+            return True
 
         try:
-            await asyncio.to_thread(apply)
+            changed = await asyncio.to_thread(apply)
             _configured_indexes.add(self.index_name)
-            logger.info("Algolia index settings configured", index=self.index_name)
+            logger.info("Algolia index settings checked", index=self.index_name, changed=changed)
         except Exception as e:
             logger.error("Failed to configure Algolia index settings", error=str(e))
 
@@ -127,8 +160,17 @@ class AlgoliaService:
             return True
 
         def save():
-            for start in range(0, len(documents), INDEX_BATCH_SIZE):
-                self.index.save_objects(documents[start : start + INDEX_BATCH_SIZE]).wait()
+            responses = [
+                self.index.save_objects(documents[start : start + INDEX_BATCH_SIZE])
+                for start in range(0, len(documents), INDEX_BATCH_SIZE)
+            ]
+            for response in responses:
+                try:
+                    self._wait_for_task(response, INDEX_WAIT_SECONDS)
+                except TimeoutError as e:
+                    # The records were accepted; they become searchable shortly
+                    logger.warning("Algolia indexing still publishing", error=str(e))
+                    return
 
         try:
             await asyncio.to_thread(save)
@@ -235,7 +277,8 @@ class AlgoliaService:
         def delete():
             response = self.index.delete_by({"filters": self._repository_filter(repository_id)})
             if wait:
-                response.wait()
+                # A timeout here fails the caller rather than risking stale records
+                self._wait_for_task(response, DELETE_WAIT_SECONDS)
 
         try:
             await asyncio.to_thread(delete)
