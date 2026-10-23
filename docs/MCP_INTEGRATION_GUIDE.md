@@ -1,464 +1,157 @@
-# CodeSage - MCP-First Code Discovery: MCP Integration Guide
+# MCP integration guide
 
-A comprehensive guide for setting up a clean, reliable integration of **CodeSage - MCP-First Code Discovery** MCP Server with Claude Desktop.
+CodeSage exposes six tools to MCP clients. Claude Desktop starts a local stdio server (`mcp_launcher.sh`), which forwards tool calls to the CodeSage backend over HTTP.
 
-## 🎯 Overview
+```
+Claude Desktop --stdio--> mcp_launcher.sh --> python -m codesage_mcp --HTTP--> backend :8001 --> SQLite / Algolia
+```
 
-This guide provides a complete, foolproof setup process for integrating the **CodeSage - MCP-First Code Discovery** MCP (Model Context Protocol) server with Claude Desktop. The integration enables Claude to directly access your codebase through natural language queries, code analysis, and intelligent search capabilities - all through our unique MCP-first architecture.
+The stdio server is built on the official `mcp` Python SDK (2.3.0, see `backend/requirements.txt`). The launcher runs `python -m codesage_mcp` from `backend/` using `.venv/bin/python` at the repo root.
 
-## 📚 Documentation Structure
+## Prerequisites
 
-We have two complementary documentation files:
+1. The Python environment exists at `.venv` (see the README quick start).
+2. `backend/.env` has your Algolia credentials and `CODESAGE_API_KEY`.
+3. The backend is running (`make start-backend`) and at least one repository is indexed (status `completed`).
 
-| Document                                        | Purpose                                                                       | When to Use                                               |
-| ----------------------------------------------- | ----------------------------------------------------------------------------- | --------------------------------------------------------- |
-| **`docs/MCP_INTEGRATION_GUIDE.md`** (This file) | 📖 **Complete reference guide** - Step-by-step setup, troubleshooting, testing | ✅ **First-time setup, troubleshooting, reference**        |
-| **`MCP_INTEGRATION_SUMMARY.md`**                | 📋 **Problem & solution summary** - What was fixed, improvements made          | ✅ **Understanding what was improved, technical overview** |
-
-### Why Two Documents?
-
-#### `MCP_INTEGRATION_GUIDE.md` (This Document)
-
-**Focus:** "How to set up and use the integration"
-
-**Content:**
-
-- ✅ Step-by-step setup instructions
-- ✅ Prerequisites and requirements  
-- ✅ Troubleshooting common issues
-- ✅ Testing procedures
-- ✅ Configuration details
-- ✅ Security and performance features
-- ✅ Maintenance and updates
-
-#### `MCP_INTEGRATION_SUMMARY.md`
-
-**Focus:** "What problems were solved and how"
-
-**Content:**
-
-- ✅ Technical improvements made
-- ✅ Reliability features added (circuit breaker, retry logic)
-- ✅ Before/after comparison
-- ✅ Architecture enhancements
-- ✅ Problem resolution details
-- ✅ Benefits achieved
-
-**Use both together:**
-
-1. **Read the Summary** to understand what was improved
-2. **Follow this Guide** for actual setup and usage
-
-## ✨ Features
-
-- **🔍 Natural Language Code Search**: Search your codebase using plain English
-- **📊 Repository Analysis**: Get insights into code structure, patterns, and complexity
-- **🔧 Function Explorer**: Discover and understand functions, classes, and variables
-- **📖 Code Explanation**: Get detailed explanations of code snippets
-- **🎯 Pattern Detection**: Find code patterns, anti-patterns, and security issues
-
-## 🚀 Quick Setup
-
-### Prerequisites
-
-- **macOS with Claude Desktop** installed
-- **Python 3.8+** with `aiohttp` package
-- **API Keys**:
-  - Algolia App ID and Admin API Key ([Get from Algolia Dashboard](https://www.algolia.com/))
-  - GitHub Personal Access Token ([Create Here](https://github.com/settings/tokens))
-
-### One-Command Setup
+## Install into Claude Desktop
 
 ```bash
-# Run the comprehensive setup script
-./setup_secure_mcp.sh
+make install-claude                 # merge into the config
+make install-claude ARGS=--dry-run  # print the merged config (key masked), write nothing
 ```
 
-The setup script will:
+`scripts/install_claude_desktop.py`:
 
-1. ✅ Validate environment configuration
-2. 🔐 Secure your API keys
-3. 🐍 Check Python environment
-4. 🏥 Verify backend server health
-5. 🧪 Test MCP integration
-6. ⚙️ Install Claude Desktop configuration
-7. 🎉 Complete end-to-end validation
+- finds the config file for your OS (macOS: `~/Library/Application Support/Claude/claude_desktop_config.json`; Windows: `%APPDATA%\Claude\...`; Linux: `~/.config/Claude/...`)
+- adds or replaces only `mcpServers.codesage` and keeps every other key
+- backs up the existing file as `claude_desktop_config.json.bak-<timestamp>`
+- writes atomically and sets mode 600, because the file holds the API key
+- refuses to touch a file that is not valid JSON
+- reads `CODESAGE_API_KEY` from `backend/.env`
 
-## 📋 Manual Setup (If Needed)
+Options go through `ARGS`, for example `make install-claude ARGS="--server-url http://127.0.0.1:8001 --name codesage"`. Others: `--config PATH`, `--api-key KEY`. Restart Claude Desktop afterwards.
 
-### Step 1: Environment Configuration
+### Manual install
 
-1. **Create Environment File**:
-
-   ```bash
-   cp .env.example .env
-   ```
-
-2. **Configure API Keys** in `.env`:
-
-   ```env
-   # Algolia Configuration
-   ALGOLIA_APP_ID=your-algolia-app-id-here
-   ALGOLIA_ADMIN_API_KEY=your-algolia-admin-api-key-here
-   ALGOLIA_INDEX_NAME=codesage_code_entities
-
-   # GitHub Configuration  
-   GITHUB_TOKEN=your-github-personal-access-token-here
-
-   # Security
-   SECRET_KEY=your-secret-key-here-change-this-in-production
-   ```
-
-### Step 2: Start Backend Server
-
-```bash
-# Navigate to backend directory
-cd backend
-
-# Start the server
-python -m uvicorn app.main:app --host 0.0.0.0 --port 8001 --reload
-
-# Verify health (in another terminal)
-curl http://127.0.0.1:8001/health
-```
-
-### Step 3: Install Claude Desktop Configuration
-
-```bash
-# Copy configuration to Claude Desktop
-cp claude_desktop_config.json "$HOME/Library/Application Support/Claude/claude_desktop_config.json"
-```
-
-### Step 4: Restart Claude Desktop
-
-1. **Quit Claude Desktop** completely (`Cmd+Q`)
-2. **Reopen Claude Desktop**
-3. **Check Settings** → Developer → Local MCP servers
-4. **Verify** 'codesage' shows as 'running'
-
-## 🧪 Testing the Integration
-
-### Basic Tests
-
-```bash
-# Test MCP launcher
-echo '{"jsonrpc": "2.0", "method": "initialize", "id": 1}' | ./mcp_launcher.sh
-
-# Test tools listing
-echo '{"jsonrpc": "2.0", "method": "tools/list", "id": 2}' | ./mcp_launcher.sh
-
-# Test backend health
-curl http://127.0.0.1:8001/health
-```
-
-### Claude Desktop Tests
-
-Start a new conversation in Claude Desktop and try:
-
-```text
-What CodeSage tools are available?
-```
-
-```text
-Search for functions related to user authentication
-```
-
-```text
-Analyze the structure of this repository
-```
-
-## 🔧 Troubleshooting
-
-### Common Issues
-
-#### 1. "MCP server not responding"
-
-**Symptoms**: Claude Desktop shows 'codesage' as not running
-
-**Solutions**:
-
-```bash
-# Check if backend is running
-curl http://127.0.0.1:8001/health
-
-# Check MCP launcher
-echo '{"jsonrpc": "2.0", "method": "initialize", "id": 1}' | ./mcp_launcher.sh
-
-# Check logs
-tail -f mcp_launcher.log
-tail -f mcp_wrapper.log
-```
-
-#### 2. "Backend server not responding"
-
-**Symptoms**: Health check fails, connection refused
-
-**Solutions**:
-
-```bash
-# Check if server is running
-ps aux | grep uvicorn
-
-# Start backend server
-cd backend
-python -m uvicorn app.main:app --host 0.0.0.0 --port 8001 --reload
-
-# Check for port conflicts
-lsof -i :8001
-```
-
-#### 3. "Python dependencies missing"
-
-**Symptoms**: Import errors for aiohttp, asyncio
-
-**Solutions**:
-
-```bash
-# Install dependencies
-python3 -m pip install aiohttp
-
-# Or use requirements file
-cd backend
-pip install -r requirements.txt
-```
-
-#### 4. "API keys not configured"
-
-**Symptoms**: Algolia or GitHub API errors
-
-**Solutions**:
-
-```bash
-# Check .env file exists and has values
-cat .env | grep -E "(ALGOLIA|GITHUB)"
-
-# Update .env with your actual API keys
-vim .env
-```
-
-### Advanced Debugging
-
-#### Enable Debug Logging
-
-Edit `claude_desktop_config.json`:
+Copy `claude_desktop_config.example.json` into your Claude Desktop config and fix the path and key:
 
 ```json
 {
-  "global": {
-    "logging": {
-      "level": "debug"
+  "mcpServers": {
+    "codesage": {
+      "command": "/absolute/path/to/this/repo/mcp_launcher.sh",
+      "env": {
+        "MCP_SERVER_URL": "http://127.0.0.1:8001",
+        "CODESAGE_API_KEY": "your-api-key"
+      }
     }
   }
 }
 ```
 
-#### View Detailed Logs
+The bridge reads only `MCP_SERVER_URL` (default `http://127.0.0.1:8001`) and `CODESAGE_API_KEY` (sent as `X-API-Key`). Set `CODESAGE_MCP_LOG_LEVEL` to change its log level (default `INFO`).
+
+## Tools
+
+Arguments are validated; unknown arguments are rejected. `repository` accepts a numeric ID, a name, or `owner/name`; use `list_repositories` to see them.
+
+### `list_repositories`
+List the repositories indexed by CodeSage with their status and size. No arguments.
+
+### `search_code`
+Full-text search over indexed functions, classes, imports and doc sections. Returns ranked hits with file locations, snippets and GitHub links.
+
+| Argument | Type | Notes |
+| --- | --- | --- |
+| `query` | string, required | Matched against names, descriptions and code |
+| `repository` | string | Omit to search all indexed repositories |
+| `language` | string | For example `python` |
+| `entity_type` | `function`, `class`, `import`, `doc_section` | |
+| `limit` | integer 1-50, default 10 | Results per page |
+| `page` | integer >= 0, default 0 | Zero-based |
+
+### `get_file`
+Read a file with line numbers. Returns at most 400 lines per call.
+
+| Argument | Type | Notes |
+| --- | --- | --- |
+| `repository` | string, required | |
+| `path` | string, required | Exact file path in the repository |
+| `start_line` | integer >= 1 | First line (1-based) |
+| `end_line` | integer >= 1 | Last line |
+
+### `list_definitions`
+List functions, classes, imports and doc sections in a repository, ordered by file and line.
+
+| Argument | Type | Notes |
+| --- | --- | --- |
+| `repository` | string, required | |
+| `path_prefix` | string | Only files whose path starts with this |
+| `entity_type` | `function`, `class`, `import`, `doc_section` | |
+| `name` | string | Substring of the entity name |
+| `limit` | integer 1-500, default 100 | |
+
+### `analyze_repository`
+Measured facts about a repository: file, line and entity counts, languages, top directories and the largest files.
+
+| Argument | Type |
+| --- | --- |
+| `repository` | string, required |
+
+### `find_patterns`
+Find lines in a repository's files that match a literal string or a regular expression.
+
+| Argument | Type | Notes |
+| --- | --- | --- |
+| `repository` | string, required | |
+| `pattern` | string, required | 1-200 characters |
+| `regex` | boolean, default false | Treat `pattern` as a regular expression |
+| `path_glob` | string | For example `src/*.py` |
+| `max_results` | integer 1-500, default 100 | |
+
+### Resources
+
+The bridge also serves `resources/list` and `resources/read`. `codesage://repositories` lists repositories, and `codesage://repositories/{id}/files` lists the files of one repository.
+
+## HTTP endpoints
+
+The bridge uses these; you can call them directly (for example for testing). All are under `/api/v1/ai`.
+
+| Endpoint | Auth | Purpose |
+| --- | --- | --- |
+| `GET /mcp/capabilities` | none | Server name, version, tool names |
+| `GET /mcp/tools` | none | Tool list with JSON Schemas |
+| `POST /mcp/tools/call` | `X-API-Key` | Run a tool |
+| `GET /mcp/resources` | none | Resource list |
+| `GET /mcp/resources/read?uri=...` | none | Read a resource |
 
 ```bash
-# MCP Launcher logs
-tail -f mcp_launcher.log
-
-# MCP Wrapper logs  
-tail -f mcp_wrapper.log
-
-# Backend logs (if started manually)
-tail -f backend.log
-```
-
-#### Test Individual Components
-
-```bash
-# Test Python environment
-python3 -c "import aiohttp, asyncio; print('Dependencies OK')"
-
-# Test backend directly
 curl -X POST http://127.0.0.1:8001/api/v1/ai/mcp/tools/call \
-  -H "Content-Type: application/json" \
-  -d '{"tool_name": "search_code", "arguments": {"query": "test"}}'
-
-# Test MCP wrapper directly
-python3 mcp_wrapper.py
+  -H "Content-Type: application/json" -H "X-API-Key: $CODESAGE_API_KEY" \
+  -d '{"tool_name": "search_code", "arguments": {"query": "parse", "limit": 3}}'
 ```
 
-## 📁 Script Purpose & File Structure
+The response is `{"tool", "result", "is_error", "error"}`. A tool failure (for example an unknown repository) returns 200 with `is_error: true` and the message in `error`. An unknown tool is 404, invalid arguments are 422, a bad key is 401, and the endpoint is limited to 30 requests per minute.
 
-### Setup Scripts
+## Troubleshooting
 
-| Script                        | Purpose                                                                         | When to Use                                               |
-| ----------------------------- | ------------------------------------------------------------------------------- | --------------------------------------------------------- |
-| **`setup_secure_mcp.sh`**     | 🎯 **Main setup script** - Comprehensive, production-ready setup with validation | ✅ **Use this 99% of the time** - Complete automated setup |
-| **`setup_claude_desktop.sh`** | 🔧 **Simple setup** - Basic Claude Desktop configuration only                    | ✅ **Backup option** if comprehensive setup fails          |
-| **`mcp_launcher.sh`**         | 🚀 **Runtime launcher** - Called automatically by Claude Desktop                 | ❌ **Never run manually** - Claude Desktop executes this   |
+- The bridge writes logs to stderr, never stdout (stdout carries the protocol). In Claude Desktop, open its MCP log for the `codesage` server to read them.
+- "CodeSage backend not reachable at ...": the backend is not running or `MCP_SERVER_URL` is wrong. Start it with `make start-backend`. While it is down, `tools/list` still works because the schemas are bundled with the bridge; only tool calls fail.
+- "rejected the API key (401)": `CODESAGE_API_KEY` in the Claude Desktop config differs from `backend/.env`. Re-run `make install-claude`.
+- "429": the rate limit was hit; retry shortly.
+- Tools are listed but searches return nothing: no repository has finished indexing. Check `GET /api/v1/repositories/` for status and `error_message`.
+- Launcher says `.venv/bin/python not found`: create the virtualenv as described in the README.
 
-### Setup Script Details
-
-#### `setup_secure_mcp.sh` (Recommended)
-
-**Purpose:** Complete, bulletproof setup with enterprise-grade reliability
-
-**What it does:**
-
-- ✅ Validates environment configuration (`.env` file)
-- ✅ Checks Python dependencies and interpreter
-- ✅ Verifies backend server health
-- ✅ Tests MCP integration end-to-end
-- ✅ Sets up Claude Desktop configuration
-- ✅ Provides comprehensive troubleshooting info
-- ✅ Security validation (ensures `.env` is gitignored)
-
-**Usage:**
+### Optional: check the bridge with the MCP Inspector
 
 ```bash
-./setup_secure_mcp.sh  # Use this for normal setup
+npx @modelcontextprotocol/inspector ./mcp_launcher.sh
 ```
 
-#### `setup_claude_desktop.sh` (Legacy/Backup)
+Pass `MCP_SERVER_URL` and `CODESAGE_API_KEY` as environment variables in the Inspector's UI (or export them first). You should see the six tools under Tools; calling one with the backend running returns JSON.
 
-**Purpose:** Simple, manual-control setup for custom scenarios
+## Known limitations
 
-**What it does:**
-
-- ✅ Loads environment variables from `.env`
-- ✅ Creates Claude Desktop configuration
-- ✅ Basic validation only
-
-**When to use:**
-
-- If comprehensive setup fails
-- For custom deployment scenarios
-- When you need manual control over configuration
-
-**Usage:**
-
-```bash
-./setup_claude_desktop.sh  # Only if main setup fails
-```
-
-#### `mcp_launcher.sh` (Runtime Component)
-
-**Purpose:** Bridge between Claude Desktop and your backend server
-
-**What it does:**
-
-- ✅ Loads environment variables securely
-- ✅ Performs backend health checks
-- ✅ Finds correct Python interpreter
-- ✅ Launches `mcp_wrapper.py` with error handling
-- ✅ Provides logging and troubleshooting info
-
-**When it's executed:**
-
-- ✅ **Automatically by Claude Desktop** when you use MCP tools
-- ✅ **For manual testing:** `echo '{"jsonrpc":"2.0","method":"initialize","id":1}' | ./mcp_launcher.sh`
-- ❌ **NOT during setup** - it's a runtime component
-
-### File Structure
-
-```tree
-codesage-algolia-challenge/
-├── setup_secure_mcp.sh          # 🎯 Main setup (use this)
-├── setup_claude_desktop.sh      # 🔧 Simple setup (backup)
-├── mcp_launcher.sh              # 🚀 Runtime launcher (Claude calls this)
-├── mcp_wrapper.py               # Enhanced MCP wrapper with logging
-├── claude_desktop_config.json   # Claude Desktop configuration
-├── .env                         # Environment variables (gitignored)
-├── .env.example                 # Environment template
-├── MCP_INTEGRATION_SUMMARY.md   # Summary of improvements made
-└── docs/
-    └── MCP_INTEGRATION_GUIDE.md # This comprehensive guide
-```
-
-## 🔐 Security Features
-
-- **Environment Variables**: All API keys stored in `.env` (gitignored)
-- **Local Communication**: All traffic stays on `127.0.0.1`
-- **No Hardcoded Secrets**: Configuration uses environment variables only
-- **Access Control**: MCP server only accessible locally
-
-## 🚀 Performance Optimizations
-
-- **Connection Pooling**: Reuses HTTP connections for better performance
-- **Tool Caching**: Caches tool definitions for 5 minutes
-- **Retry Logic**: Automatic retry for transient network issues
-- **Timeout Handling**: Prevents hanging requests
-
-## 🔄 Updates and Maintenance
-
-### Updating Configuration
-
-```bash
-# Re-run setup script after changes
-./setup_secure_mcp.sh
-
-# Or manually update Claude Desktop config
-cp claude_desktop_config.json "$HOME/Library/Application Support/Claude/claude_desktop_config.json"
-```
-
-### Monitoring Health
-
-```bash
-# Check system health
-curl http://127.0.0.1:8001/health
-
-# View recent logs
-tail -20 mcp_launcher.log
-tail -20 mcp_wrapper.log
-```
-
-## 🆘 Getting Help
-
-### Log Files Location
-
-- `mcp_launcher.log` - Launcher script logs
-- `mcp_wrapper.log` - MCP wrapper logs  
-- `backend.log` - Backend server logs (if started by script)
-
-### Health Check Commands
-
-```bash
-# Backend health
-curl http://127.0.0.1:8001/health
-
-# MCP initialization
-echo '{"jsonrpc": "2.0", "method": "initialize", "id": 1}' | ./mcp_launcher.sh
-
-# Tools availability  
-echo '{"jsonrpc": "2.0", "method": "tools/list", "id": 2}' | ./mcp_launcher.sh
-```
-
-### Reset Everything
-
-```bash
-# Stop all processes
-pkill -f uvicorn
-pkill -f mcp_wrapper
-
-# Clean logs
-rm -f *.log
-
-# Re-run setup
-./setup_secure_mcp.sh
-```
-
-## ✅ Success Indicators
-
-You know the integration is working when:
-
-1. ✅ `curl http://127.0.0.1:8001/health` returns healthy status
-2. ✅ Claude Desktop shows 'codesage' as 'running' in MCP servers
-3. ✅ Claude responds to "What CodeSage tools are available?"
-4. ✅ You can search your codebase through Claude
-5. ✅ No errors in `mcp_launcher.log` or `mcp_wrapper.log`
-
-## 🎯 Next Steps
-
-After successful setup:
-
-1. **Index Your Repositories**: Add your code repositories through the web interface
-2. **Explore Tools**: Try different CodeSage tools in Claude Desktop
-3. **Customize Configuration**: Adjust settings in `.env` as needed
-4. **Monitor Performance**: Keep an eye on logs and health status
-
----
-
-**Need help?** Check the logs first, then refer to the troubleshooting section above. The setup script provides detailed error messages and suggestions for common issues. 
+- Tool calls need the backend running; the bridge does not start it.
+- The backend is single-process, with in-memory job state.
