@@ -34,7 +34,8 @@ services:
       dockerfile: Dockerfile
       args:
         VITE_API_BASE_URL: /api/v1
-        VITE_WEBSOCKET_URL: ws://localhost/ws # Update with your domain (wss:// once TLS is on)
+        # Must match CODESAGE_API_KEY in backend/.env; export it before building
+        VITE_CODESAGE_API_KEY: ${CODESAGE_API_KEY:-}
     container_name: codesage_nginx
     ports:
       - "80:80"

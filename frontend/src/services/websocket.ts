@@ -211,12 +211,17 @@ export class WebSocketService {
       this.notifyConnection("disconnected");
     };
 
-    socket.onclose = () => {
+    socket.onclose = (event) => {
       if (this.ws !== socket) return;
       this.ws = null;
       this.isConnecting = false;
       this.stopHeartbeat();
       this.notifyConnection("disconnected");
+      // 1008: the server rejected the API key, so retrying can't succeed
+      if (event.code === 1008) {
+        console.warn("WebSocket rejected by the server: check VITE_CODESAGE_API_KEY");
+        return;
+      }
       if (this.hasSubscribers()) this.scheduleReconnect();
     };
   }

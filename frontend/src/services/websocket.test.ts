@@ -35,9 +35,9 @@ class FakeWebSocket {
   receive(msg: unknown) {
     this.onmessage?.({ data: JSON.stringify(msg) });
   }
-  drop() {
+  drop(code = 1006) {
     this.readyState = 3;
-    this.onclose?.({ code: 1006 });
+    this.onclose?.({ code });
   }
 }
 
@@ -138,6 +138,15 @@ describe("WebSocketService", () => {
     expect(FakeWebSocket.instances).toHaveLength(2);
     last().open();
     expect(last().sent).toContainEqual({ type: "subscribe", repository_id: 4 });
+  });
+
+  it("stops reconnecting when the server rejects the API key", () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    service.onRepositoryUpdate(4, () => {});
+    last().open();
+    last().drop(1008);
+    vi.advanceTimersByTime(60000);
+    expect(FakeWebSocket.instances).toHaveLength(1);
   });
 
   it("builds a wss: URL on https pages, with the api_key", () => {
