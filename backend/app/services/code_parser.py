@@ -1,3 +1,4 @@
+import ast
 import re
 from typing import List, Dict, Any, Optional
 import structlog
@@ -65,86 +66,151 @@ class CodeParser:
             
     def _parse_python(self, content: str, file_path: str) -> List[ParsedCodeEntity]:
         """Parse Python code for functions, classes, imports"""
-        entities = []
+        try:
+            tree = ast.parse(content)
+        except (SyntaxError, ValueError, RecursionError):
+            # Python 2 sources, templates, pathologically nested code, etc.
+            return self._parse_python_lines(content)
+
         lines = content.split('\n')
-        
+        entities = []
+
         # Extract imports
-        for i, line in enumerate(lines):
-            line = line.strip()
-            if line.startswith(('import ', 'from ')):
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.Import, ast.ImportFrom)):
+                segment = ast.get_source_segment(content, node) or lines[node.lineno - 1]
+                statement = " ".join(segment.split())
                 entities.append(ParsedCodeEntity(
                     entity_type="import",
-                    name=line,
-                    description=f"Import statement: {line}",
-                    line_start=i + 1,
-                    line_end=i + 1,
-                    content=line
+                    name=statement,
+                    description=f"Import statement: {statement}",
+                    line_start=node.lineno,
+                    line_end=node.end_lineno,
+                    content=statement
                 ))
-        
-        # Extract functions and classes
-        in_function = False
-        in_class = False
-        current_entity = None
-        indent_level = 0
-        
-        for i, line in enumerate(lines):
+
+        # Extract functions, methods and classes at any nesting depth
+        self._collect_python_definitions(tree, lines, "", False, entities)
+        return entities
+
+    def _collect_python_definitions(
+        self, parent: ast.AST, lines: List[str], scope: str, in_class: bool,
+        entities: List[ParsedCodeEntity]
+    ):
+        """Walk definitions in source order, recording each one with its full line range"""
+        for node in ast.iter_child_nodes(parent):
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                qualified_name = f"{scope}{node.name}"
+                kind = "method" if in_class else "function"
+                entities.append(ParsedCodeEntity(
+                    entity_type="function",
+                    name=node.name,
+                    description=f"Python {kind}: {qualified_name}",
+                    line_start=node.lineno,
+                    line_end=node.end_lineno,
+                    parameters=self._python_parameters(node.args),
+                    return_type=ast.unparse(node.returns) if node.returns else None,
+                    content=lines[node.lineno - 1]
+                ))
+                self._collect_python_definitions(node, lines, f"{qualified_name}.", False, entities)
+
+            elif isinstance(node, ast.ClassDef):
+                qualified_name = f"{scope}{node.name}"
+                inheritance = ", ".join(ast.unparse(base) for base in node.bases)
+                entities.append(ParsedCodeEntity(
+                    entity_type="class",
+                    name=node.name,
+                    description=f"Python class: {qualified_name}",
+                    line_start=node.lineno,
+                    line_end=node.end_lineno,
+                    parameters=[inheritance] if inheritance else None,
+                    content=lines[node.lineno - 1]
+                ))
+                self._collect_python_definitions(node, lines, f"{qualified_name}.", True, entities)
+
+            elif not isinstance(node, ast.expr):
+                # Definitions nested in if/try/with blocks keep the enclosing scope.
+                # Expressions can't contain def/class, so skipping them avoids deep recursion.
+                self._collect_python_definitions(node, lines, scope, in_class, entities)
+
+    @staticmethod
+    def _python_parameters(args: ast.arguments) -> List[str]:
+        """Render parameters as 'name' or 'name: annotation', with * and ** prefixes"""
+        def render(arg: ast.arg, prefix: str = "") -> str:
+            if arg.annotation:
+                return f"{prefix}{arg.arg}: {ast.unparse(arg.annotation)}"
+            return f"{prefix}{arg.arg}"
+
+        parameters = [render(arg) for arg in args.posonlyargs + args.args]
+        if args.vararg:
+            parameters.append(render(args.vararg, "*"))
+        parameters.extend(render(arg) for arg in args.kwonlyargs)
+        if args.kwarg:
+            parameters.append(render(args.kwarg, "**"))
+        return parameters
+
+    def _parse_python_lines(self, content: str) -> List[ParsedCodeEntity]:
+        """Line-based fallback for Python that ast can't parse.
+
+        Keeps a stack of open definitions so every def/class is recorded, and
+        closes each one at the last code line before indentation returns to its level.
+        """
+        entities = []
+        open_definitions = []  # (indent, entity) whose body hasn't ended yet
+        last_code_line = 0
+
+        for line_number, line in enumerate(content.split('\n'), start=1):
             stripped = line.strip()
-            
-            # Function definition
-            if stripped.startswith('def '):
-                match = re.match(r'def\s+(\w+)\s*\((.*?)\)(?:\s*->\s*(.+?))?:', stripped)
-                if match:
-                    func_name, params, return_type = match.groups()
-                    parameters = [p.strip() for p in params.split(',') if p.strip()]
-                    
-                    current_entity = ParsedCodeEntity(
-                        entity_type="function",
-                        name=func_name,
-                        description=f"Python function: {func_name}",
-                        line_start=i + 1,
-                        line_end=i + 1,  # Will be updated when function ends
-                        parameters=parameters,
-                        return_type=return_type.strip() if return_type else None,
-                        content=line
-                    )
-                    in_function = True
-                    indent_level = len(line) - len(line.lstrip())
-                    
-            # Class definition  
-            elif stripped.startswith('class '):
-                match = re.match(r'class\s+(\w+)(?:\((.*?)\))?:', stripped)
-                if match:
-                    class_name, inheritance = match.groups()
-                    
-                    current_entity = ParsedCodeEntity(
-                        entity_type="class",
-                        name=class_name,
-                        description=f"Python class: {class_name}",
-                        line_start=i + 1,
-                        line_end=i + 1,
-                        parameters=[inheritance] if inheritance else None,
-                        content=line
-                    )
-                    in_class = True
-                    indent_level = len(line) - len(line.lstrip())
-                    
-            # Check if we've exited the current function/class
-            elif (in_function or in_class) and line.strip():
-                current_indent = len(line) - len(line.lstrip())
-                if current_indent <= indent_level:
-                    # End of function/class
-                    if current_entity:
-                        current_entity.line_end = i
-                        entities.append(current_entity)
-                        current_entity = None
-                    in_function = False
-                    in_class = False
-                    
-        # Handle case where function/class goes to end of file
-        if current_entity:
-            current_entity.line_end = len(lines)
-            entities.append(current_entity)
-            
+            if not stripped or stripped.startswith('#'):
+                continue
+
+            indent = len(line) - len(line.lstrip())
+            while open_definitions and indent <= open_definitions[-1][0]:
+                open_definitions.pop()[1].line_end = last_code_line
+
+            entity = None
+            if stripped.startswith(('import ', 'from ')):
+                entities.append(ParsedCodeEntity(
+                    entity_type="import",
+                    name=stripped,
+                    description=f"Import statement: {stripped}",
+                    line_start=line_number,
+                    line_end=line_number,
+                    content=stripped
+                ))
+            elif match := re.match(r'(?:async\s+)?def\s+(\w+)\s*\((.*?)\)(?:\s*->\s*(.+?))?:', stripped):
+                func_name, params, return_type = match.groups()
+                entity = ParsedCodeEntity(
+                    entity_type="function",
+                    name=func_name,
+                    description=f"Python function: {func_name}",
+                    line_start=line_number,
+                    line_end=line_number,
+                    parameters=[p.strip() for p in params.split(',') if p.strip()],
+                    return_type=return_type.strip() if return_type else None,
+                    content=line
+                )
+            elif match := re.match(r'class\s+(\w+)(?:\((.*?)\))?:', stripped):
+                class_name, inheritance = match.groups()
+                entity = ParsedCodeEntity(
+                    entity_type="class",
+                    name=class_name,
+                    description=f"Python class: {class_name}",
+                    line_start=line_number,
+                    line_end=line_number,
+                    parameters=[inheritance] if inheritance else None,
+                    content=line
+                )
+
+            if entity:
+                entities.append(entity)
+                open_definitions.append((indent, entity))
+            last_code_line = line_number
+
+        # Definitions still open run to the end of the file
+        for _, entity in open_definitions:
+            entity.line_end = last_code_line
+
         return entities
         
     def _parse_javascript(self, content: str, file_path: str) -> List[ParsedCodeEntity]:

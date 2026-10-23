@@ -31,6 +31,10 @@ MAX_CONCURRENT_GITHUB_REQUESTS = 5  # Limit concurrent API calls
 LARGE_REPO_THRESHOLD = 1000  # Files threshold for large repo optimizations
 
 
+class IngestionError(Exception):
+    """A processing run that would leave the repository with nothing searchable"""
+
+
 class RepositoryService:
     """Service for repository management with performance optimizations"""
 
@@ -415,6 +419,7 @@ class RepositoryService:
 
             # Start processing
             repository.status = "processing"
+            repository.error_message = None
             self.db.commit()
             await self._broadcast_repository_status(repository)
             logger.info(
@@ -445,6 +450,8 @@ class RepositoryService:
                 )
 
             except Exception as e:
+                # Discard any half-written work so recording the failure can't fail too
+                self.db.rollback()
                 repository.status = "failed"
                 repository.error_message = f"{type(e).__name__}: {str(e)}"
                 await self._broadcast_repository_status(
@@ -698,12 +705,7 @@ class RepositoryService:
             logger.info("GitHub files retrieved", file_count=len(files) if files else 0)
 
             if not files:
-                logger.warning(
-                    "No files found in repository", repository_id=repository.id
-                )
-                repository.total_files = 0
-                repository.processed_files = 0
-                return
+                raise IngestionError("No supported code files found in repository")
 
             # 2. Initialize services
             code_parser = CodeParser()
@@ -712,9 +714,14 @@ class RepositoryService:
             # Setup Algolia index if needed
             await algolia_service.setup_index_settings()
 
+            # Replace the previous run's data. This happens only after a successful
+            # fetch, so a transient GitHub error doesn't wipe a working index.
+            await self._clear_repository_data(repository.id, algolia_service)
+
             # 3. Process each file and extract entities
             total_entities = 0
             processed_files = 0
+            failed_files = 0
 
             for file in files:
                 try:
@@ -832,6 +839,9 @@ class RepositoryService:
                         )
 
                 except Exception as e:
+                    # Without a rollback every later file fails with PendingRollbackError
+                    self.db.rollback()
+                    failed_files += 1
                     logger.error(
                         "Failed to process file",
                         repository_id=repository.id,
@@ -843,6 +853,13 @@ class RepositoryService:
             # 4. Update repository status
             repository.total_files = len(files)
             repository.processed_files = processed_files
+
+            if total_entities == 0:
+                raise IngestionError(
+                    f"No code entities were indexed from {len(files)} files "
+                    f"({failed_files} failed to process)"
+                )
+
             repository.status = "completed"
 
             # Calculate total lines from all files
@@ -891,6 +908,25 @@ class RepositoryService:
             )
             repository.status = "failed"
             raise
+
+    async def _clear_repository_data(self, repository_id: int, algolia_service):
+        """Remove a repository's stored files, entities and Algolia records"""
+        from app.models.code_entity import CodeEntity
+        from app.models.code_file import CodeFile
+
+        if not await algolia_service.delete_repository_index(repository_id, wait=True):
+            raise IngestionError(
+                "Could not remove previously indexed records from Algolia"
+            )
+
+        # Entities reference files, so delete them first
+        self.db.query(CodeEntity).filter(
+            CodeEntity.repository_id == repository_id
+        ).delete(synchronize_session=False)
+        self.db.query(CodeFile).filter(
+            CodeFile.repository_id == repository_id
+        ).delete(synchronize_session=False)
+        self.db.commit()
 
     async def delete_repository(self, repository_id: int):
         from app.models.repository import Repository

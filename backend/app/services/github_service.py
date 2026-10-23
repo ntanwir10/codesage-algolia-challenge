@@ -2,7 +2,7 @@ import os
 import re
 import tempfile
 import shutil
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 import asyncio
 import aiohttp
 import structlog
@@ -19,6 +19,14 @@ MAX_CONCURRENT_REQUESTS = 5  # GitHub API rate limiting
 REQUEST_DELAY = 0.1  # Delay between requests to avoid rate limits
 CACHE_TTL = 300  # 5 minutes cache for repository metadata
 MAX_RETRIES = 3  # Retry failed requests
+
+
+class GitHubAPIError(Exception):
+    """GitHub returned an error status while listing repository contents"""
+
+    def __init__(self, status: int, message: str):
+        super().__init__(message)
+        self.status = status
 
 
 @dataclass
@@ -257,11 +265,35 @@ class GitHubService:
         """Get repository file tree using GitHub API"""
         files = []
 
-        async with aiohttp.ClientSession() as session:
+        timeout = aiohttp.ClientTimeout(total=30, connect=10)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
             # Get repository contents recursively
             await self._fetch_directory_contents(session, owner, repo, "", files)
 
         return files
+
+    @staticmethod
+    def _describe_api_error(
+        status: int, headers, owner: str, repo: str, path: str
+    ) -> str:
+        """Explain a failed contents request in terms a user can act on"""
+        target = f"{owner}/{repo}/{path}" if path else f"{owner}/{repo}"
+        if status == 401:
+            return f"GitHub rejected the token (401) for {target}; check GITHUB_TOKEN"
+        if status in (403, 429) and headers.get("X-RateLimit-Remaining") == "0":
+            return f"GitHub API rate limit exceeded ({status}) while reading {target}"
+        if status == 403:
+            return f"GitHub denied access (403) to {target}"
+        if status == 404:
+            return f"GitHub repository or path not found (404): {target}; it may be private or misspelled"
+        return f"GitHub API error {status} while reading {target}"
+
+    @staticmethod
+    def _decode_content(raw: bytes) -> Optional[str]:
+        """Decode downloaded bytes to text, or None for empty and binary files"""
+        if not raw or b"\x00" in raw:
+            return None
+        return raw.decode("utf-8-sig", errors="replace")
 
     async def _fetch_directory_contents(
         self,
@@ -271,81 +303,83 @@ class GitHubService:
         path: str,
         files: List[GitHubFile],
     ):
-        """Recursively fetch directory contents"""
-        try:
-            url = f"{self.base_url}/repos/{owner}/{repo}/contents/{path}"
-            logger.info("Fetching directory", url=url, path=path)
+        """Recursively fetch directory contents.
 
-            headers = {}
-            if self.token:
-                headers["Authorization"] = f"token {self.token}"
+        Raises GitHubAPIError on any non-200 listing so that an unreadable
+        repository fails the run instead of looking like an empty one.
+        """
+        url = f"{self.base_url}/repos/{owner}/{repo}/contents/{path}"
+        logger.info("Fetching directory", url=url, path=path)
 
-            async with session.get(url, headers=headers) as response:
-                logger.info("GitHub API response", status=response.status, url=url)
+        headers = {}
+        if self.token:
+            headers["Authorization"] = f"token {self.token}"
 
-                if response.status != 200:
-                    response_text = await response.text()
-                    logger.warning(
-                        "Failed to fetch directory",
-                        path=path,
-                        status=response.status,
-                        response_text=response_text[
-                            :500
-                        ],  # Log first 500 chars of error
+        async with session.get(url, headers=headers) as response:
+            logger.info("GitHub API response", status=response.status, url=url)
+
+            if response.status != 200:
+                response_text = await response.text()
+                logger.warning(
+                    "Failed to fetch directory",
+                    path=path,
+                    status=response.status,
+                    response_text=response_text[:500],  # Log first 500 chars of error
+                )
+                raise GitHubAPIError(
+                    response.status,
+                    self._describe_api_error(
+                        response.status, response.headers, owner, repo, path
+                    ),
+                )
+
+            contents = await response.json()
+            logger.info("Directory contents", path=path, items_count=len(contents))
+
+        for item in contents:
+            if item["type"] == "file":
+                filename = item["path"].split("/")[-1]
+                github_file = GitHubFile(
+                    path=item["path"],
+                    content="",
+                    size=item["size"],
+                    language=self._detect_language(filename),
+                    filename=filename,
+                )
+                # Filter before downloading so skipped files cost no requests
+                if (
+                    not github_file.is_code_file()
+                    or github_file.size >= self.max_file_size
+                ):
+                    logger.debug(
+                        "Filtered out file",
+                        file_path=item["path"],
+                        size=github_file.size,
+                        language=github_file.language,
                     )
-                    return
+                    continue
 
-                contents = await response.json()
-                logger.info("Directory contents", path=path, items_count=len(contents))
+                content = self._decode_content(
+                    await self._download_file_content(session, item["download_url"])
+                )
+                if content is None:
+                    logger.debug("Skipped empty or binary file", file_path=item["path"])
+                    continue
 
-                for item in contents:
-                    if item["type"] == "file":
-                        logger.debug(
-                            "Processing file", file_path=item["path"], size=item["size"]
-                        )
-                        # Download file content
-                        file_content_bytes = await self._download_file_content(
-                            session, item["download_url"]
-                        )
-                        if file_content_bytes:
-                            # Create a temporary GitHubFile to check if it's a code file and within size limits
-                            filename = item["path"].split("/")[-1]
-                            language = self._detect_language(filename)
-                            temp_github_file = GitHubFile(
-                                path=item["path"],
-                                content=file_content_bytes,
-                                size=item["size"],
-                                language=language,
-                                filename=filename,
-                            )
-                            if (
-                                temp_github_file.is_code_file()
-                                and temp_github_file.size < self.max_file_size
-                            ):
-                                files.append(temp_github_file)
-                                logger.debug(
-                                    "Added code file",
-                                    file_path=item["path"],
-                                    language=temp_github_file.language,
-                                )
-                            else:
-                                logger.debug(
-                                    "Filtered out file",
-                                    file_path=item["path"],
-                                    is_code=temp_github_file.is_code_file(),
-                                    size=temp_github_file.size,
-                                    language=temp_github_file.language,
-                                )
+                github_file.content = content
+                files.append(github_file)
+                logger.debug(
+                    "Added code file",
+                    file_path=item["path"],
+                    language=github_file.language,
+                )
 
-                    elif item["type"] == "dir" and len(files) < self.max_files:
-                        logger.debug("Processing directory", dir_path=item["path"])
-                        # Recursively fetch subdirectory (with limit)
-                        await self._fetch_directory_contents(
-                            session, owner, repo, item["path"], files
-                        )
-
-        except Exception as e:
-            logger.error("Failed to fetch directory contents", path=path, error=str(e))
+            elif item["type"] == "dir" and len(files) < self.max_files:
+                logger.debug("Processing directory", dir_path=item["path"])
+                # Recursively fetch subdirectory (with limit)
+                await self._fetch_directory_contents(
+                    session, owner, repo, item["path"], files
+                )
 
     async def _download_file_content(
         self, session: aiohttp.ClientSession, download_url: str
@@ -360,6 +394,9 @@ class GitHubService:
                 if response.status == 200:
                     content = await response.read()
                     return content
+                logger.warning(
+                    "Failed to download file", url=download_url, status=response.status
+                )
                 return b""
         except Exception as e:
             logger.error("Failed to download file", url=download_url, error=str(e))

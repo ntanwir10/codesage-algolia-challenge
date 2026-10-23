@@ -15,7 +15,7 @@ from typing import List, Dict, Any, Optional
 import structlog
 from algoliasearch.search_client import SearchClient
 from algoliasearch.exceptions import AlgoliaException
-import uuid
+import hashlib
 
 from app.core.config import get_settings
 from app.services.code_parser import ParsedCodeEntity
@@ -55,6 +55,15 @@ class AlgoliaService:
     def is_available(self) -> bool:
         """Check if Algolia service is available"""
         return self.client is not None and self.index is not None
+
+    @staticmethod
+    def _repository_filter(repository_id: int) -> str:
+        """Filter matching one repository's records.
+
+        Uses a numeric comparison: in a filters string the facet form
+        `repository_id:2` matches no records, because the value is numeric.
+        """
+        return f"repository_id={int(repository_id)}"
 
     async def setup_index_settings(self):
         """Configure Algolia index settings for optimal code search"""
@@ -167,8 +176,10 @@ class AlgoliaService:
         Create Algolia document from code entity.
         Follows architecture.md structure exactly.
         """
+        # Stable ID: re-indexing the same entity overwrites its record instead of duplicating it
+        entity_key = f"{file_path}:{entity.entity_type}:{entity.name}:{entity.line_start}"
         return {
-            "objectID": f"{repository_id}_{file_path}_{entity.name}_{entity.line_start}_{uuid.uuid4().hex[:8]}",
+            "objectID": f"{repository_id}_{hashlib.sha1(entity_key.encode()).hexdigest()}",
             "repository_id": repository_id,
             "file_path": file_path,
             "entity_type": entity.entity_type,
@@ -217,7 +228,7 @@ class AlgoliaService:
             # Add filters
             filters = []
             if repository_id:
-                filters.append(f"repository_id:{repository_id}")
+                filters.append(self._repository_filter(repository_id))
             if language:
                 filters.append(f"language:{language}")
             if entity_type:
@@ -244,14 +255,23 @@ class AlgoliaService:
             logger.error("Algolia search failed", query=query, error=str(e))
             return {"hits": [], "nbHits": 0, "query": query, "error": str(e)}
 
-    async def delete_repository_index(self, repository_id: int) -> bool:
-        """Delete all indexed entities for a repository"""
+    async def delete_repository_index(
+        self, repository_id: int, wait: bool = False
+    ) -> bool:
+        """Delete all indexed entities for a repository.
+
+        Pass wait=True before re-indexing so the delete can't land after the new records.
+        """
         if not self.is_available():
             return True
 
         try:
             # Delete by repository_id filter
-            self.index.delete_by({"filters": f"repository_id:{repository_id}"})
+            response = self.index.delete_by(
+                {"filters": self._repository_filter(repository_id)}
+            )
+            if wait:
+                response.wait()
 
             logger.info(
                 "Repository entities deleted from Algolia", repository_id=repository_id
@@ -276,7 +296,7 @@ class AlgoliaService:
             results = self.index.search(
                 "",
                 {
-                    "filters": f"repository_id:{repository_id}",
+                    "filters": self._repository_filter(repository_id),
                     "hitsPerPage": 0,  # Just get facets, not actual hits
                     "facets": ["entity_type", "language"],
                     "maxValuesPerFacet": 100,
