@@ -48,8 +48,3 @@ class Repository(Base):
         if self.total_files == 0:
             return 0.0
         return (self.processed_files / self.total_files) * 100
-
-    @property
-    def is_processing(self) -> bool:
-        """Check if repository is currently being processed"""
-        return self.status == "processing"

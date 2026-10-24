@@ -159,14 +159,6 @@ class GitHubFile:
     language: str
     filename: str
 
-    def is_code_file(self) -> bool:
-        """Check if this is a code file we should process"""
-        if not self.filename:
-            return False
-
-        ext = self.filename.lower().split(".")[-1] if "." in self.filename else ""
-        return ext in EXT_TO_LANGUAGE
-
 
 class GitHubService:
     """
@@ -317,8 +309,8 @@ class GitHubService:
             if is_denied_path(path):
                 continue
             filename = path.split("/")[-1]
-            probe = GitHubFile(path, "", size, self._detect_language(filename), filename)
-            if not probe.is_code_file() or size >= self.max_file_size:
+            # Unknown extensions map to "text", which we don't index
+            if self._detect_language(filename) == "text" or size >= self.max_file_size:
                 continue
             selected.append((path, size))
         selected.sort()
