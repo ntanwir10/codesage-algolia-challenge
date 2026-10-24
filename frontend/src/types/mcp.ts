@@ -14,7 +14,7 @@ export interface MCPToolCallResponse<T = unknown> {
   error: string | null;
 }
 
-export interface MCPTool {
+interface MCPTool {
   name: string;
   description: string;
   inputSchema: Record<string, unknown>;
@@ -25,7 +25,7 @@ export interface MCPToolsResponse {
   count: number;
 }
 
-export type EntityType = "function" | "class" | "import" | "doc_section";
+type EntityType = "function" | "class" | "import" | "doc_section";
 
 /** Arguments accepted by the search_code tool (unknown keys are rejected: 422). */
 export interface SearchQuery {
