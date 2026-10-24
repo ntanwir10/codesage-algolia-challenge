@@ -19,7 +19,7 @@ jobs:
           cache: pip
           cache-dependency-path: backend/requirements*.txt
       - run: pip install -r requirements-dev.txt
-      - run: ruff check .
+      - run: ruff check . ../scripts
       - run: python -m pytest
 
   frontend:
@@ -38,3 +38,14 @@ jobs:
       - run: npm run lint
       - run: npm run build
       - run: npm test --if-present
+
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # Compose reads backend/.env via env_file, so the file must exist
+      - run: cp .env.example backend/.env
+      - run: docker compose -f deployment/docker-compose.yml config -q
+      - run: docker compose -f deployment/docker-compose.prod.yml config -q
+      - run: docker build -f backend/Dockerfile.prod backend
+      - run: docker build frontend

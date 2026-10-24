@@ -38,7 +38,7 @@ services:
         VITE_API_BASE_URL: /api/v1
         # Must match CODESAGE_API_KEY in backend/.env; export it before building
         VITE_CODESAGE_API_KEY: ${CODESAGE_API_KEY:-}
-    container_name: codesage_nginx
+    container_name: codesage_nginx_prod
     ports:
       - "80:80"
       # 443 is not published: TLS is not configured in nginx.conf. Once the HTTPS

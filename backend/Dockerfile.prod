@@ -30,13 +30,14 @@ COPY --from=builder /usr/local/bin /usr/local/bin
 WORKDIR /app
 
 COPY app/ ./app/
+COPY codesage_mcp/ ./codesage_mcp/
 COPY alembic/ ./alembic/
 COPY alembic.ini .
 
-# Non-root user, then SQLite + uploads dirs writable by it. Named volumes
+# Non-root user, then the SQLite dir writable by it. Named volumes
 # mounted here inherit this ownership on first creation.
 RUN adduser --disabled-password --gecos '' --uid 1000 appuser
-RUN mkdir -p /app/data /app/uploads \
+RUN mkdir -p /app/data \
     && chown -R appuser:appuser /app
 USER appuser
 

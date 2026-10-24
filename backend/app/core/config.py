@@ -1,11 +1,9 @@
 """
-CodeSage - MCP-First Code Discovery: Configuration
+CodeSage configuration.
 
-This module provides configuration management for CodeSage - the only code discovery
-tool built entirely around the Model Context Protocol (MCP) for seamless AI integration.
-
-The configuration includes MCP server settings, Algolia search integration,
-and all necessary parameters for MCP-first code discovery architecture.
+Settings are read from environment variables (and a .env file) into a single
+cached Settings object: database, Algolia, GitHub, API key, CORS, rate limits
+and the MCP server description.
 """
 
 # Load environment variables from .env file
@@ -21,8 +19,6 @@ logger = structlog.get_logger()
 
 class Settings(BaseSettings):
     # Core FastAPI Settings
-    app_name: str = "CodeSage - MCP-First Code Discovery"
-    debug: bool = False
     environment: str = "development"
 
     # Database Settings

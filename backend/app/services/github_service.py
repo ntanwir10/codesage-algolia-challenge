@@ -1,6 +1,5 @@
 import asyncio
 import fnmatch
-import os
 import re
 import time
 from dataclasses import dataclass
@@ -11,11 +10,12 @@ from urllib.parse import unquote, urlsplit
 import aiohttp
 import structlog
 
+from app.core.config import get_settings
+
 logger = structlog.get_logger()
 
 # Performance constants
 MAX_CONCURRENT_REQUESTS = 5  # GitHub API rate limiting
-REQUEST_DELAY = 0.1  # Delay between requests to avoid rate limits
 MAX_RETRIES = 3  # Retry timeouts and 5xx responses
 RETRY_BACKOFF_BASE = 1.0  # Seconds; attempt n waits base * 2**n
 MAX_RATE_LIMIT_WAIT = 60  # Longest we will sleep for a rate-limit reset
@@ -46,6 +46,32 @@ DENIED_FILE_PATTERNS = (
     "poetry.lock",
     "cargo.lock",
 )
+
+# File extensions we index, mapped to their language
+EXT_TO_LANGUAGE: dict[str, str] = {
+    "py": "python",
+    "js": "javascript",
+    "ts": "typescript",
+    "jsx": "javascript",
+    "tsx": "typescript",
+    "java": "java",
+    "go": "go",
+    "rs": "rust",
+    "cpp": "cpp",
+    "c": "c",
+    "cs": "csharp",
+    "php": "php",
+    "rb": "ruby",
+    "html": "html",
+    "css": "css",
+    "scss": "scss",
+    "sql": "sql",
+    "json": "json",
+    "yaml": "yaml",
+    "yml": "yaml",
+    "xml": "xml",
+    "md": "markdown",
+}
 
 _NAME_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
 
@@ -135,35 +161,11 @@ class GitHubFile:
 
     def is_code_file(self) -> bool:
         """Check if this is a code file we should process"""
-        code_extensions = {
-            "py",
-            "js",
-            "ts",
-            "jsx",
-            "tsx",
-            "java",
-            "go",
-            "rs",
-            "cpp",
-            "c",
-            "cs",
-            "php",
-            "rb",
-            "html",
-            "css",
-            "scss",
-            "sql",
-            "json",
-            "yaml",
-            "yml",
-            "xml",
-            "md",
-        }
         if not self.filename:
             return False
 
         ext = self.filename.lower().split(".")[-1] if "." in self.filename else ""
-        return ext in code_extensions
+        return ext in EXT_TO_LANGUAGE
 
 
 class GitHubService:
@@ -173,7 +175,7 @@ class GitHubService:
     """
 
     def __init__(self):
-        self.token = os.getenv("GITHUB_TOKEN")
+        self.token = get_settings().github_token
         self.base_url = "https://api.github.com"
         self.raw_base_url = "https://raw.githubusercontent.com"
         self._semaphore = asyncio.Semaphore(MAX_CONCURRENT_REQUESTS)
@@ -422,31 +424,7 @@ class GitHubService:
             return "text"
 
         ext = filename.lower().split(".")[-1] if "." in filename else ""
-        language_map = {
-            "py": "python",
-            "js": "javascript",
-            "ts": "typescript",
-            "jsx": "javascript",
-            "tsx": "typescript",
-            "java": "java",
-            "go": "go",
-            "rs": "rust",
-            "cpp": "cpp",
-            "c": "c",
-            "cs": "csharp",
-            "php": "php",
-            "rb": "ruby",
-            "html": "html",
-            "css": "css",
-            "scss": "scss",
-            "sql": "sql",
-            "json": "json",
-            "yaml": "yaml",
-            "yml": "yaml",
-            "xml": "xml",
-            "md": "markdown",
-        }
-        return language_map.get(ext, "text")
+        return EXT_TO_LANGUAGE.get(ext, "text")
 
     @staticmethod
     def _describe_api_error(status: int, headers, owner: str, repo: str, path: str) -> str:

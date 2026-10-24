@@ -86,10 +86,6 @@ class WebSocketManager:
                 logger.warning("Failed to send message to WebSocket", error=str(e))
                 await self._drop_dead(connection)
 
-    async def broadcast_to_all(self, message: dict):
-        """Broadcast a message to all connected clients"""
-        await self._send_to(set(self.active_connections), message)
-
     async def broadcast_to_repository(self, repository_id: int, message: dict):
         """Broadcast a message to all clients subscribed to a specific repository"""
         connections = self.repository_connections.get(repository_id)
@@ -125,10 +121,6 @@ class WebSocketManager:
     def get_connection_count(self) -> int:
         """Get the number of active connections"""
         return len(self.active_connections)
-
-    def get_repository_connection_count(self, repository_id: int) -> int:
-        """Get the number of connections for a specific repository"""
-        return len(self.repository_connections.get(repository_id, set()))
 
 
 # Global WebSocket manager instance
@@ -213,13 +205,3 @@ async def repository_status_websocket(websocket: WebSocket):
         logger.error("WebSocket error", error=str(e))
     finally:
         await websocket_manager.disconnect(websocket)
-
-
-async def websocket_health():
-    """WebSocket health check endpoint"""
-    return {
-        "status": "healthy",
-        "active_connections": websocket_manager.get_connection_count(),
-        "repository_subscriptions": len(websocket_manager.repository_connections),
-        "service": "websocket",
-    }

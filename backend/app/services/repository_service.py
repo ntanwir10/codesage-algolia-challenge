@@ -225,12 +225,9 @@ class RepositoryService:
                 code_file = CodeFile(
                     repository_id=repository.id,
                     file_path=file.path,
-                    file_name=file.filename,
                     content=file.content,
                     language=file.language,
-                    size_bytes=file.size,
                     line_count=len(file.content.splitlines()),
-                    is_analyzed=True,
                 )
                 code_file.entities = [
                     CodeEntity(

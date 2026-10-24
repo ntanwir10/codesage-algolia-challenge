@@ -66,7 +66,7 @@ def test_subscribe_ping_unsubscribe_and_errors():
             "type": "subscribed",
             "data": {"repository_id": 5},
         }
-        assert websocket_manager.get_repository_connection_count(5) == 1
+        assert len(websocket_manager.repository_connections[5]) == 1
 
         ws.send_json({"type": "ping"})
         assert ws.receive_json() == {"type": "pong"}
@@ -90,7 +90,7 @@ def test_subscribe_ping_unsubscribe_and_errors():
 
         ws.send_json({"type": "unsubscribe", "repository_id": 5})
         assert ws.receive_json()["type"] == "unsubscribed"
-        assert websocket_manager.get_repository_connection_count(5) == 0
+        assert not websocket_manager.repository_connections.get(5)
     # disconnect cleans up
     assert websocket_manager.get_connection_count() == 0
 
@@ -187,20 +187,6 @@ async def test_dead_socket_closed_and_removed_on_repository_broadcast():
     assert len(alive.sent) == 1
 
 
-async def test_dead_socket_closed_and_removed_on_broadcast_all():
-    manager = WebSocketManager()
-    dead, alive = FakeWebSocket(fail_send=True), FakeWebSocket()
-    manager.active_connections.update({dead, alive})
-    await manager.subscribe_to_repository(dead, 3)
-
-    await manager.broadcast_to_all({"type": "x"})
-
-    assert dead.closed
-    assert manager.active_connections == {alive}
-    assert manager.repository_connections == {}
-    assert alive.sent == [{"type": "x"}]
-
-
 async def test_broadcast_survives_set_mutation_during_send():
     manager = WebSocketManager()
 
@@ -212,7 +198,8 @@ async def test_broadcast_survives_set_mutation_during_send():
 
     sockets = [Joiner() for _ in range(3)]
     manager.active_connections.update(sockets)
-    await manager.broadcast_to_all({"type": "x"})  # must not raise
+    manager.repository_connections[1] = set(sockets)
+    await manager.broadcast_to_repository(1, {"type": "x"})  # must not raise
     assert all(len(s.sent) == 1 for s in sockets)
 
 

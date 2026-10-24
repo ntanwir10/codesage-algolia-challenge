@@ -8,7 +8,6 @@ from app.main import app
 from app.services.performance_monitor import (
     MAX_HISTORY,
     PerformanceMonitor,
-    monitor_code_parsing,
     monitor_repository_processing,
     performance_monitor,
 )
@@ -74,7 +73,7 @@ async def test_monitor_helper_works_with_async_with():
 
 async def test_failed_operation_recorded_and_cleaned_up():
     with pytest.raises(ValueError):
-        async with monitor_code_parsing("python", 1):
+        async with performance_monitor.monitor_operation("code_parsing"):
             raise ValueError("bad")
     assert performance_monitor.active_operations == {}
     assert performance_monitor.metrics_history[0].errors_count == 1

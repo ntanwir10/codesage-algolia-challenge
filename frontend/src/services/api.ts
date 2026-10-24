@@ -232,4 +232,3 @@ export class CodeSageAPI {
 }
 
 export const api = new CodeSageAPI();
-export default api;

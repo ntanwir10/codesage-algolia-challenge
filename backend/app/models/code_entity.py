@@ -1,6 +1,5 @@
 from sqlalchemy import (
     JSON,
-    Boolean,
     Column,
     DateTime,
     ForeignKey,
@@ -30,22 +29,16 @@ class CodeEntity(Base):
         String(50), nullable=False, index=True
     )  # function, class, variable, etc.
     entity_name = Column(String(255), nullable=False, index=True)
-    full_name = Column(String(500), nullable=True, index=True)  # namespace.class.method
 
     # Location information
     start_line = Column(Integer, nullable=True)
     end_line = Column(Integer, nullable=True)
-    start_column = Column(Integer, nullable=True)
-    end_column = Column(Integer, nullable=True)
 
     # Content and analysis
     signature = Column(
         Text, nullable=True
     )  # Function signature, class definition, etc.
     docstring = Column(Text, nullable=True)
-    complexity_score = Column(Integer, nullable=True)  # Cyclomatic complexity
-    is_public = Column(Boolean, default=True)
-    is_async = Column(Boolean, default=False)
 
     # Metadata
     entity_metadata = Column(JSON, nullable=True)  # Additional metadata for analysis

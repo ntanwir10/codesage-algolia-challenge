@@ -31,6 +31,8 @@ make up      # docker compose -f deployment/docker-compose.yml up -d
 - The SQLite database lives in the `backend_data` volume at `/app/data` (`DATABASE_URL=sqlite:///./data/codesage.db`). Migrations run automatically at startup.
 - Port 443 is not published: TLS is not configured. `nginx.conf` has a commented-out HTTPS server block to start from.
 
+Each stack writes to its own Algolia index, because records are keyed by repository id and two databases sharing an index would delete each other's records. Dev compose sets `ALGOLIA_INDEX_NAME=codesage_code_entities_docker` (override with `DOCKER_ALGOLIA_INDEX_NAME`) and prod compose sets `codesage_code_entities_prod` (override with `PROD_ALGOLIA_INDEX_NAME`). Both differ from the local-run default `codesage_code_entities`.
+
 The development compose file bind-mounts `backend/` into the container and runs uvicorn with `--reload`.
 
 ## Common commands
@@ -46,7 +48,7 @@ make clean         # stop and remove volumes (deletes the database)
 
 ## Production compose
 
-`make prod-build` and `make prod-up` use `deployment/docker-compose.prod.yml` and `backend/Dockerfile.prod` (no bind mount, no reload, `--workers 1`, `ENVIRONMENT=production`, so `/docs` is disabled). The backend expects `CORS_ORIGINS` as a comma-separated list (`https://app.example.com,https://other.example.com`); the placeholder in that file uses a JSON-style list, so replace it for your domain. It is also untested.
+`make prod-build` and `make prod-up` use `deployment/docker-compose.prod.yml` and `backend/Dockerfile.prod` (no bind mount, no reload, `--workers 1`, `ENVIRONMENT=production`, so `/docs` is disabled). `CORS_ORIGINS` is a comma-separated list (`https://app.example.com,https://other.example.com`); the compose file ships the placeholder `https://yourdomain.com`, so replace it with your domain. The nginx container is named `codesage_nginx_prod` so it cannot clash with the dev stack. This stack is untested.
 
 ## Troubleshooting
 

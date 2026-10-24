@@ -1,19 +1,18 @@
-.PHONY: help build up down restart logs shell test clean clean-all start stop start-backend start-frontend prod-build prod-up status install-claude
+.PHONY: help setup start start-backend start-frontend stop build up down restart logs logs-backend shell health test test-mcp db-reset db-migrate db-migration clean clean-all prod-build prod-up status install-claude
 
 COMPOSE      = docker compose -f deployment/docker-compose.yml
 COMPOSE_PROD = docker compose -f deployment/docker-compose.prod.yml
 
-# CodeSage - MCP-First Code Discovery Makefile
-# 
-# This project is built entirely around the Model Context Protocol (MCP)
-# for seamless AI integration with Claude Desktop and other MCP clients.
-# 
+# CodeSage Makefile: local development, Docker, tests, database and Claude Desktop setup.
+# Run 'make help' for the list of targets.
+
 # Default target
 help:
 	@echo "🏆 CodeSage - MCP-First Code Discovery - Algolia Challenge Edition"
 	@echo ""
 	@echo "🚀 Quick Start:"
-	@echo "  setup           - Initial setup with environment files"
+	@echo "  help            - Show this list"
+	@echo "  setup           - Create backend/.env, the .venv and install frontend deps (npm ci)"
 	@echo "  start           - Start both backend and frontend (recommended)"
 	@echo "  stop            - Stop all development servers"
 	@echo ""
@@ -21,7 +20,10 @@ help:
 	@echo "  build           - Build all Docker containers"
 	@echo "  up              - Start services (backend + nginx/frontend on http://localhost)"
 	@echo "  down            - Stop all services"
+	@echo "  restart         - Restart all services"
 	@echo "  logs            - Show logs for all services"
+	@echo "  logs-backend    - Show backend logs only"
+	@echo "  shell           - Open a shell in the backend container"
 	@echo ""
 	@echo "🛠️  Development:"
 	@echo "  start-backend   - Start backend development server"
@@ -33,8 +35,19 @@ help:
 	@echo "  test            - Run API tests"
 	@echo "  test-mcp        - Test MCP protocol endpoints"
 	@echo ""
+	@echo "🗄️  Database:"
+	@echo "  db-reset        - Delete the local SQLite database"
+	@echo "  db-migrate      - Apply Alembic migrations (alembic upgrade head)"
+	@echo "  db-migration    - Autogenerate a new Alembic migration (prompts for a message)"
+	@echo ""
 	@echo "🧹 Maintenance:"
-	@echo "  clean           - Clean up containers and volumes"
+	@echo "  clean           - Remove containers and volumes, then prune Docker"
+	@echo "  clean-all       - Like clean, but also prune unused images"
+	@echo "  status          - Show running containers"
+	@echo ""
+	@echo "🚢 Production:"
+	@echo "  prod-build      - Build the production images"
+	@echo "  prod-up         - Start the production stack"
 
 # Setup development environment
 setup:
@@ -164,24 +177,6 @@ prod-up:
 status:
 	@echo "📊 CodeSage MCP Server Status:"
 	@$(COMPOSE) ps
-
-# Install dependencies locally (for IDE support)
-install-local:
-	@echo "📦 Installing dependencies locally..."
-	cd backend && pip install -r requirements.txt
-	cd frontend && npm install
-
-# Challenge workflow
-challenge-setup: setup install-local
-	@echo "🏆 Algolia MCP Server Challenge Setup Complete!"
-	@echo ""  
-	@echo "🎯 Ready for the challenge:"
-	@echo "   1. Edit .env with your Algolia credentials"
-	@echo "   2. Run 'make start' to start development"
-	@echo "   3. Submit repository: POST /api/v1/repositories/"
-	@echo "   4. Connect Claude Desktop to MCP endpoint"
-	@echo ""
-	@echo "🔗 Challenge: https://dev.to/challenges/algolia-2025-07-09"
 
 # Register the MCP server with Claude Desktop (use ARGS='--dry-run' to preview)
 install-claude:

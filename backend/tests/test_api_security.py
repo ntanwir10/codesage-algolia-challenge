@@ -160,11 +160,6 @@ class TestHealthAndMcp:
         assert body["timestamp"] != "2024-01-01T00:00:00Z"
         assert "mcp_server" not in body["components"]
 
-    def test_mcp_info(self, client):
-        response = client.get("/mcp")
-        assert response.status_code == 200
-        assert "MCP_INTEGRATION_GUIDE" in response.json()["setup_instructions"]
-
 
 class TestRuntimeSettings:
     def test_wildcard_cors_is_refused(self):

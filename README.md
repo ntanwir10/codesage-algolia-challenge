@@ -28,18 +28,12 @@ Built for the [Algolia MCP Server Challenge](https://dev.to/challenges/algolia-2
 ## Quick start
 
 ```bash
-# 1. Python environment at the repo root (mcp_launcher.sh and the Makefile expect .venv here)
-uv venv --python 3.13 .venv
-uv pip install --python .venv/bin/python -r backend/requirements-dev.txt
-
-# 2. Frontend dependencies
-cd frontend && npm install && cd ..
-
-# 3. Configuration (Docker and the Claude Desktop installer read backend/.env)
-cp .env.example backend/.env
+make setup
 ```
 
-Edit `backend/.env`: set `ALGOLIA_APP_ID`, `ALGOLIA_ADMIN_API_KEY`, `GITHUB_TOKEN` and `CODESAGE_API_KEY` (see below). `make setup` copies `.env.example` to `./.env` instead; the backend also finds a `.env` in the repo root, but Docker and `make install-claude` only read `backend/.env`.
+`make setup` copies `.env.example` to `backend/.env` (if missing), creates `.venv` at the repo root (with `uv` if available, otherwise `python3.13 -m venv`), installs `backend/requirements-dev.txt` into it, and runs `npm ci` in `frontend/`.
+
+Edit `backend/.env`: set `ALGOLIA_APP_ID`, `ALGOLIA_ADMIN_API_KEY`, `GITHUB_TOKEN` and `CODESAGE_API_KEY` (see below). Docker and `make install-claude` read `backend/.env`; the backend also finds a `.env` in the repo root.
 
 Then:
 
@@ -137,7 +131,7 @@ Set these in `backend/.env` (see `.env.example`):
 | `CODESAGE_API_KEY` | unset | Required unless bound to loopback |
 | `MCP_SERVER_HOST`, `MCP_SERVER_PORT` | `127.0.0.1`, `8001` | A non-loopback host requires the key |
 | `ALGOLIA_APP_ID`, `ALGOLIA_ADMIN_API_KEY` | unset | Required for indexing |
-| `ALGOLIA_INDEX_NAME` | `codesage_code_entities` | |
+| `ALGOLIA_INDEX_NAME` | `codesage_code_entities` | One index per database. Compose overrides it: `codesage_code_entities_docker` (dev) and `codesage_code_entities_prod` (prod) |
 | `GITHUB_TOKEN` | unset | Optional; raises GitHub rate limits |
 | `DATABASE_URL` | `sqlite:///./codesage.db` | SQLite only |
 | `CORS_ORIGINS` | localhost ports 3000, 5173, 5174 | Comma-separated; `*` is rejected |

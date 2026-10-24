@@ -97,9 +97,6 @@ class CodeParser:
     Python uses ast, Markdown a heading scanner, and everything else tree-sitter.
     """
 
-    # Languages we deliberately produce nothing for: line-level patterns there are noise
-    NO_ENTITY_LANGUAGES = frozenset({"css", "scss", "html", "json", "yaml", "xml", "sql", "text"})
-
     def __init__(self):
         self.parsers = {
             "python": self._parse_python,
@@ -128,7 +125,7 @@ class CodeParser:
             elif language in LANGUAGE_SPECS:
                 entities = self._parse_tree_sitter(content, file_path, language)
             else:
-                # NO_ENTITY_LANGUAGES and anything unknown
+                # No entities for config/markup languages (css, html, json, yaml, ...) or unknown ones
                 entities = []
 
             logger.debug(
