@@ -35,16 +35,21 @@ services:
       dockerfile: Dockerfile
       args:
         VITE_API_BASE_URL: /api/v1
-        # Must match CODESAGE_API_KEY in backend/.env; export it before building
-        VITE_CODESAGE_API_KEY: ${CODESAGE_API_KEY:-}
+        # No VITE_CODESAGE_API_KEY: nginx adds the key, so it never ships to browsers
     container_name: codesage_nginx_prod
     ports:
       - "80:80"
       # 443 is not published: TLS is not configured in nginx.conf. Once the HTTPS
       # server block is enabled and ./ssl is populated, add "443:443" and
       # mount ./ssl:/etc/nginx/ssl:ro.
+    environment:
+      # Must match CODESAGE_API_KEY in backend/.env; export it before `up`
+      - CODESAGE_API_KEY=${CODESAGE_API_KEY:-}
+      - NGINX_ENVSUBST_FILTER=^CODESAGE_API_KEY$$
     volumes:
-      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx.prod.conf.template:/etc/nginx/templates/default.conf.template:ro
+      # Create with: docker run --rm httpd:alpine htpasswd -nbB <user> <password> > deployment/htpasswd
+      - ./htpasswd:/etc/nginx/htpasswd:ro
     depends_on:
       backend:
         condition: service_healthy

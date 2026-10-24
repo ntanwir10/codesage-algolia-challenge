@@ -160,6 +160,6 @@ docs/                   architecture and MCP guide
 - SQLite only. Alembic migrations run automatically at startup; a database from before Alembic is stamped at `baseline` first.
 - Frontend tests are unit tests only.
 - The Docker images are built in CI but never run there.
-- The dashboard API key is embedded in the JavaScript bundle (local, single-user use only).
+- Outside the prod Docker stack, the dashboard API key is embedded in the JavaScript bundle (local, single-user use only). The prod stack keeps it in nginx behind basic auth.
 
 See [docs/architecture.md](docs/architecture.md) for how the pieces fit together.

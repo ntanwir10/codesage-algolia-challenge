@@ -152,7 +152,9 @@ async def _send_json(websocket: WebSocket, frame: dict):
 async def repository_status_websocket(websocket: WebSocket):
     """WebSocket endpoint for repository status updates"""
     # Browsers can't set headers on a WebSocket, so the key comes as a query parameter
-    if not api_key_is_valid(websocket.query_params.get("api_key")):
+    # Browsers can only send the query parameter; the prod nginx proxy sends the header
+    key = websocket.query_params.get("api_key") or websocket.headers.get("x-api-key")
+    if not api_key_is_valid(key):
         await websocket.close(code=1008)
         return
 

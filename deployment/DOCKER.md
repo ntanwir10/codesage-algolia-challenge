@@ -26,8 +26,8 @@ make up      # docker compose -f deployment/docker-compose.yml up -d
 
 - The backend reads `backend/.env` (`env_file`).
 - The container binds `0.0.0.0`, so `CODESAGE_API_KEY` is mandatory: the backend refuses to start without it.
-- Export `CODESAGE_API_KEY` in your shell before building. Compose passes it to the frontend build as `VITE_CODESAGE_API_KEY`, and Vite embeds it in the JavaScript bundle. It must match the value in `backend/.env`. This is acceptable for local, single-user use only.
-- Open http://localhost for the app. The dev file publishes nginx (port 80) and the backend (http://localhost:8001, API docs at `/docs`) on 127.0.0.1 only, because the bundle embeds the API key. The prod file publishes only port 80; reach the API through nginx at http://localhost/api/v1, and set `MCP_SERVER_URL=http://localhost` for the Claude Desktop bridge.
+- Export `CODESAGE_API_KEY` in your shell before building. Compose passes it to the frontend build as `VITE_CODESAGE_API_KEY`, and Vite embeds it in the JavaScript bundle. It must match the value in `backend/.env`. This is acceptable for local, single-user use only, which is why the dev file binds to 127.0.0.1. The prod stack does not embed the key (see below).
+- Open http://localhost for the app. The dev file publishes nginx (port 80) and the backend (http://localhost:8001, API docs at `/docs`) on 127.0.0.1 only, because the bundle embeds the API key. The prod file publishes only port 80, behind basic auth.
 - The SQLite database lives in the `backend_data` volume at `/app/data` (`DATABASE_URL=sqlite:///./data/codesage.db`). Migrations run automatically at startup.
 - Port 443 is not published: TLS is not configured. `nginx.conf` has a commented-out HTTPS server block to start from.
 
@@ -49,6 +49,15 @@ make clean         # stop and remove volumes (deletes the database)
 ## Production compose
 
 `make prod-build` and `make prod-up` use `deployment/docker-compose.prod.yml` and `backend/Dockerfile.prod` (no bind mount, no reload, `--workers 1`, `ENVIRONMENT=production`, so `/docs` is disabled). `CORS_ORIGINS` is a comma-separated list (`https://app.example.com,https://other.example.com`); the compose file ships the placeholder `https://yourdomain.com`, so replace it with your domain. The nginx container is named `codesage_nginx_prod` so it cannot clash with the dev stack. This stack is untested.
+
+Prod keeps the API key out of the browser. The frontend is built without `VITE_CODESAGE_API_KEY`; instead nginx (`deployment/nginx.prod.conf.template`) asks every visitor for a password with HTTP basic auth and adds `X-API-Key` to each `/api` and `/ws` request itself. `/health` stays open. Before `make prod-up`:
+
+```bash
+export CODESAGE_API_KEY=...   # the same value as in backend/.env
+docker run --rm httpd:alpine htpasswd -nbB <user> <password> > deployment/htpasswd
+```
+
+`deployment/htpasswd` is gitignored. Basic auth over plain HTTP sends the password in clear text, so enable TLS before exposing the stack beyond a trusted network. The Claude Desktop bridge should talk to the backend directly, not through this nginx.
 
 ## Troubleshooting
 

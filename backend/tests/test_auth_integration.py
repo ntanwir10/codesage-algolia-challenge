@@ -45,3 +45,14 @@ def test_websocket_rejects_a_missing_or_wrong_key(api_key):
 def test_websocket_accepts_the_key_as_a_query_parameter(api_key):
     with TestClient(app).websocket_connect(f"/ws?api_key={api_key}") as ws:
         assert ws.receive_json()["type"] == "connected"
+
+
+def test_websocket_accepts_the_key_as_a_header(api_key):
+    # The prod nginx proxy injects the key as a header; browsers never hold it
+    with TestClient(app).websocket_connect("/ws", headers={"X-API-Key": api_key}) as ws:
+        assert ws.receive_json()["type"] == "connected"
+    with pytest.raises(WebSocketDisconnect) as excinfo, TestClient(app).websocket_connect(
+        "/ws", headers={"X-API-Key": "wrong"}
+    ) as ws:
+        ws.receive_json()
+    assert excinfo.value.code == 1008
