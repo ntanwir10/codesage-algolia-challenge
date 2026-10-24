@@ -256,7 +256,9 @@ class RepositoryService:
                 )
 
             try:
-                self.db.commit()
+                # Flushing a batch can write thousands of rows; keep it off the event loop.
+                # The job owns this session, so using it from a worker thread is safe.
+                await asyncio.to_thread(self.db.commit)
             except Exception as e:
                 # Without a rollback every later batch fails with PendingRollbackError
                 self.db.rollback()
@@ -387,14 +389,18 @@ class RepositoryService:
         if not await algolia_service.delete_repository_index(repository_id, wait=True):
             raise IngestionError("Could not remove previously indexed records from Algolia")
 
-        # Entities reference files, so delete them first
-        self.db.query(CodeEntity).filter(CodeEntity.repository_id == repository_id).delete(
-            synchronize_session=False
-        )
-        self.db.query(CodeFile).filter(CodeFile.repository_id == repository_id).delete(
-            synchronize_session=False
-        )
-        self.db.commit()
+        def clear_rows():
+            # Entities reference files, so delete them first
+            self.db.query(CodeEntity).filter(CodeEntity.repository_id == repository_id).delete(
+                synchronize_session=False
+            )
+            self.db.query(CodeFile).filter(CodeFile.repository_id == repository_id).delete(
+                synchronize_session=False
+            )
+            self.db.commit()
+
+        # Large repositories have thousands of rows to delete; keep it off the event loop
+        await asyncio.to_thread(clear_rows)
 
     async def delete_repository(self, repository: Repository) -> bool:
         """Delete a repository and its Algolia records.

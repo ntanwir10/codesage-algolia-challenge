@@ -14,6 +14,7 @@ import time
 from typing import Any
 
 import structlog
+from algoliasearch.exceptions import RequestException
 from algoliasearch.search_client import SearchClient
 
 from app.core.config import get_settings
@@ -125,7 +126,12 @@ class AlgoliaService:
             return
 
         def apply() -> bool:
-            live = self.index.get_settings()
+            try:
+                live = self.index.get_settings()
+            except RequestException as e:
+                if e.status_code != 404:
+                    raise
+                live = {}  # A new index: set_settings creates it
             if all(live.get(key) == value for key, value in INDEX_SETTINGS.items()):
                 return False
             self.index.set_settings(INDEX_SETTINGS)

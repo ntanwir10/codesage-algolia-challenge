@@ -72,3 +72,18 @@ async def test_an_unpublished_save_does_not_hang_indexing(algolia_index, monkeyp
     monkeypatch.setattr(algolia_index, "save_objects", lambda objects: _PendingTask(8))
 
     assert await algolia_module.AlgoliaService().index_documents([{"objectID": "a"}]) is True
+
+
+async def test_settings_create_a_brand_new_index(algolia_index, monkeypatch):
+    from algoliasearch.exceptions import RequestException
+
+    def missing():
+        raise RequestException("Index does not exist", 404)
+
+    monkeypatch.setattr(algolia_module, "_configured_indexes", set())
+    monkeypatch.setattr(algolia_index, "get_settings", missing)
+
+    await algolia_module.AlgoliaService().setup_index_settings()
+
+    assert algolia_index.settings_writes == 1
+    assert algolia_index.settings == algolia_module.INDEX_SETTINGS

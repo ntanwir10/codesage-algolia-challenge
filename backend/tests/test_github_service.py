@@ -358,11 +358,14 @@ async def test_api_errors_raise_instead_of_returning_no_files(
     with pytest.raises(GitHubAPIError) as excinfo:
         await service_for(github_api).get_repository_files(REPO_URL, branch)
 
+    # A missing tree on a repository that exists names the branch instead
+    missing_branch = (route, status) == ("tree", 404)
     assert excinfo.value.status == status
-    assert phrase in str(excinfo.value)
+    assert ("Branch 'main' not found" if missing_branch else phrase) in str(excinfo.value)
     assert "octo/demo" in str(excinfo.value)
-    # Non-retryable errors are not repeated
-    assert len([r for r in github_api["requests"] if r.startswith("/repos")]) == 1
+    # Non-retryable errors are not repeated (a missing tree checks the repository once)
+    expected_calls = 2 if missing_branch else 1
+    assert len([r for r in github_api["requests"] if r.startswith("/repos")]) == expected_calls
 
 
 async def test_error_in_a_subdirectory_of_the_fallback_walk_is_not_swallowed(
@@ -443,3 +446,23 @@ def test_parse_github_url_accepts(url, expected):
 def test_parse_github_url_rejects(url):
     with pytest.raises(ValueError):
         parse_github_url(url)
+
+
+async def test_missing_branch_is_named_when_the_repository_exists(github_api):
+    github_api["always_fail"]["tree"] = (404, {})
+
+    with pytest.raises(GitHubAPIError) as excinfo:
+        await service_for(github_api).get_repository_files(REPO_URL, "no-such-branch")
+
+    assert excinfo.value.status == 404
+    assert str(excinfo.value) == "Branch 'no-such-branch' not found in octo/demo"
+
+
+async def test_missing_repository_is_reported_even_with_a_branch(github_api):
+    github_api["always_fail"]["tree"] = (404, {})
+    github_api["always_fail"]["repo"] = (404, {})
+
+    with pytest.raises(GitHubAPIError) as excinfo:
+        await service_for(github_api).get_repository_files(REPO_URL, "main")
+
+    assert "not found (404): octo/demo" in str(excinfo.value)

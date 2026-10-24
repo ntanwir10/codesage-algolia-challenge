@@ -13,6 +13,9 @@ services:
       - ../backend/.env
     environment:
       - DATABASE_URL=sqlite:///./data/codesage.db
+      # Algolia records are keyed by repository id, so this database must not
+      # share an index with any other one (they'd delete each other's records)
+      - ALGOLIA_INDEX_NAME=${PROD_ALGOLIA_INDEX_NAME:-codesage_code_entities_prod}
       - MCP_SERVER_HOST=0.0.0.0
       - MCP_SERVER_PORT=8001
       - ENVIRONMENT=production

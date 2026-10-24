@@ -304,7 +304,8 @@ class GitHubService:
             return files
 
         except Exception as e:
-            logger.error("Failed to get repository files", repo_url=repo_url, error=str(e))
+            # The caller records the failure on the repository; just trace it here
+            logger.debug("Failed to get repository files", repo_url=repo_url, error=str(e))
             raise
 
     def _select_candidates(self, entries: list[tuple[str, int]]) -> list[tuple[str, int]]:
@@ -332,13 +333,23 @@ class GitHubService:
         self, session: aiohttp.ClientSession, owner: str, repo: str, branch: str
     ) -> list[tuple[str, int]]:
         """List (path, size) for every file, via one git trees call when possible"""
-        tree = await self._make_request_with_retries(
-            session,
-            f"{self.base_url}/repos/{owner}/{repo}/git/trees/{urlquote(branch, safe='')}",
-            owner,
-            repo,
-            params={"recursive": "1"},
-        )
+        try:
+            tree = await self._make_request_with_retries(
+                session,
+                f"{self.base_url}/repos/{owner}/{repo}/git/trees/{urlquote(branch, safe='')}",
+                owner,
+                repo,
+                params={"recursive": "1"},
+            )
+        except GitHubAPIError as e:
+            if e.status != 404:
+                raise
+            # The repository may exist while the branch doesn't; say which. A
+            # missing repository raises its own 404 from this lookup.
+            await self._make_request_with_retries(
+                session, f"{self.base_url}/repos/{owner}/{repo}", owner, repo
+            )
+            raise GitHubAPIError(404, f"Branch '{branch}' not found in {owner}/{repo}") from e
         if tree.get("truncated"):
             logger.warning("Git tree truncated, walking contents API", owner=owner, repo=repo)
             entries: list[tuple[str, int]] = []

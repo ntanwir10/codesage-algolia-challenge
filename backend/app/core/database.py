@@ -1,7 +1,7 @@
 import structlog
-from fastapi import HTTPException
 from sqlalchemy import create_engine, event
 from sqlalchemy.orm import declarative_base, sessionmaker
+from starlette.exceptions import HTTPException
 
 from app.core.config import get_settings
 
@@ -45,7 +45,7 @@ def get_db():
     try:
         yield db
     except HTTPException:
-        # A deliberate 4xx from the endpoint, not a database problem
+        # A deliberate 4xx (FastAPI's or slowapi's 429), not a database problem
         db.rollback()
         raise
     except Exception as e:

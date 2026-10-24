@@ -117,7 +117,8 @@ class PerformanceMonitor:
         except Exception as e:
             metrics.errors_count += 1
             metrics.metadata["error"] = str(e)
-            logger.error(f"❌ Operation failed: {operation_name}", error=str(e))
+            # The operation's owner logs the failure; this only records the timing
+            logger.warning(f"❌ Operation failed: {operation_name}", error=str(e))
             raise
 
         finally:

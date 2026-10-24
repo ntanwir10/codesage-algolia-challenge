@@ -1,4 +1,5 @@
 import ast
+import asyncio
 import re
 from dataclasses import dataclass
 
@@ -110,7 +111,14 @@ class CodeParser:
         """
         Extract code entities from file content.
         Returns list of functions, classes, imports, doc sections for Algolia indexing.
+
+        Parsing is CPU-bound, so it runs in a worker thread to keep the event
+        loop (API, WebSocket, MCP) responsive while a repository is indexed.
         """
+        return await asyncio.to_thread(self.parse, file_path, content, language)
+
+    def parse(self, file_path: str, content: str, language: str) -> list[ParsedCodeEntity]:
+        """Synchronous entity extraction; returns [] for unsupported input or on error"""
         try:
             if not content or not content.strip():
                 return []
