@@ -1,8 +1,7 @@
-from sqlalchemy import create_engine
-from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import sessionmaker
-from sqlalchemy.pool import StaticPool
 import structlog
+from sqlalchemy import create_engine, event
+from sqlalchemy.orm import declarative_base, sessionmaker
+from starlette.exceptions import HTTPException
 
 from app.core.config import get_settings
 
@@ -12,10 +11,26 @@ settings = get_settings()
 # Create SQLAlchemy engine
 engine = create_engine(
     settings.database_url,
+    # Sessions cross threads (FastAPI's threadpool, background jobs); SQLite needs this to allow it
+    connect_args=(
+        {"check_same_thread": False}
+        if settings.database_url.startswith("sqlite")
+        else {}
+    ),
     pool_pre_ping=True,
     pool_recycle=300,
-    echo=settings.debug,
+    echo=settings.sql_echo,
 )
+
+if settings.database_url.startswith("sqlite") and ":memory:" not in settings.database_url:
+
+    @event.listens_for(engine, "connect")
+    def _configure_sqlite(dbapi_connection, _record):
+        cursor = dbapi_connection.cursor()
+        cursor.execute("PRAGMA journal_mode=WAL")
+        cursor.execute("PRAGMA foreign_keys=ON")
+        cursor.close()
+
 
 # Create SessionLocal class
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
@@ -29,6 +44,10 @@ def get_db():
     db = SessionLocal()
     try:
         yield db
+    except HTTPException:
+        # A deliberate 4xx (FastAPI's or slowapi's 429), not a database problem
+        db.rollback()
+        raise
     except Exception as e:
         logger.error("Database session error", error=str(e))
         db.rollback()

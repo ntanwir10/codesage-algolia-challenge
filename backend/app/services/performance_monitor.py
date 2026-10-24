@@ -3,17 +3,23 @@ Performance monitoring service for CodeSage operations.
 Tracks processing times, memory usage, and throughput metrics.
 """
 
+import itertools
 import time
-import asyncio
+from collections import defaultdict, deque
+from contextlib import asynccontextmanager
+from dataclasses import dataclass, field
+from typing import Any
+
 import psutil
 import structlog
-from typing import Dict, Any, Optional, List
-from dataclasses import dataclass, field
-from contextlib import asynccontextmanager
-from collections import defaultdict
-import json
 
 logger = structlog.get_logger()
+
+MAX_HISTORY = 1000
+MAX_SAMPLES_PER_OPERATION = 200
+
+# Prime psutil's non-blocking CPU counter; the first call returns a meaningless 0.0
+psutil.cpu_percent(interval=None)
 
 
 @dataclass
@@ -22,14 +28,14 @@ class PerformanceMetrics:
 
     operation_name: str
     start_time: float
-    end_time: Optional[float] = None
-    duration: Optional[float] = None
-    memory_start: Optional[float] = None
-    memory_end: Optional[float] = None
-    memory_peak: Optional[float] = None
+    end_time: float | None = None
+    duration: float | None = None
+    memory_start: float | None = None
+    memory_end: float | None = None
+    memory_peak: float | None = None
     items_processed: int = 0
     errors_count: int = 0
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    metadata: dict[str, Any] = field(default_factory=dict)
 
     def finalize(self):
         """Finalize metrics calculation"""
@@ -47,7 +53,7 @@ class PerformanceMetrics:
             return self.items_processed / self.duration
         return 0.0
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for logging/storage"""
         return {
             "operation": self.operation_name,
@@ -71,9 +77,12 @@ class PerformanceMonitor:
     """
 
     def __init__(self):
-        self.metrics_history: List[PerformanceMetrics] = []
-        self.active_operations: Dict[str, PerformanceMetrics] = {}
-        self.operation_stats = defaultdict(list)
+        self.metrics_history: deque[PerformanceMetrics] = deque(maxlen=MAX_HISTORY)
+        self.active_operations: dict[str, PerformanceMetrics] = {}
+        self.operation_stats: defaultdict[str, deque[PerformanceMetrics]] = (
+            defaultdict(lambda: deque(maxlen=MAX_SAMPLES_PER_OPERATION))
+        )
+        self._counter = itertools.count(1)
         self._process = psutil.Process()
 
     def _get_memory_usage(self) -> float:
@@ -85,10 +94,10 @@ class PerformanceMonitor:
 
     @asynccontextmanager
     async def monitor_operation(
-        self, operation_name: str, metadata: Optional[Dict[str, Any]] = None
+        self, operation_name: str, metadata: dict[str, Any] | None = None
     ):
         """Context manager for monitoring an operation"""
-        operation_id = f"{operation_name}_{int(time.time() * 1000)}"
+        operation_id = f"{operation_name}_{next(self._counter)}"
 
         # Start monitoring
         metrics = PerformanceMetrics(
@@ -107,7 +116,8 @@ class PerformanceMonitor:
         except Exception as e:
             metrics.errors_count += 1
             metrics.metadata["error"] = str(e)
-            logger.error(f"❌ Operation failed: {operation_name}", error=str(e))
+            # The operation's owner logs the failure; this only records the timing
+            logger.warning(f"❌ Operation failed: {operation_name}", error=str(e))
             raise
 
         finally:
@@ -119,7 +129,7 @@ class PerformanceMonitor:
             # Store metrics
             self.metrics_history.append(metrics)
             self.operation_stats[operation_name].append(metrics)
-            del self.active_operations[operation_id]
+            self.active_operations.pop(operation_id, None)
 
             # Log completion
             logger.info(
@@ -132,7 +142,7 @@ class PerformanceMonitor:
                 items=metrics.items_processed,
             )
 
-    def get_operation_summary(self, operation_name: str) -> Dict[str, Any]:
+    def get_operation_summary(self, operation_name: str) -> dict[str, Any]:
         """Get performance summary for an operation type"""
         ops = self.operation_stats.get(operation_name, [])
         if not ops:
@@ -163,10 +173,10 @@ class PerformanceMonitor:
             ),
         }
 
-    def get_system_metrics(self) -> Dict[str, Any]:
+    def get_system_metrics(self) -> dict[str, Any]:
         """Get current system performance metrics"""
         try:
-            cpu_percent = psutil.cpu_percent(interval=1)
+            cpu_percent = psutil.cpu_percent(interval=None)
             memory = psutil.virtual_memory()
             disk = psutil.disk_usage("/")
 
@@ -191,10 +201,12 @@ class PerformanceMonitor:
             logger.error(f"Failed to get system metrics: {e}")
             return {}
 
-    def get_performance_report(self) -> Dict[str, Any]:
+    def get_performance_report(
+        self, system_metrics: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
         """Generate comprehensive performance report"""
         operations_summary = {}
-        for op_name in self.operation_stats.keys():
+        for op_name in list(self.operation_stats):
             operations_summary[op_name] = self.get_operation_summary(op_name)
 
         return {
@@ -202,9 +214,11 @@ class PerformanceMonitor:
             "active_operations": len(self.active_operations),
             "total_operations": len(self.metrics_history),
             "operations_summary": operations_summary,
-            "system_metrics": self.get_system_metrics(),
+            "system_metrics": (
+                system_metrics if system_metrics is not None else self.get_system_metrics()
+            ),
             "recent_operations": [
-                op.to_dict() for op in self.metrics_history[-10:]  # Last 10 operations
+                op.to_dict() for op in list(self.metrics_history)[-10:]
             ],
         }
 
@@ -214,47 +228,15 @@ class PerformanceMonitor:
         self.operation_stats.clear()
         logger.info("🔄 Performance metrics reset")
 
-    def export_metrics(self, filepath: str):
-        """Export metrics to JSON file"""
-        try:
-            report = self.get_performance_report()
-            with open(filepath, "w") as f:
-                json.dump(report, f, indent=2, default=str)
-            logger.info(f"📊 Metrics exported to {filepath}")
-        except Exception as e:
-            logger.error(f"Failed to export metrics: {e}")
-
 
 # Global performance monitor instance
 performance_monitor = PerformanceMonitor()
 
 
 # Convenience functions
-async def monitor_repository_processing(repo_name: str, file_count: int):
-    """Monitor repository processing operation"""
+def monitor_repository_processing(repo_name: str | int, file_count: int = 0):
+    """Monitor repository processing (use with `async with`)"""
     return performance_monitor.monitor_operation(
         "repository_processing",
         metadata={"repo_name": repo_name, "file_count": file_count},
-    )
-
-
-async def monitor_github_api_call(endpoint: str):
-    """Monitor GitHub API call"""
-    return performance_monitor.monitor_operation(
-        "github_api_call", metadata={"endpoint": endpoint}
-    )
-
-
-async def monitor_algolia_indexing(index_name: str, item_count: int):
-    """Monitor Algolia indexing operation"""
-    return performance_monitor.monitor_operation(
-        "algolia_indexing",
-        metadata={"index_name": index_name, "item_count": item_count},
-    )
-
-
-async def monitor_code_parsing(language: str, file_count: int):
-    """Monitor code parsing operation"""
-    return performance_monitor.monitor_operation(
-        "code_parsing", metadata={"language": language, "file_count": file_count}
     )

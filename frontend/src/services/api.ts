@@ -1,8 +1,12 @@
 import axios, { type AxiosInstance } from "axios";
+import { MCPToolError } from "@/lib/errors";
 import type {
   Repository,
   CreateRepositoryRequest,
   RepositoryUpdate,
+  ProcessingStatus,
+  RepositoryStatsData,
+  ReprocessResponse,
 } from "@/types/repository";
 import type {
   MCPToolCallRequest,
@@ -10,82 +14,90 @@ import type {
   MCPToolsResponse,
   SearchQuery,
   SearchResponse,
-  MCPCapabilities,
+  SearchSuggestionsResponse,
 } from "@/types/mcp";
 
-class CodeSageAPI {
-  private client: AxiosInstance;
+/**
+ * All request paths below are relative to the base URL, which defaults to the
+ * same-origin `/api/v1` (nginx in Docker, the Vite proxy in dev) and can be
+ * overridden with VITE_API_BASE_URL. Paths must NOT repeat `/api/v1`.
+ */
+const DEFAULT_BASE_URL = "/api/v1";
+
+type AuthErrorListener = () => void;
+const authErrorListeners = new Set<AuthErrorListener>();
+
+/** Register a callback invoked (throttled) whenever the server answers 401. */
+export function onApiAuthError(listener: AuthErrorListener): () => void {
+  authErrorListeners.add(listener);
+  return () => {
+    authErrorListeners.delete(listener);
+  };
+}
+
+let lastAuthNotice = 0;
+function notifyAuthError(): void {
+  const now = Date.now();
+  if (now - lastAuthNotice < 5000) return;
+  lastAuthNotice = now;
+  authErrorListeners.forEach((listener) => listener());
+}
+
+function resolveBaseURL(): string {
+  const base = (import.meta.env.VITE_API_BASE_URL || DEFAULT_BASE_URL).replace(
+    /\/+$/,
+    ""
+  );
+  // Also accept a bare backend origin (e.g. http://localhost:8001), the older convention
+  return base.endsWith("/api/v1") ? base : `${base}/api/v1`;
+}
+
+/** Origin hosting /health: the API base's origin, or "" for same-origin. */
+function resolveOrigin(baseURL: string): string {
+  try {
+    return new URL(baseURL).origin;
+  } catch {
+    return "";
+  }
+}
+
+export class CodeSageAPI {
+  readonly client: AxiosInstance;
+  private readonly origin: string;
 
   constructor() {
+    const baseURL = resolveBaseURL();
+    this.origin = resolveOrigin(baseURL);
     this.client = axios.create({
-      baseURL: import.meta.env.VITE_API_BASE_URL || "http://localhost:8001",
+      baseURL,
       timeout: 30000,
-      headers: {
-        "Content-Type": "application/json",
-      },
+      headers: { "Content-Type": "application/json" },
     });
 
-    // Request interceptor for logging
-    this.client.interceptors.request.use(
-      (config) => {
-        console.log(
-          `Making ${config.method?.toUpperCase()} request to ${config.url}`
-        );
-        return config;
-      },
-      (error) => {
-        console.error("Request error:", error);
-        return Promise.reject(error);
-      }
-    );
+    // NOTE: VITE_* variables are inlined into the JavaScript bundle at build
+    // time, so this key ships to every browser that loads the app. That is
+    // acceptable only for this local, single-user setup; it is not a secret.
+    const apiKey = import.meta.env.VITE_CODESAGE_API_KEY;
+    this.client.interceptors.request.use((config) => {
+      if (apiKey) config.headers.set("X-API-Key", apiKey);
+      return config;
+    });
 
-    // Response interceptor for error handling
     this.client.interceptors.response.use(
       (response) => response,
-      (error) => {
-        console.error("API Error:", error.response?.data || error.message);
+      (error: unknown) => {
+        if (axios.isAxiosError(error) && error.response?.status === 401) {
+          notifyAuthError();
+        }
         return Promise.reject(error);
       }
     );
   }
 
-  // Repository Management
+  // Repository management
   async createRepository(data: CreateRepositoryRequest): Promise<Repository> {
-    console.log("🚀 Creating repository with data:", data);
-    console.log("🔍 API Base URL:", this.client.defaults.baseURL);
-
-    try {
-      const response = await this.client.post("/api/v1/repositories/", data);
-      console.log("✅ Repository created successfully:", response.data);
-      return response.data;
-    } catch (error: unknown) {
-      // Type guard for axios error
-      if (error && typeof error === "object" && "response" in error) {
-        const axiosError = error as {
-          response?: { status?: number; statusText?: string; data?: unknown };
-          config?: {
-            url?: string;
-            method?: string;
-            data?: unknown;
-            headers?: unknown;
-          };
-        };
-        console.error("❌ Repository creation failed:", {
-          status: axiosError.response?.status,
-          statusText: axiosError.response?.statusText,
-          data: axiosError.response?.data,
-          config: {
-            url: axiosError.config?.url,
-            method: axiosError.config?.method,
-            data: axiosError.config?.data,
-            headers: axiosError.config?.headers,
-          },
-        });
-      } else {
-        console.error("❌ Repository creation failed:", error);
-      }
-      throw error;
-    }
+    const response = await this.client.post<Repository>("/repositories/", data);
+    return response.data;
   }
 
   async getRepositories(params?: {
@@ -93,14 +105,15 @@ class CodeSageAPI {
     limit?: number;
     language?: string;
     status?: string;
-    mcp_ready?: boolean;
   }): Promise<Repository[]> {
-    const response = await this.client.get("/api/v1/repositories/", { params });
+    const response = await this.client.get<Repository[]>("/repositories/", {
+      params,
+    });
     return response.data;
   }
 
   async getRepository(id: number): Promise<Repository> {
-    const response = await this.client.get(`/api/v1/repositories/${id}`);
+    const response = await this.client.get<Repository>(`/repositories/${id}`);
     return response.data;
   }
 
@@ -108,101 +121,114 @@ class CodeSageAPI {
     id: number,
     data: RepositoryUpdate
   ): Promise<Repository> {
-    const response = await this.client.put(`/api/v1/repositories/${id}`, data);
-    return response.data;
-  }
-
-  async deleteRepository(id: number): Promise<void> {
-    await this.client.delete(`/api/v1/repositories/${id}`);
-  }
-
-  async reprocessRepository(id: number): Promise<{ message: string }> {
-    const response = await this.client.post(
-      `/api/v1/repositories/${id}/process`,
-      {
-        force_reprocess: true,
-      }
+    const response = await this.client.put<Repository>(
+      `/repositories/${id}`,
+      data
     );
     return response.data;
   }
 
-  async getRepositoryStatus(id: number): Promise<{
-    mcp_ready: boolean;
-    algolia_indexed: boolean;
-    message: string;
-  }> {
-    // For now, return a mock status since the endpoint doesn't exist yet
-    const repository = await this.getRepository(id);
-    return {
-      mcp_ready: repository.status === "completed",
-      algolia_indexed: repository.status === "completed",
-      message:
-        repository.status === "completed"
-          ? "Repository processing complete"
-          : "Repository is being processed",
-    };
+  async deleteRepository(id: number): Promise<void> {
+    await this.client.delete(`/repositories/${id}`);
   }
 
-  // MCP Integration
-  async getMCPCapabilities(): Promise<MCPCapabilities> {
-    const response = await this.client.get("/api/v1/ai/mcp/capabilities");
+  /** force_reprocess is a query parameter, not a request body. */
+  async reprocessRepository(id: number): Promise<ReprocessResponse> {
+    const response = await this.client.post<ReprocessResponse>(
+      `/repositories/${id}/process`,
+      undefined,
+      { params: { force_reprocess: true } }
+    );
     return response.data;
   }
 
+  async getRepositoryStatus(id: number): Promise<ProcessingStatus> {
+    const response = await this.client.get<ProcessingStatus>(
+      `/repositories/${id}/status`
+    );
+    return response.data;
+  }
+
+  async getRepositoryStats(id: number): Promise<RepositoryStatsData> {
+    const response = await this.client.get<RepositoryStatsData>(
+      `/repositories/${id}/stats`
+    );
+    return response.data;
+  }
+
+  // MCP over HTTP
   async getMCPTools(): Promise<MCPToolsResponse> {
-    const response = await this.client.get("/api/v1/ai/mcp/tools");
+    const response = await this.client.get<MCPToolsResponse>("/ai/mcp/tools");
     return response.data;
   }
 
-  async callMCPTool(
+  /** Returns the raw envelope; check `is_error` or use callTool(). */
+  async callMCPTool<T = unknown>(
     toolName: string,
     args: Record<string, unknown>
-  ): Promise<MCPToolCallResponse> {
+  ): Promise<MCPToolCallResponse<T>> {
     const request: MCPToolCallRequest = {
       tool_name: toolName,
       arguments: args,
     };
-    const response = await this.client.post(
-      "/api/v1/ai/mcp/tools/call",
+    const response = await this.client.post<MCPToolCallResponse<T>>(
+      "/ai/mcp/tools/call",
       request
     );
     return response.data;
   }
 
-  // Search functionality
-  async searchCode(query: SearchQuery): Promise<SearchResponse> {
-    const response = await this.callMCPTool("search_code", {
-      query: query.query,
-      repository_id: query.repository_id,
-      language: query.language,
-      entity_type: query.entity_type,
-    });
-    return {
-      hits: response.result.data.results || [],
-      total: response.result.data.total_hits || 0,
-      query: query.query,
-    };
+  /** Calls a tool and throws MCPToolError when the tool reports is_error. */
+  async callTool<T>(toolName: string, args: Record<string, unknown>): Promise<T> {
+    const response = await this.callMCPTool<T>(toolName, args);
+    if (response.is_error || response.result === null) {
+      throw new MCPToolError(
+        toolName,
+        response.error || `Tool "${toolName}" failed`
+      );
+    }
+    return response.result;
   }
 
-  async getSearchSuggestions(query: string): Promise<string[]> {
-    const response = await this.client.get("/api/v1/ai/search/suggestions", {
-      params: { query, limit: 10 },
-    });
+  // Search
+  async searchCode(query: SearchQuery): Promise<SearchResponse> {
+    // Only send arguments the server knows; it rejects unknown keys with 422.
+    const args: Record<string, unknown> = {
+      query: query.query,
+      limit: query.limit ?? 10,
+      page: query.page ?? 0,
+    };
+    if (query.repository) args.repository = query.repository;
+    if (query.language) args.language = query.language;
+    if (query.entity_type) args.entity_type = query.entity_type;
+    return this.callTool<SearchResponse>("search_code", args);
+  }
+
+  async getSearchSuggestions(
+    query: string,
+    options: { repositoryId?: number; limit?: number; signal?: AbortSignal } = {}
+  ): Promise<string[]> {
+    const response = await this.client.get<SearchSuggestionsResponse>(
+      "/ai/search/suggestions",
+      {
+        params: {
+          query,
+          limit: options.limit ?? 5,
+          repository_id: options.repositoryId,
+        },
+        signal: options.signal,
+      }
+    );
     return response.data.suggestions || [];
   }
 
-  // Health checks
+  // Health check lives at the origin root, not under the API base.
   async healthCheck(): Promise<{ status: string }> {
-    const response = await this.client.get("/health");
-    return response.data;
-  }
-
-  async getMCPServerInfo(): Promise<unknown> {
-    const response = await this.client.get("/mcp");
+    const response = await this.client.get<{ status: string }>("/health", {
+      baseURL: this.origin,
+    });
     return response.data;
   }
 }
 
-// Export singleton instance
 export const api = new CodeSageAPI();
-export default api;

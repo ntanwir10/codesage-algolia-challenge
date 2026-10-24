@@ -1,4 +1,6 @@
 import { useForm } from "react-hook-form";
+import { zodResolver } from "@hookform/resolvers/zod";
+import { isAxiosError } from "axios";
 import { z } from "zod";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -20,14 +22,17 @@ const githubUrlSchema = z.object({
       /^https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/?$/,
       "Must be a valid GitHub repository URL (https://github.com/owner/repo)"
     ),
-  branch: z.string().min(1, "Branch is required").default("main"),
+  // Empty means "use the repository's default branch"; never sent when empty.
+  branch: z.string().optional(),
   description: z.string().optional(),
 });
 
 type GitHubFormData = z.infer<typeof githubUrlSchema>;
 
+export type { GitHubFormData };
+
 interface GitHubFormProps {
-  onSubmit: (data: GitHubFormData) => void;
+  onSubmit: (data: GitHubFormData) => void | Promise<void>;
   isLoading?: boolean;
 }
 
@@ -38,10 +43,12 @@ export function GitHubForm({ onSubmit, isLoading = false }: GitHubFormProps) {
     formState: { errors, isValid },
     reset,
     watch,
+    setError,
   } = useForm<GitHubFormData>({
+    resolver: zodResolver(githubUrlSchema),
     defaultValues: {
       url: "",
-      branch: "main",
+      branch: "",
       description: "",
     },
     mode: "onChange",
@@ -51,14 +58,23 @@ export function GitHubForm({ onSubmit, isLoading = false }: GitHubFormProps) {
   const urlValue = watch("url");
   const repoName = urlValue ? extractRepoName(urlValue) : "";
 
-  const handleFormSubmit = (data: GitHubFormData) => {
+  const handleFormSubmit = async (data: GitHubFormData) => {
     try {
-      // Validate with Zod
-      const validatedData = githubUrlSchema.parse(data);
-      onSubmit(validatedData);
+      await onSubmit(githubUrlSchema.parse(data));
       reset();
     } catch (error) {
-      console.error("Validation error:", error);
+      // Keep the user's input; surface server-side validation messages
+      const detail = isAxiosError(error)
+        ? error.response?.data?.detail
+        : undefined;
+      if (isAxiosError(error) && error.response?.status === 422 && Array.isArray(detail)) {
+        const messages = detail
+          .map((d: { msg?: string }) => d?.msg)
+          .filter(Boolean)
+          .join("; ");
+        setError("root.server", { message: messages || "Validation failed" });
+      }
+      // Other failures (409, 429, ...) are toasted by the caller.
     }
   };
 
@@ -101,7 +117,7 @@ export function GitHubForm({ onSubmit, isLoading = false }: GitHubFormProps) {
             </label>
             <Input
               id="branch"
-              placeholder="main"
+              placeholder="Default branch (leave empty)"
               {...register("branch")}
               className={errors.branch ? "border-destructive" : ""}
             />
@@ -122,6 +138,12 @@ export function GitHubForm({ onSubmit, isLoading = false }: GitHubFormProps) {
               {...register("description")}
             />
           </div>
+
+          {errors.root?.server && (
+            <p role="alert" className="text-sm text-destructive">
+              {errors.root.server.message}
+            </p>
+          )}
 
           <Button
             type="submit"

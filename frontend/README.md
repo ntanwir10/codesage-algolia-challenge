@@ -1,204 +1,53 @@
-# CodeSage - MCP-First Code Discovery: Frontend
+# CodeSage frontend
 
-Simple repository management interface for **CodeSage - MCP-First Code Discovery**, the only code discovery tool built entirely around the Model Context Protocol (MCP) for seamless AI integration.
+React 19 + TypeScript dashboard built with Vite, Tailwind CSS, TanStack Query, React Router and Axios. It lets you add GitHub repositories, watch indexing progress, and search the indexed code.
 
-## 🎯 Purpose
+## Pages
 
-The frontend provides a **minimal interface** for repository management. The core code discovery happens through **Claude Desktop** and the MCP protocol - not through complex frontend UI. This reflects our **MCP-first architecture** where AI interactions happen through MCP integration, not web interfaces.
+- `/` home page
+- `/dashboard` repository list and add form
+- `/repository/:id` status, statistics and search for one repository
 
-## ✨ Features
-
-### 🏗️ Repository Management
-
-- **GitHub URL Submission** - Clean form for repository input
-- **Repository Listing** - View submitted repositories with status
-- **Status Tracking** - Visual indicators (pending, processing, completed)
-- **Basic CRUD** - Create, read, delete repositories
-
-### 🎨 Simple UI/UX  
-
-- **React 18 + TypeScript** - Modern, type-safe development
-- **TailwindCSS** - Clean, responsive design
-- **Vite** - Fast development and building
-- **shadcn/ui** - Consistent component library
-
-## 🚫 What This Frontend Does NOT Do
-
-- ❌ Complex code search interface
-- ❌ WebSocket real-time updates
-- ❌ Collaboration features  
-- ❌ Advanced analytics dashboards
-- ❌ Direct AI chat interface
-
-**Why?** Because code discovery happens through **Claude Desktop** via MCP protocol. The frontend's job is simple repository management only. This is our **unique differentiator**: MCP-first architecture for code discovery.
-
-## 🚀 Development
-
-### Frontend Prerequisites
-
-- Node.js 18+
-- Backend running on `http://localhost:8001`
-
-### Setup
+## Commands
 
 ```bash
-cd frontend
 npm install
-npm run dev
+npm run dev       # Vite dev server on http://localhost:5173
+npm test          # vitest unit tests (jsdom)
+npm run lint      # eslint
+npm run build     # tsc -b && vite build, output in dist/
 ```
 
-### Environment Configuration
+From the repo root, `make start-frontend` runs `npm run dev`.
 
-The frontend gets its configuration from the backend API. No separate `.env` file needed.
+## Talking to the backend
 
-Optional environment variables:
+In development, `vite.config.ts` proxies `/api`, `/ws` and `/health` to `127.0.0.1:8001`, so start the backend first (`make start-backend`). The app uses same-origin `/api/v1` and `/ws`; in Docker, nginx does the same proxying.
 
-```bash
-# Only if backend runs on different URL
-VITE_API_BASE_URL=http://localhost:8001/api/v1
+| Variable | Purpose |
+| --- | --- |
+| `VITE_CODESAGE_API_KEY` | Sent as `X-API-Key` on requests and as `?api_key=` on the WebSocket. Must equal `CODESAGE_API_KEY` in `backend/.env`. |
+| `VITE_API_BASE_URL` | Overrides the API base URL (default `/api/v1`) |
+| `VITE_WS_URL` (or `VITE_WEBSOCKET_URL`) | Overrides the WebSocket URL (default: same origin, `ws:` or `wss:` following the page) |
+
+Put them in `frontend/.env.local` for development. In Docker they are build arguments (see `deployment/DOCKER.md`).
+
+Warning: Vite inlines `VITE_*` values into the bundle, so the API key is visible to anyone who can load the app. Use this setup for local, single-user work only.
+
+## Live updates
+
+The app subscribes to `/ws` for repository status frames (`{type, data}`) and also polls the status endpoint while a repository is `pending` or `processing`. If the server rejects the key, the WebSocket client stops retrying and logs a hint to check `VITE_CODESAGE_API_KEY`.
+
+## Layout
+
+```
+src/pages/        route components
+src/components/   features, forms, layout, ui
+src/services/     api.ts (HTTP + MCP tool calls), websocket.ts
+src/hooks/        realtime status and toast hooks
+src/lib/          polling, query client, error helpers
+src/types/        API types
+src/test/         vitest setup
 ```
 
-### Scripts
-
-```bash
-npm run dev         # Development server
-npm run build       # Production build
-npm run preview     # Preview production build
-npm run lint        # ESLint checking
-npm run type-check  # TypeScript checking
-```
-
-## 📁 Project Structure
-
-```tree
-src/
-├── components/
-│   ├── ui/              # Basic UI components (button, card, etc.)
-│   └── forms/           # Repository form components
-├── pages/
-│   ├── HomePage.tsx     # Repository submission
-│   └── RepositoryPage.tsx # Repository list/management
-├── services/
-│   └── api.ts           # Backend API client
-├── types/
-│   └── repository.ts    # TypeScript types
-└── main.tsx            # App entry point
-```
-
-## 🔌 API Integration
-
-The frontend connects to these backend endpoints:
-
-```typescript
-// Repository Management
-GET    /api/v1/repositories/        // List repositories
-POST   /api/v1/repositories/        // Create repository  
-GET    /api/v1/repositories/{id}    // Get repository
-DELETE /api/v1/repositories/{id}    // Delete repository
-```
-
-**Note**: The frontend does NOT call MCP endpoints. Those are used by Claude Desktop directly.
-
-## 🎨 UI Components
-
-### Repository Form
-
-```tsx
-// Simple GitHub URL submission
-<form onSubmit={handleSubmit}>
-  <input 
-    type="url" 
-    placeholder="https://github.com/facebook/react"
-    pattern="https://github\.com/.+"
-  />
-  <button type="submit">Submit Repository</button>
-</form>
-```
-
-### Repository List
-
-```tsx
-// Basic table with status indicators
-<table>
-  <thead>
-    <tr>
-      <th>Repository</th>
-      <th>Status</th>
-      <th>Actions</th>
-    </tr>
-  </thead>
-  <tbody>
-    {repositories.map(repo => (
-      <tr key={repo.id}>
-        <td>{repo.name}</td>
-        <td><StatusBadge status={repo.status} /></td>
-        <td><DeleteButton onClick={() => deleteRepo(repo.id)} /></td>
-      </tr>
-    ))}
-  </tbody>
-</table>
-```
-
-## 🔧 Technical Decisions
-
-### Why Keep It Simple?
-
-- **MCP-first architecture** - AI discovery happens in Claude Desktop (our unique differentiator)
-- **Focused responsibility** - Repository management only
-- **Faster development** - Less complexity means faster iteration
-- **Better UX** - Users get powerful AI discovery without complex UI
-- **Unique positioning** - Only code discovery tool built entirely around MCP
-
-### Technology Choices
-
-- **React 18** - Modern, stable, great TypeScript support
-- **TailwindCSS** - Utility-first, no complex CSS architecture needed
-- **Vite** - Fast development, simple configuration
-- **TypeScript** - Type safety for API integration
-
-## 🚀 Deployment
-
-### Development
-
-```bash
-npm run dev  # http://localhost:5173
-```
-
-### Production Build
-
-```bash
-npm run build    # Creates dist/ folder
-npm run preview  # Preview production build locally
-```
-
-### Static Hosting
-
-The built frontend is a static site that can be deployed to:
-
-- Vercel
-- Netlify  
-- GitHub Pages
-- Any static hosting service
-
-Just set `VITE_API_BASE_URL` to your production backend URL.
-
-## 🧪 Testing Strategy
-
-### Manual Testing
-
-1. Start backend server
-2. Submit GitHub repository URL
-3. Verify repository appears in list
-4. Check status updates (pending → processing → completed)
-5. Test delete functionality
-
-### Integration with MCP
-
-1. Submit repository and wait for "completed" status
-2. Connect Claude Desktop to backend MCP server
-3. Ask questions about the repository through Claude
-4. Verify Claude can discover and analyze the code
-
----
-
-**The frontend's role is simple: manage repositories so Claude Desktop can discover the code through MCP.**
+Tests sit next to the code as `*.test.ts(x)`. They are unit tests only.

@@ -1,41 +1,32 @@
 """
-CodeSage - MCP-First Code Discovery: Configuration
+CodeSage configuration.
 
-This module provides configuration management for CodeSage - the only code discovery
-tool built entirely around the Model Context Protocol (MCP) for seamless AI integration.
-
-The configuration includes MCP server settings, Algolia search integration,
-and all necessary parameters for MCP-first code discovery architecture.
+Settings are read from environment variables (and a .env file) into a single
+cached Settings object: database, Algolia, GitHub, API key, CORS, rate limits
+and the MCP server description.
 """
 
-import os
-from typing import Optional, List
-from pydantic import Field
-from pydantic_settings import BaseSettings
-
 # Load environment variables from .env file
+import structlog
 from dotenv import load_dotenv
+from pydantic import Field
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 load_dotenv()
+
+logger = structlog.get_logger()
 
 
 class Settings(BaseSettings):
     # Core FastAPI Settings
-    app_name: str = "CodeSage - MCP-First Code Discovery"
-    debug: bool = False
     environment: str = "development"
-    secret_key: str = Field(
-        default="dev-secret-key-change-in-production",
-        description="Secret key for authentication",
-    )
 
     # Database Settings
     database_url: str = Field(
         default="sqlite:///./codesage.db",
         description="Database URL (SQLite by default)",
     )
-    database_pool_size: int = 5
-    database_max_overflow: int = 10
+    sql_echo: bool = Field(default=False, description="Log every SQL statement")
 
     # MCP Server Settings
     mcp_server_name: str = Field(
@@ -46,14 +37,14 @@ class Settings(BaseSettings):
         default="AI-powered code discovery through natural language - MCP-First Architecture",
         description="MCP server description",
     )
-    mcp_server_host: str = Field(default="0.0.0.0", description="MCP server host")
+    mcp_server_host: str = Field(default="127.0.0.1", description="MCP server host")
     mcp_server_port: int = Field(default=8001, description="MCP server port")
 
     # Algolia Settings (Primary Search Engine)
-    algolia_app_id: Optional[str] = Field(
+    algolia_app_id: str | None = Field(
         default=None, description="Algolia application ID"
     )
-    algolia_admin_api_key: Optional[str] = Field(
+    algolia_admin_api_key: str | None = Field(
         default=None, description="Algolia admin API key (required for indexing)"
     )
     algolia_index_name: str = Field(
@@ -62,8 +53,14 @@ class Settings(BaseSettings):
     )
 
     # GitHub Settings
-    github_token: Optional[str] = Field(
+    github_token: str | None = Field(
         default=None, description="GitHub personal access token for API access"
+    )
+
+    # Security
+    codesage_api_key: str | None = Field(
+        default=None,
+        description="API key required on write endpoints (X-API-Key header)",
     )
 
     # API Settings
@@ -73,15 +70,13 @@ class Settings(BaseSettings):
     )
 
     @property
-    def cors_origins_list(self) -> List[str]:
+    def cors_origins_list(self) -> list[str]:
         """Convert CORS origins string to list"""
         if not self.cors_origins:
             return []
         return [
             origin.strip() for origin in self.cors_origins.split(",") if origin.strip()
         ]
-
-    allowed_hosts: List[str] = ["localhost", "127.0.0.1"]
 
     # Rate Limiting (Essential only)
     enable_rate_limiting: bool = True
@@ -90,34 +85,6 @@ class Settings(BaseSettings):
 
     # Logging Settings
     log_level: str = "INFO"
-    log_format: str = "json"
-
-    # MCP Tools Configuration
-    mcp_tools_enabled: List[str] = [
-        "search_code",
-        "analyze_repository",
-        "explore_functions",
-        "explain_code",
-        "find_patterns",
-    ]
-
-    # Supported Programming Languages
-    supported_languages: List[str] = [
-        "python",
-        "javascript",
-        "typescript",
-        "java",
-        "go",
-        "rust",
-        "cpp",
-        "c",
-        "csharp",
-        "php",
-        "ruby",
-    ]
-
-    # MCP Response timeout for fast AI interactions
-    mcp_response_timeout_seconds: int = 30
 
     @property
     def MCP_SERVER_CONFIG(self) -> dict:
@@ -131,17 +98,37 @@ class Settings(BaseSettings):
                 "resources": True,
                 "prompts": False,
             },
-            "tools_enabled": self.mcp_tools_enabled,
         }
 
-    class Config:
-        env_file = ".env"  # Load from backend directory (project root .env will be found automatically)
-        case_sensitive = False
-        extra = "ignore"
+    # Load from the backend directory's .env (load_dotenv() above also searches upward)
+    model_config = SettingsConfigDict(env_file=".env", case_sensitive=False, extra="ignore")
+
+
+LOOPBACK_HOSTS = ("127.0.0.1", "localhost", "::1")
+
+
+def validate_runtime_settings(settings: Settings) -> None:
+    """Refuse to start with an unsafe configuration; warn about a soft one."""
+    if "*" in settings.cors_origins_list:
+        raise RuntimeError(
+            "CORS_ORIGINS must not contain '*' because credentials are allowed; "
+            "list the allowed origins explicitly"
+        )
+    loopback = settings.mcp_server_host in LOOPBACK_HOSTS
+    if not settings.codesage_api_key:
+        if not loopback:
+            raise RuntimeError(
+                "CODESAGE_API_KEY is required when MCP_SERVER_HOST is not a "
+                f"loopback address (host is {settings.mcp_server_host!r})"
+            )
+        logger.warning(
+            "CODESAGE_API_KEY is not set; write endpoints are unauthenticated "
+            "(acceptable on loopback only)"
+        )
 
 
 # Global settings instance
-_settings: Optional[Settings] = None
+_settings: Settings | None = None
 
 
 def get_settings() -> Settings:

@@ -1,41 +1,31 @@
-# CodeSage - MCP-First Code Discovery Backend Dependencies
-# 
-# This project is built entirely around the Model Context Protocol (MCP)
-# for seamless AI integration with Claude Desktop and other MCP clients.
-# 
-# Core FastAPI and web framework
-fastapi==0.104.1
-uvicorn[standard]==0.24.0
+# CodeSage backend runtime dependencies (Python 3.13)
+# Dev and test tools live in requirements-dev.txt
 
-# Database and ORM
-sqlalchemy>=2.0.32  # Latest version with Python 3.13 support
-alembic==1.13.0
-# Removed psycopg2-binary - not needed for SQLite database
+# Web framework
+fastapi==0.161.1
+uvicorn[standard]==0.54.0
 
-# Algolia search
+# Database and migrations (SQLite)
+sqlalchemy==2.1.6
+alembic==1.20.1
+
+# Algolia search (v3 client; calls run in a thread pool)
 algoliasearch==3.0.0
 
-# HTTP client for GitHub API
-aiohttp==3.9.1
+# GitHub API client
+aiohttp==3.14.5
 
-# Data validation and settings
-pydantic>=2.8.0  # Latest version with Python 3.13 support
-pydantic-settings>=2.4.0  # Compatible version
+# Settings and validation
+pydantic==2.14.1
+pydantic-settings==2.16.1
+python-dotenv==1.2.4
 
-# Logging and monitoring
-structlog==23.2.0
-psutil==5.9.6  # System and process monitoring
+# Logging, monitoring, rate limiting
+structlog==26.1.0
+psutil==7.2.2
+slowapi==0.1.10
 
-# Security and rate limiting (simplified)
-slowapi==0.1.9
-limits==3.6.0
-
-# Development and testing
-pytest==7.4.3
-pytest-asyncio==0.21.1
-httpx==0.25.2  # For testing HTTP endpoints
-
-# Utilities
-python-multipart==0.0.6  # For form data
-email-validator==2.0.0   # Non-yanked version
-python-dotenv==1.0.0     # For .env file loading
+tree-sitter-language-pack==1.22.1
+regex==2026.9.29
+mcp==2.3.0
+httpx2==2.16.0

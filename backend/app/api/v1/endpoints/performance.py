@@ -3,10 +3,12 @@ Performance monitoring API endpoints.
 Provides real-time performance metrics and system monitoring.
 """
 
-from typing import Dict, Any
+import time
+from typing import Any
+
+import structlog
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
-import structlog
 
 from app.services.performance_monitor import performance_monitor
 
@@ -20,8 +22,8 @@ class PerformanceReportResponse(BaseModel):
     timestamp: float
     active_operations: int
     total_operations: int
-    operations_summary: Dict[str, Any]
-    system_metrics: Dict[str, Any]
+    operations_summary: dict[str, Any]
+    system_metrics: dict[str, Any]
     recent_operations: list
 
 
@@ -44,7 +46,7 @@ async def get_performance_metrics():
         logger.error(f"Failed to get performance metrics: {e}")
         raise HTTPException(
             status_code=500, detail="Failed to retrieve performance metrics"
-        )
+        ) from e
 
 
 @router.get(
@@ -73,7 +75,7 @@ async def get_operation_performance(operation_name: str):
         logger.error(f"Failed to get operation performance for {operation_name}: {e}")
         raise HTTPException(
             status_code=500, detail="Failed to retrieve operation metrics"
-        )
+        ) from e
 
 
 @router.get(
@@ -98,7 +100,7 @@ async def get_system_metrics():
         raise
     except Exception as e:
         logger.error(f"Failed to get system metrics: {e}")
-        raise HTTPException(status_code=500, detail="Failed to retrieve system metrics")
+        raise HTTPException(status_code=500, detail="Failed to retrieve system metrics") from e
 
 
 @router.post(
@@ -116,15 +118,16 @@ async def reset_performance_metrics():
         performance_monitor.reset_metrics()
         return {
             "message": "Performance metrics reset successfully",
-            "timestamp": performance_monitor.get_performance_report()["timestamp"],
+            "timestamp": time.time(),
         }
     except Exception as e:
         logger.error(f"Failed to reset performance metrics: {e}")
         raise HTTPException(
             status_code=500, detail="Failed to reset performance metrics"
-        )
+        ) from e
 
 
+@router.get("/health", include_in_schema=False)
 @router.get(
     "/health-check",
     summary="Performance Health Check",
@@ -176,12 +179,12 @@ async def performance_health_check():
                     "memory_mb", 0
                 ),
             },
-            "timestamp": performance_monitor.get_performance_report()["timestamp"],
+            "timestamp": time.time(),
         }
 
     except Exception as e:
         logger.error(f"Performance health check failed: {e}")
-        raise HTTPException(status_code=500, detail="Performance health check failed")
+        raise HTTPException(status_code=500, detail="Performance health check failed") from e
 
 
 @router.get(
@@ -220,4 +223,4 @@ async def export_performance_metrics(
         raise
     except Exception as e:
         logger.error(f"Failed to export performance metrics: {e}")
-        raise HTTPException(status_code=500, detail="Failed to export metrics")
+        raise HTTPException(status_code=500, detail="Failed to export metrics") from e

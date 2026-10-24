@@ -1,24 +1,152 @@
-import os
-import re
-import tempfile
-import shutil
-from typing import List, Dict, Any
 import asyncio
+import fnmatch
+import re
+import time
+from dataclasses import dataclass
+from typing import Any
+from urllib.parse import quote as urlquote
+from urllib.parse import unquote, urlsplit
+
 import aiohttp
 import structlog
-from urllib.parse import urlparse
-import base64
-from dataclasses import dataclass
-from functools import lru_cache
-import time
+
+from app.core.config import get_settings
 
 logger = structlog.get_logger()
 
 # Performance constants
 MAX_CONCURRENT_REQUESTS = 5  # GitHub API rate limiting
-REQUEST_DELAY = 0.1  # Delay between requests to avoid rate limits
-CACHE_TTL = 300  # 5 minutes cache for repository metadata
-MAX_RETRIES = 3  # Retry failed requests
+MAX_RETRIES = 3  # Retry timeouts and 5xx responses
+RETRY_BACKOFF_BASE = 1.0  # Seconds; attempt n waits base * 2**n
+MAX_RATE_LIMIT_WAIT = 60  # Longest we will sleep for a rate-limit reset
+
+# Directory names (matched as path segments) that hold generated or third-party code
+DENIED_DIRS = frozenset(
+    {
+        "node_modules",
+        "dist",
+        "build",
+        "vendor",
+        "third_party",
+        ".git",
+        "__pycache__",
+        ".next",
+        "coverage",
+    }
+)
+# File name patterns (case-insensitive) that are generated, minified or lockfiles
+DENIED_FILE_PATTERNS = (
+    "*.min.js",
+    "*.min.css",
+    "*.bundle.js",
+    "*.map",
+    "package-lock.json",
+    "yarn.lock",
+    "pnpm-lock.yaml",
+    "poetry.lock",
+    "cargo.lock",
+)
+
+# File extensions we index, mapped to their language
+EXT_TO_LANGUAGE: dict[str, str] = {
+    "py": "python",
+    "js": "javascript",
+    "ts": "typescript",
+    "jsx": "javascript",
+    "tsx": "typescript",
+    "java": "java",
+    "go": "go",
+    "rs": "rust",
+    "cpp": "cpp",
+    "c": "c",
+    "cs": "csharp",
+    "php": "php",
+    "rb": "ruby",
+    "html": "html",
+    "css": "css",
+    "scss": "scss",
+    "sql": "sql",
+    "json": "json",
+    "yaml": "yaml",
+    "yml": "yaml",
+    "xml": "xml",
+    "md": "markdown",
+}
+
+_NAME_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
+
+
+def is_denied_path(path: str) -> bool:
+    """True if the path sits under a denied directory or is a denied file"""
+    parts = [p for p in path.split("/") if p]
+    if not parts:
+        return True
+    if any(part in DENIED_DIRS for part in parts[:-1]):
+        return True
+    name = parts[-1].lower()
+    return any(fnmatch.fnmatchcase(name, pat) for pat in DENIED_FILE_PATTERNS)
+
+
+def parse_github_url(url: str) -> tuple[str, str, str | None]:
+    """Parse a GitHub URL into (owner, repo, branch_or_None).
+
+    Accepts https/http (optionally www.), a trailing slash, a trailing .git,
+    /tree/<branch> and git@github.com:owner/repo.git. Anything else raises
+    ValueError.
+    """
+    if not isinstance(url, str) or not url.strip():
+        raise ValueError("Invalid GitHub URL: empty")
+    raw = url.strip()
+    branch: str | None = None
+
+    ssh = re.match(r"^git@github\.com:([^/?#]+)/([^/?#]+?)/?$", raw)
+    if ssh:
+        owner, repo = ssh.groups()
+    else:
+        try:
+            parts = urlsplit(raw)
+            hostname = parts.hostname
+            port = parts.port
+        except ValueError as e:
+            raise ValueError(f"Invalid GitHub URL: {url}") from e
+        if parts.scheme not in ("http", "https"):
+            raise ValueError(f"Invalid GitHub URL (unsupported scheme): {url}")
+        if hostname not in ("github.com", "www.github.com"):
+            raise ValueError(f"Invalid GitHub URL (host must be github.com): {url}")
+        if parts.username or parts.password or port:
+            raise ValueError(f"Invalid GitHub URL (unexpected credentials or port): {url}")
+        if parts.query or parts.fragment:
+            raise ValueError(f"Invalid GitHub URL (query or fragment not allowed): {url}")
+        segments = [s for s in parts.path.split("/") if s]
+        if len(segments) < 2:
+            raise ValueError(f"Invalid GitHub URL (missing owner or repository): {url}")
+        owner, repo = segments[0], segments[1]
+        rest = segments[2:]
+        if rest:
+            if rest[0] != "tree" or len(rest) < 2:
+                raise ValueError(f"Invalid GitHub URL (unsupported path): {url}")
+            branch = "/".join(unquote(s) for s in rest[1:])
+
+    if repo.endswith(".git"):
+        repo = repo[: -len(".git")]
+    if not _NAME_RE.match(owner) or not repo or not _NAME_RE.match(repo) or repo in (".", ".."):
+        raise ValueError(f"Invalid GitHub URL (bad owner or repository name): {url}")
+    if branch is not None and (not branch or ".." in branch.split("/") or "\x00" in branch):
+        raise ValueError(f"Invalid GitHub URL (bad branch): {url}")
+    return owner, repo, branch
+
+
+def quote_path(path: str) -> str:
+    """Percent-encode each segment of a slash-separated path"""
+    return "/".join(urlquote(seg, safe="") for seg in path.split("/"))
+
+
+class GitHubAPIError(Exception):
+    """GitHub returned an error status while listing repository contents"""
+
+    def __init__(self, status: int, message: str):
+        super().__init__(message)
+        self.status = status
 
 
 @dataclass
@@ -31,38 +159,6 @@ class GitHubFile:
     language: str
     filename: str
 
-    def is_code_file(self) -> bool:
-        """Check if this is a code file we should process"""
-        code_extensions = {
-            "py",
-            "js",
-            "ts",
-            "jsx",
-            "tsx",
-            "java",
-            "go",
-            "rs",
-            "cpp",
-            "c",
-            "cs",
-            "php",
-            "rb",
-            "html",
-            "css",
-            "scss",
-            "sql",
-            "json",
-            "yaml",
-            "yml",
-            "xml",
-            "md",
-        }
-        if not self.filename:
-            return False
-
-        ext = self.filename.lower().split(".")[-1] if "." in self.filename else ""
-        return ext in code_extensions
-
 
 class GitHubService:
     """
@@ -71,11 +167,10 @@ class GitHubService:
     """
 
     def __init__(self):
-        self.token = os.getenv("GITHUB_TOKEN")
+        self.token = get_settings().github_token
         self.base_url = "https://api.github.com"
-        self.session = None
+        self.raw_base_url = "https://raw.githubusercontent.com"
         self._semaphore = asyncio.Semaphore(MAX_CONCURRENT_REQUESTS)
-        self._cache = {}  # Simple in-memory cache
 
         # Set processing limits
         self.max_files = 1000  # Maximum number of files to process
@@ -84,142 +179,243 @@ class GitHubService:
         if not self.token:
             logger.warning("GitHub token not found. Rate limits will be lower.")
 
-    async def _get_session(self) -> aiohttp.ClientSession:
-        """Get or create aiohttp session with proper headers"""
-        if not self.session:
-            headers = {
-                "Accept": "application/vnd.github.v3+json",
-                "User-Agent": "CodeSage-MCP-Server/1.0",
-            }
-            if self.token:
-                headers["Authorization"] = f"token {self.token}"
+    def _new_session(self) -> aiohttp.ClientSession:
+        """One session per get_repository_files call"""
+        headers = {
+            "Accept": "application/vnd.github.v3+json",
+            "User-Agent": "CodeSage-MCP-Server/1.0",
+        }
+        if self.token:
+            headers["Authorization"] = f"token {self.token}"
+        timeout = aiohttp.ClientTimeout(total=30, connect=10)
+        return aiohttp.ClientSession(headers=headers, timeout=timeout)
 
-            # Optimize connection pooling for GitHub API
-            connector = aiohttp.TCPConnector(
-                limit=100,  # Total connection pool size
-                limit_per_host=MAX_CONCURRENT_REQUESTS,  # Per-host limit
-                keepalive_timeout=30,
-                enable_cleanup_closed=True,
-            )
+    async def _make_request_with_retries(
+        self,
+        session: aiohttp.ClientSession,
+        url: str,
+        owner: str,
+        repo: str,
+        path: str = "",
+        params: dict[str, str] | None = None,
+    ) -> Any:
+        """GET a GitHub API URL and return its JSON body.
 
-            timeout = aiohttp.ClientTimeout(total=30, connect=10)
+        Timeouts, connection errors and 5xx are retried with backoff up to
+        MAX_RETRIES. A rate-limited 403/429 waits for X-RateLimit-Reset (at
+        most MAX_RATE_LIMIT_WAIT seconds) and retries once. Everything else
+        raises GitHubAPIError; this never returns an empty result on failure.
+        """
+        rate_limit_retried = False
+        attempt = 0
+        while True:
+            failure: GitHubAPIError
+            try:
+                async with session.get(url, params=params) as response:
+                    if response.status == 200:
+                        return await response.json()
+                    status = response.status
+                    headers = response.headers
+                    body = (await response.text())[:500]
+                logger.warning("GitHub API non-200", url=url, status=status, response_text=body)
+                failure = GitHubAPIError(
+                    status, self._describe_api_error(status, headers, owner, repo, path)
+                )
+                if (
+                    status in (403, 429)
+                    and headers.get("X-RateLimit-Remaining") == "0"
+                    and not rate_limit_retried
+                ):
+                    try:
+                        wait = int(headers.get("X-RateLimit-Reset", "")) - time.time()
+                    except ValueError:
+                        raise failure from None
+                    rate_limit_retried = True
+                    wait = max(0.0, min(wait + 1, MAX_RATE_LIMIT_WAIT))
+                    logger.warning("Rate limit hit, waiting", seconds=wait)
+                    await asyncio.sleep(wait)
+                    continue
+                if status < 500:
+                    raise failure
+            except TimeoutError:
+                target = f"{owner}/{repo}/{path}" if path else f"{owner}/{repo}"
+                failure = GitHubAPIError(
+                    504, f"GitHub API request timed out (504) while reading {target}"
+                )
+            except aiohttp.ClientError as e:
+                target = f"{owner}/{repo}/{path}" if path else f"{owner}/{repo}"
+                failure = GitHubAPIError(
+                    503, f"GitHub API connection failed (503) while reading {target}: {e}"
+                )
 
-            self.session = aiohttp.ClientSession(
-                headers=headers, connector=connector, timeout=timeout
-            )
-        return self.session
+            attempt += 1
+            if attempt >= MAX_RETRIES:
+                raise failure
+            delay = RETRY_BACKOFF_BASE * 2 ** (attempt - 1)
+            logger.warning("Retrying GitHub request", url=url, attempt=attempt, delay=delay)
+            await asyncio.sleep(delay)
 
-    async def _make_request_with_retries(self, url: str, **kwargs) -> Dict[str, Any]:
-        """Make GitHub API request with retries and rate limiting"""
-        async with self._semaphore:  # Limit concurrent requests
-            for attempt in range(MAX_RETRIES):
-                try:
-                    session = await self._get_session()
-
-                    async with session.get(url, **kwargs) as response:
-                        if response.status == 200:
-                            return await response.json()
-                        elif response.status == 403:
-                            # Rate limit hit
-                            reset_time = response.headers.get("X-RateLimit-Reset")
-                            if reset_time:
-                                wait_time = int(reset_time) - int(time.time()) + 1
-                                logger.warning(f"Rate limit hit, waiting {wait_time}s")
-                                await asyncio.sleep(
-                                    min(wait_time, 60)
-                                )  # Max 1 minute wait
-                                continue
-                        elif response.status == 404:
-                            logger.error(f"Repository not found: {url}")
-                            return {}
-                        else:
-                            logger.warning(
-                                f"GitHub API error {response.status} for {url}"
-                            )
-
-                except asyncio.TimeoutError:
-                    logger.warning(f"Timeout for {url}, attempt {attempt + 1}")
-                    if attempt < MAX_RETRIES - 1:
-                        await asyncio.sleep(2**attempt)  # Exponential backoff
-                        continue
-
-                except Exception as e:
-                    logger.error(f"Request failed for {url}: {str(e)}")
-                    if attempt < MAX_RETRIES - 1:
-                        await asyncio.sleep(1)
-                        continue
-
-            return {}  # Return empty dict if all retries failed
-
-    @lru_cache(maxsize=100)
-    def _parse_github_url(self, url: str) -> tuple:
-        """Parse GitHub URL to extract owner and repository name (cached)"""
-        try:
-            # More robust parsing for different GitHub URL formats
-            match = re.match(
-                r"^(?:https|git)://(?:www\.)?github\.com/([^/]+)/([^/]+?)(?:\.git)?$",
-                url,
-            )
-            if match:
-                owner, repo = match.groups()
-                return owner, repo.replace(".git", "")
-            return None, None
-        except Exception:
-            return None, None
-
-    async def get_repository_files(self, repo_url: str) -> List[GitHubFile]:
+    async def get_repository_files(
+        self, repo_url: str, branch: str | None = None
+    ) -> list[GitHubFile]:
         """
         Download files from GitHub repository for processing.
         Based on our architecture: GitHub API → File Extraction → Algolia Indexing
+
+        Raises GitHubAPIError for API failures and ValueError for a bad URL.
         """
         try:
             logger.info("Starting get_repository_files", repo_url=repo_url)
+            owner, repo, url_branch = parse_github_url(repo_url)
+            branch = branch or url_branch
 
-            # Parse GitHub URL to get owner/repo
-            owner, repo = self._parse_github_url(repo_url)
-            logger.info("Parsed GitHub URL", owner=owner, repo=repo)
+            session = self._new_session()
+            try:
+                if not branch:
+                    info = await self._make_request_with_retries(
+                        session, f"{self.base_url}/repos/{owner}/{repo}", owner, repo
+                    )
+                    branch = info.get("default_branch")
+                    if not branch:
+                        raise GitHubAPIError(
+                            502,
+                            f"GitHub did not report a default branch for {owner}/{repo}",
+                        )
+                logger.info("Fetching repository files", owner=owner, repo=repo, branch=branch)
 
-            if not owner or not repo:
-                raise ValueError(f"Invalid GitHub URL: {repo_url}")
-
-            logger.info("Fetching repository files", owner=owner, repo=repo)
-
-            # Get repository file tree
-            files = await self._get_file_tree(owner, repo)
-            logger.info("Raw files from GitHub", total_raw_files=len(files))
-
-            # Filter to code files only
-            code_files = [
-                f for f in files if f.is_code_file() and f.size < self.max_file_size
-            ]
-            logger.info(
-                "After filtering",
-                code_files_count=len(code_files),
-                raw_files_count=len(files),
-            )
-
-            # Limit number of files for processing
-            if len(code_files) > self.max_files:
-                logger.warning(
-                    "Repository has too many files, limiting to max",
-                    total_files=len(code_files),
-                    max_files=self.max_files,
-                )
-                code_files = code_files[: self.max_files]
+                entries = await self._list_entries(session, owner, repo, branch)
+                candidates = self._select_candidates(entries)
+                files = await self._download_all(session, owner, repo, branch, candidates)
+            finally:
+                await session.close()
 
             logger.info(
                 "Repository files retrieved",
-                total_files=len(files),
-                code_files=len(code_files),
+                listed=len(entries),
+                selected=len(candidates),
+                downloaded=len(files),
             )
-
-            return code_files
+            return files
 
         except Exception as e:
-            logger.error(
-                "Failed to get repository files", repo_url=repo_url, error=str(e)
-            )
+            # The caller records the failure on the repository; just trace it here
+            logger.debug("Failed to get repository files", repo_url=repo_url, error=str(e))
             raise
+
+    def _select_candidates(self, entries: list[tuple[str, int]]) -> list[tuple[str, int]]:
+        """Apply deny-list, extension and size filters, then sort and cap"""
+        selected = []
+        for path, size in entries:
+            if is_denied_path(path):
+                continue
+            filename = path.split("/")[-1]
+            # Unknown extensions map to "text", which we don't index
+            if self._detect_language(filename) == "text" or size >= self.max_file_size:
+                continue
+            selected.append((path, size))
+        selected.sort()
+        if len(selected) > self.max_files:
+            logger.warning(
+                "Repository has too many files, limiting to max",
+                total_files=len(selected),
+                max_files=self.max_files,
+            )
+            selected = selected[: self.max_files]
+        return selected
+
+    async def _list_entries(
+        self, session: aiohttp.ClientSession, owner: str, repo: str, branch: str
+    ) -> list[tuple[str, int]]:
+        """List (path, size) for every file, via one git trees call when possible"""
+        try:
+            tree = await self._make_request_with_retries(
+                session,
+                f"{self.base_url}/repos/{owner}/{repo}/git/trees/{urlquote(branch, safe='')}",
+                owner,
+                repo,
+                params={"recursive": "1"},
+            )
+        except GitHubAPIError as e:
+            if e.status != 404:
+                raise
+            # The repository may exist while the branch doesn't; say which. A
+            # missing repository raises its own 404 from this lookup.
+            await self._make_request_with_retries(
+                session, f"{self.base_url}/repos/{owner}/{repo}", owner, repo
+            )
+            raise GitHubAPIError(404, f"Branch '{branch}' not found in {owner}/{repo}") from e
+        if tree.get("truncated"):
+            logger.warning("Git tree truncated, walking contents API", owner=owner, repo=repo)
+            entries: list[tuple[str, int]] = []
+            await self._walk_contents(session, owner, repo, branch, "", entries)
+            return entries
+        return [
+            (item["path"], item.get("size", 0))
+            for item in tree.get("tree", [])
+            if item.get("type") == "blob" and item.get("mode") != "120000"
+        ]
+
+    async def _walk_contents(
+        self,
+        session: aiohttp.ClientSession,
+        owner: str,
+        repo: str,
+        branch: str,
+        path: str,
+        entries: list[tuple[str, int]],
+    ) -> None:
+        """Fallback listing: one contents request per directory, denied dirs pruned"""
+        url = f"{self.base_url}/repos/{owner}/{repo}/contents/{quote_path(path) if path else ''}"
+        contents = await self._make_request_with_retries(
+            session, url, owner, repo, path, params={"ref": branch}
+        )
+        if not isinstance(contents, list):
+            return
+        for item in contents:
+            if item["type"] == "file":
+                entries.append((item["path"], item.get("size", 0)))
+            elif item["type"] == "dir" and not is_denied_path(item["path"] + "/x"):
+                await self._walk_contents(session, owner, repo, branch, item["path"], entries)
+
+    async def _download_all(
+        self,
+        session: aiohttp.ClientSession,
+        owner: str,
+        repo: str,
+        branch: str,
+        candidates: list[tuple[str, int]],
+    ) -> list[GitHubFile]:
+        """Download candidates concurrently; empty and binary files are skipped, failures raise"""
+
+        async def fetch(path: str, size: int) -> GitHubFile | None:
+            url = (
+                f"{self.raw_base_url}/{urlquote(owner, safe='')}/{urlquote(repo, safe='')}"
+                f"/{quote_path(branch)}/{quote_path(path)}"
+            )
+            async with self._semaphore:
+                raw = await self._download_file_content(session, url, path)
+            content = self._decode_content(raw)
+            if content is None:
+                logger.debug("Skipped empty or binary file", file_path=path)
+                return None
+            filename = path.split("/")[-1]
+            return GitHubFile(
+                path=path,
+                content=content,
+                size=size,
+                language=self._detect_language(filename),
+                filename=filename,
+            )
+
+        tasks = [asyncio.create_task(fetch(p, s)) for p, s in candidates]
+        try:
+            results = await asyncio.gather(*tasks)
+        except BaseException:
+            # One failed download fails the run; stop the rest before the session closes
+            for task in tasks:
+                task.cancel()
+            raise
+        return [f for f in results if f is not None]
 
     def _detect_language(self, filename: str) -> str:
         """Detect programming language from file extension"""
@@ -227,140 +423,55 @@ class GitHubService:
             return "text"
 
         ext = filename.lower().split(".")[-1] if "." in filename else ""
-        language_map = {
-            "py": "python",
-            "js": "javascript",
-            "ts": "typescript",
-            "jsx": "javascript",
-            "tsx": "typescript",
-            "java": "java",
-            "go": "go",
-            "rs": "rust",
-            "cpp": "cpp",
-            "c": "c",
-            "cs": "csharp",
-            "php": "php",
-            "rb": "ruby",
-            "html": "html",
-            "css": "css",
-            "scss": "scss",
-            "sql": "sql",
-            "json": "json",
-            "yaml": "yaml",
-            "yml": "yaml",
-            "xml": "xml",
-            "md": "markdown",
-        }
-        return language_map.get(ext, "text")
+        return EXT_TO_LANGUAGE.get(ext, "text")
 
-    async def _get_file_tree(self, owner: str, repo: str) -> List[GitHubFile]:
-        """Get repository file tree using GitHub API"""
-        files = []
+    @staticmethod
+    def _describe_api_error(status: int, headers, owner: str, repo: str, path: str) -> str:
+        """Explain a failed contents request in terms a user can act on"""
+        target = f"{owner}/{repo}/{path}" if path else f"{owner}/{repo}"
+        if status == 401:
+            return f"GitHub rejected the token (401) for {target}; check GITHUB_TOKEN"
+        if status in (403, 429) and headers.get("X-RateLimit-Remaining") == "0":
+            return f"GitHub API rate limit exceeded ({status}) while reading {target}"
+        if status == 403:
+            return f"GitHub denied access (403) to {target}"
+        if status == 404:
+            return f"GitHub repository or path not found (404): {target}; it may be private or misspelled"
+        return f"GitHub API error {status} while reading {target}"
 
-        async with aiohttp.ClientSession() as session:
-            # Get repository contents recursively
-            await self._fetch_directory_contents(session, owner, repo, "", files)
-
-        return files
-
-    async def _fetch_directory_contents(
-        self,
-        session: aiohttp.ClientSession,
-        owner: str,
-        repo: str,
-        path: str,
-        files: List[GitHubFile],
-    ):
-        """Recursively fetch directory contents"""
-        try:
-            url = f"{self.base_url}/repos/{owner}/{repo}/contents/{path}"
-            logger.info("Fetching directory", url=url, path=path)
-
-            headers = {}
-            if self.token:
-                headers["Authorization"] = f"token {self.token}"
-
-            async with session.get(url, headers=headers) as response:
-                logger.info("GitHub API response", status=response.status, url=url)
-
-                if response.status != 200:
-                    response_text = await response.text()
-                    logger.warning(
-                        "Failed to fetch directory",
-                        path=path,
-                        status=response.status,
-                        response_text=response_text[
-                            :500
-                        ],  # Log first 500 chars of error
-                    )
-                    return
-
-                contents = await response.json()
-                logger.info("Directory contents", path=path, items_count=len(contents))
-
-                for item in contents:
-                    if item["type"] == "file":
-                        logger.debug(
-                            "Processing file", file_path=item["path"], size=item["size"]
-                        )
-                        # Download file content
-                        file_content_bytes = await self._download_file_content(
-                            session, item["download_url"]
-                        )
-                        if file_content_bytes:
-                            # Create a temporary GitHubFile to check if it's a code file and within size limits
-                            filename = item["path"].split("/")[-1]
-                            language = self._detect_language(filename)
-                            temp_github_file = GitHubFile(
-                                path=item["path"],
-                                content=file_content_bytes,
-                                size=item["size"],
-                                language=language,
-                                filename=filename,
-                            )
-                            if (
-                                temp_github_file.is_code_file()
-                                and temp_github_file.size < self.max_file_size
-                            ):
-                                files.append(temp_github_file)
-                                logger.debug(
-                                    "Added code file",
-                                    file_path=item["path"],
-                                    language=temp_github_file.language,
-                                )
-                            else:
-                                logger.debug(
-                                    "Filtered out file",
-                                    file_path=item["path"],
-                                    is_code=temp_github_file.is_code_file(),
-                                    size=temp_github_file.size,
-                                    language=temp_github_file.language,
-                                )
-
-                    elif item["type"] == "dir" and len(files) < self.max_files:
-                        logger.debug("Processing directory", dir_path=item["path"])
-                        # Recursively fetch subdirectory (with limit)
-                        await self._fetch_directory_contents(
-                            session, owner, repo, item["path"], files
-                        )
-
-        except Exception as e:
-            logger.error("Failed to fetch directory contents", path=path, error=str(e))
+    @staticmethod
+    def _decode_content(raw: bytes) -> str | None:
+        """Decode downloaded bytes to text, or None for empty and binary files"""
+        if not raw or b"\x00" in raw:
+            return None
+        return raw.decode("utf-8-sig", errors="replace")
 
     async def _download_file_content(
-        self, session: aiohttp.ClientSession, download_url: str
+        self, session: aiohttp.ClientSession, download_url: str, path: str
     ) -> bytes:
-        """Download individual file content as bytes"""
-        try:
-            headers = {}
-            if self.token:
-                headers["Authorization"] = f"token {self.token}"
+        """Download one file's bytes, retrying timeouts, 429 and 5xx up to MAX_RETRIES.
 
-            async with session.get(download_url, headers=headers) as response:
-                if response.status == 200:
-                    content = await response.read()
-                    return content
-                return b""
-        except Exception as e:
-            logger.error("Failed to download file", url=download_url, error=str(e))
-            return b""
+        Raises GitHubAPIError when the file can't be fetched: skipping it would let
+        a reprocess replace a complete index with a partial one.
+        """
+        attempt = 0
+        while True:
+            failure: GitHubAPIError
+            try:
+                async with session.get(download_url) as response:
+                    if response.status == 200:
+                        return await response.read()
+                    status = response.status
+                logger.warning("Failed to download file", url=download_url, status=status)
+                failure = GitHubAPIError(status, f"GitHub download failed ({status}) for {path}")
+                if status < 500 and status != 429:
+                    raise failure
+            except TimeoutError:
+                failure = GitHubAPIError(504, f"GitHub download timed out (504) for {path}")
+            except aiohttp.ClientError as e:
+                failure = GitHubAPIError(503, f"GitHub download failed (503) for {path}: {e}")
+
+            attempt += 1
+            if attempt >= MAX_RETRIES:
+                raise failure
+            await asyncio.sleep(RETRY_BACKOFF_BASE * 2 ** (attempt - 1))

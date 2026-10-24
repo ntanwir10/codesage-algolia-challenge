@@ -1,340 +1,165 @@
-# CodeSage - MCP-First Code Discovery
+# CodeSage
 
-🚀 **AI-powered code discovery through natural language** - Built entirely around the **Model Context Protocol (MCP)** for seamless integration with Claude Desktop and other AI clients.
+CodeSage indexes GitHub repositories into Algolia and exposes them to AI assistants through the Model Context Protocol (MCP). It has a FastAPI backend, a React dashboard, and a stdio MCP server that Claude Desktop launches.
 
-> **CodeSage - MCP-First Code Discovery** - The only code discovery tool built entirely around the Model Context Protocol for seamless AI integration.
+Built for the [Algolia MCP Server Challenge](https://dev.to/challenges/algolia-2025-07-09).
 
-**Built for the [Algolia MCP Server Challenge](https://dev.to/challenges/algolia-2025-07-09)** 🏆
+## What it does
 
-> Competing in the **Backend Data Optimization** and **Ultimate User Experience** categories with our innovative MCP-first approach to code discovery.
+1. You submit a GitHub repository URL (dashboard or API).
+2. A background job downloads the repository's source files through the GitHub REST API (git trees endpoint), parses them into entities (functions, classes, imports, doc sections), stores files and entities in SQLite, and indexes the entities in Algolia.
+3. Claude Desktop (or any MCP client) calls six tools to search and inspect the indexed code.
 
-## 🎯 What is CodeSage?
+### Supported languages
 
-**CodeSage - MCP-First Code Discovery** transforms GitHub repositories into **AI-searchable knowledge bases** through the Model Context Protocol. Submit a repository URL, and within minutes your AI assistant can discover functions, understand architecture, and answer complex questions about the codebase through natural language - all via MCP integration.
+- Python is parsed with `ast`.
+- JavaScript, TypeScript, Java, Go, Rust, C, C++, C#, PHP and Ruby are parsed with tree-sitter.
+- Markdown headings become `doc_section` entities.
+- CSS, HTML, JSON, YAML and XML files are stored but produce no entities.
+- `dist/`, `build/`, `vendor/`, `node_modules/`, minified files and lockfiles are skipped. At most 1000 files of under 1 MB each are fetched per repository.
 
-### **🎯 Final User Experience**
+## Requirements
 
-```text
-1. User submits: github.com/facebook/react
-2. System processes: GitHub → Parser → Algolia
-3. User opens Claude Desktop  
-4. User asks: "Show me React's rendering lifecycle"
-5. Claude uses MCP tools to search and analyze
-6. User gets AI-powered code insights
-```
+- Python 3.13 and [`uv`](https://docs.astral.sh/uv/) (or any way to create `.venv` at the repo root)
+- Node.js 22 and npm (frontend)
+- An Algolia application ID and Admin API key
+- Optional: a GitHub token. Without one, GitHub's unauthenticated rate limit applies, so `GITHUB_TOKEN` is recommended.
 
-## 📊 Data Flow Architecture
-
-```arch_flow
-┌─────────────┐    ┌──────────────┐    ┌─────────────┐
-│   Frontend  │───▶│   Backend    │───▶│   Algolia   │
-│   (Simple)  │    │ (Processing) │    │  (Search)   │
-└─────────────┘    └──────────────┘    └─────────────┘
-                            │
-                            ▼
-                   ┌──────────────┐    ┌─────────────┐
-                   │     MCP      │───▶│   Claude    │
-                   │   Protocol   │    │  Desktop    │
-                   └──────────────┘    └─────────────┘
-```
-
-### **Key Flows:**
-
-- **Repository Management**: Frontend ↔ Backend
-- **Code Discovery**: Claude Desktop ↔ MCP ↔ Backend ↔ Algolia
-- **No Direct Integration**: Frontend never talks to Algolia or MCP
-
-## ✨ Core Features
-
-### 🔧 **MCP-First Architecture** - Our Unique Differentiator
-
-- Built entirely around **Model Context Protocol** - the only code discovery tool with this architecture
-- Works with **Claude Desktop** and any MCP-compatible AI client
-- **No direct AI API calls** - all intelligence through MCP integration
-- **Seamless AI Integration** - designed specifically for MCP-based AI workflows
-
-### 🔍 **GitHub Repository Processing**
-
-- **Automatic ingestion** from GitHub repository URLs
-- **Code parsing** for functions, classes, imports across multiple languages
-- **Algolia indexing** for fast, semantic code search
-
-### 🤖 **Natural Language Code Discovery**
-
-- Ask questions like *"How does authentication work?"*
-- AI models search and analyze through MCP tools
-- **Contextual, conversational** code exploration
-
-### 🎯 **Simple Repository Management**
-
-- Submit repository URLs for processing
-- Track processing status (pending → processing → completed)
-- Manage repository lifecycle (create, list, delete)
-
-## 🚀 Quick Start
-
-### Setup Prerequisites
-
-- Python 3.9+ with virtual environment
-- Node.js 18+ and npm
-- Algolia account (App ID + Admin API Key)
-
-### 1. **Development Mode (Recommended)**
+## Quick start
 
 ```bash
-# Setup environment
 make setup
-# Edit .env with your Algolia credentials
-
-# Start backend + frontend together
-make start
-
-# Or start individually:
-make start-backend    # Backend on :8001
-make start-frontend   # Frontend on :5173
 ```
 
-### **Manual Development Setup**
+`make setup` copies `.env.example` to `backend/.env` (if missing), creates `.venv` at the repo root (with `uv` if available, otherwise `python3.13 -m venv`), installs `backend/requirements-dev.txt` into it, and runs `npm ci` in `frontend/`.
 
-If you prefer to run servers manually without Make commands:
+Edit `backend/.env`: set `ALGOLIA_APP_ID`, `ALGOLIA_ADMIN_API_KEY`, `GITHUB_TOKEN` and `CODESAGE_API_KEY` (see below). Docker and `make install-claude` read `backend/.env`; the backend also finds a `.env` in the repo root.
 
-#### **Backend Server:**
+Then:
 
 ```bash
-# Navigate to project root
-cd /Users/ntanwir/Developer/codesage-algolia-challenge
-
-# Activate virtual environment
-source .venv/bin/activate
-
-# Go to backend directory  
-cd backend
-
-# Start FastAPI server
-python -m uvicorn app.main:app --reload --port 8001
+make start            # backend on 127.0.0.1:8001 and frontend on http://localhost:5173
+# or separately:
+make start-backend    # .venv/bin/python -m uvicorn app.main:app --reload, from backend/
+make start-frontend   # Vite dev server on 5173, proxying /api, /ws and /health to the backend
+make stop             # stops whatever listens on ports 8001 and 5173
 ```
 
-#### **Frontend Server** (in separate terminal)
+Interactive API docs are at http://127.0.0.1:8001/docs (disabled when `ENVIRONMENT=production`).
+
+### API key setup
 
 ```bash
-# Navigate to project root
-cd /Users/ntanwir/Developer/codesage-algolia-challenge
-
-# Go to frontend directory
-cd frontend
-
-# Install dependencies (first time only)
-npm install
-
-# Start React development server
-npm run dev
+python -c "import secrets; print(secrets.token_urlsafe(32))"
 ```
 
-#### **What to Expect:**
+Put the output in `backend/.env` as `CODESAGE_API_KEY=...`. For the dashboard, set the same value as `VITE_CODESAGE_API_KEY` in `frontend/.env.local`.
 
-**Backend Server (Terminal 1):**
+The key is required unless the server is bound to a loopback address: the backend refuses to start with a non-loopback `MCP_SERVER_HOST` and no key. When a key is set, it must be sent as:
 
-```text
-INFO:     Uvicorn running on http://127.0.0.1:8001 (Press CTRL+C to quit)
-INFO:     Started reloader process [xxxxx] using WatchFiles
-INFO:     Started server process [xxxxx]
-INFO:     Waiting for application startup.
-INFO:     Application startup complete.
-```
+- the `X-API-Key` header on write endpoints (create, update, delete, process), on `/api/v1/performance/*`, and on `POST /api/v1/ai/mcp/tools/call`
+- the `?api_key=` query parameter on the `/ws` WebSocket
 
-✅ **Backend ready:** `http://localhost:8001`
+Read endpoints (listing and fetching repositories, status, stats, tool and resource listings, `/health`) do not require the key.
 
-- API Docs: `http://localhost:8001/docs`
-- Health Check: `http://localhost:8001/health`
+Warning: `VITE_*` variables are inlined into the JavaScript bundle, so anyone who can load the dashboard can read the key. This setup is for local, single-user use only.
 
-**Frontend Server (Terminal 2):**
+## Using it
 
-```text
-  Local:   http://localhost:5173/
-  Network: use --host to expose
-  press h + enter to show help
-```
-
-✅ **Frontend ready:** `http://localhost:5173`
-
-#### **Quick Test:**
+### Index a repository
 
 ```bash
-# Test backend health (in Terminal 3)
-curl http://localhost:8001/health
-
-# Test MCP endpoints
-curl http://localhost:8001/api/v1/ai/mcp
+curl -X POST http://127.0.0.1:8001/api/v1/repositories/ \
+  -H "Content-Type: application/json" -H "X-API-Key: $CODESAGE_API_KEY" \
+  -d '{"url": "https://github.com/owner/repo"}'
 ```
 
-### 2. **Docker Mode**
+The response is `201` with the repository record, and a background job starts (one job per repository at a time).
+
+- Status moves `pending`, `processing`, then `completed` or `failed`. On failure, `error_message` says why.
+- Poll `GET /api/v1/repositories/{id}/status`, or connect to `/ws`, send `{"type":"subscribe","repository_id":N}`, and read `{type, data}` frames.
+- `POST /api/v1/repositories/{id}/process?force_reprocess=true` re-runs processing. It returns `202`, or `409` if a job is already running (or the repository is completed and `force_reprocess` is not set).
+- A server restart marks interrupted runs as `failed`; reprocess them.
+
+### Connect Claude Desktop
 
 ```bash
-# For container-based development
-make build
-make up               # Both services via Docker
-
-# Check status
-make health
-make logs
+make install-claude                 # merge into the Claude Desktop config
+make install-claude ARGS=--dry-run  # preview only; the key is masked
 ```
 
-### 3. **Which approach to use?**
+The installer keeps your other servers, writes a timestamped backup, and sets the file to mode 600. It reads `CODESAGE_API_KEY` from `backend/.env`. Restart Claude Desktop afterwards and keep the backend running. Details and troubleshooting: [docs/MCP_INTEGRATION_GUIDE.md](docs/MCP_INTEGRATION_GUIDE.md).
 
-**✅ Use Development Mode when:**
+### MCP tools
 
-- Actively developing/debugging code
-- Need fast reload/hot-swapping
-- Working on frontend styling
-- Debugging MCP integration
+| Tool | Purpose |
+| --- | --- |
+| `list_repositories` | Indexed repositories with status and size |
+| `search_code` | Full-text search over functions, classes, imports and doc sections |
+| `get_file` | Read a file with line numbers (at most 400 lines per call) |
+| `list_definitions` | Definitions in a repository, ordered by file and line |
+| `analyze_repository` | File, line and entity counts, languages, top directories, largest files |
+| `find_patterns` | Literal or regex line matches across a repository's files |
 
-**✅ Use Docker Mode when:**
-
-- Testing production-like environment
-- Demonstrating to others
-- CI/CD pipeline
-- Consistent environment across team
-
-### **Environment Configuration**
-
-Create `.env` file with your Algolia credentials:
+## Docker
 
 ```bash
-ALGOLIA_APP_ID=your_app_id
-ALGOLIA_ADMIN_API_KEY=your_admin_key
-SECRET_KEY=your-secret-key-here
+export CODESAGE_API_KEY=...   # becomes the frontend build argument; must match backend/.env
+make up                       # docker compose -f deployment/docker-compose.yml up -d
 ```
 
-### **Testing MCP Endpoints**
+This starts the backend and nginx, which serves the frontend on http://localhost and proxies `/api`, `/ws` and `/health`. CI checks both Compose files and builds both images on every push, but never starts the containers. See [deployment/DOCKER.md](deployment/DOCKER.md).
 
-Once your backend is running on `:8001`, test these endpoints:
+## Testing
 
 ```bash
-# 1. MCP Server Information (NEW!)
-curl http://localhost:8001/api/v1/ai/mcp
-
-# 2. MCP Capabilities  
-curl http://localhost:8001/api/v1/ai/mcp/capabilities
-
-# 3. Available MCP Tools
-curl http://localhost:8001/api/v1/ai/mcp/tools
-
-# 4. Tool Call Instructions (if you try GET - shows how to use POST)
-curl http://localhost:8001/api/v1/ai/mcp/tools/call
-
-# 5. MCP Resources (with required uri parameter)
-curl "http://localhost:8001/api/v1/ai/mcp/resources/read?uri=codesage://repositories"
-
-# 6. Resources without uri (shows usage instructions)
-curl http://localhost:8001/api/v1/ai/mcp/resources/read
-
-# 7. Execute Tool (POST request - the correct way)
-curl -X POST http://localhost:8001/api/v1/ai/mcp/tools/call \
-  -H "Content-Type: application/json" \
-  -d '{"tool_name": "search_code", "arguments": {"query": "function"}}'
+make test                         # backend pytest (backend/tests)
+.venv/bin/ruff check backend      # backend lint
+cd frontend && npm test           # vitest unit tests
+cd frontend && npm run lint
+cd frontend && npm run build      # type-check and production build
 ```
 
-**💡 Common Errors Fixed:**
+CI (`.github/workflows/ci.yml`) runs ruff and pytest for the backend, lint, build and tests for the frontend, and validates the Compose files and builds both Docker images. Frontend tests are unit tests only; there are no end-to-end tests.
 
-- ❌ `GET /mcp/tools/call` → ✅ Now shows usage instructions
-- ❌ `GET /mcp/resources/read` (no uri) → ✅ Now shows required parameters
-- ✅ All endpoints now provide helpful error messages
+## Configuration
 
-**💡 Tip:** Visit `http://localhost:8001/docs` for interactive API documentation!
+Set these in `backend/.env` (see `.env.example`):
 
-### Usage with Claude Desktop
+| Variable | Default | Notes |
+| --- | --- | --- |
+| `CODESAGE_API_KEY` | unset | Required unless bound to loopback |
+| `MCP_SERVER_HOST`, `MCP_SERVER_PORT` | `127.0.0.1`, `8001` | A non-loopback host requires the key |
+| `ALGOLIA_APP_ID`, `ALGOLIA_ADMIN_API_KEY` | unset | Required for indexing |
+| `ALGOLIA_INDEX_NAME` | `codesage_code_entities` | One index per database. Compose overrides it: `codesage_code_entities_docker` (dev) and `codesage_code_entities_prod` (prod) |
+| `GITHUB_TOKEN` | unset | Optional; raises GitHub rate limits |
+| `DATABASE_URL` | `sqlite:///./codesage.db` | SQLite only |
+| `CORS_ORIGINS` | localhost ports 3000, 5173, 5174 | Comma-separated; `*` is rejected |
+| `ENVIRONMENT`, `LOG_LEVEL` | `development`, `INFO` | `production` hides `/docs` |
 
-1. **Submit repository**: POST to `/api/v1/repositories/` with GitHub URL
-2. **Wait for processing**: Repository status becomes "completed"
-3. **Connect Claude Desktop**: Configure MCP connection to `http://localhost:8001`
-4. **Ask questions**: Use natural language to explore the codebase
+Rate limits (slowapi, per client address): 100 per minute on repository create and process, 30 per minute on the MCP tool-call endpoint.
 
-## 🛠 API Endpoints
+## Project layout
 
-### Repository Management
-
-```API
-GET    /api/v1/repositories/        # List repositories
-POST   /api/v1/repositories/        # Create repository  
-GET    /api/v1/repositories/{id}    # Get repository
-DELETE /api/v1/repositories/{id}    # Delete repository
+```
+backend/app/            FastAPI app (api, core, models, schemas, services)
+backend/codesage_mcp/   stdio MCP server (python -m codesage_mcp)
+backend/alembic/        database migrations
+backend/tests/          pytest suite
+frontend/               React + Vite dashboard
+deployment/             Docker Compose files, nginx.conf
+scripts/                install_claude_desktop.py
+mcp_launcher.sh         what Claude Desktop runs
+docs/                   architecture and MCP guide
 ```
 
-### MCP Protocol
+## Known limitations
 
-```API
-GET    /api/v1/ai/mcp/capabilities     # MCP server capabilities
-GET    /api/v1/ai/mcp/tools           # List MCP tools
-POST   /api/v1/ai/mcp/tools/call      # Execute MCP tool
-GET    /api/v1/ai/mcp/resources/read  # Read MCP resource
-```
+- The Algolia v3 client is synchronous; calls run in worker threads.
+- Job state and WebSocket subscriptions live in the server process, so run exactly one worker.
+- SQLite only. Alembic migrations run automatically at startup; a database from before Alembic is stamped at `baseline` first.
+- Frontend tests are unit tests only.
+- The Docker images are built in CI but never run there.
+- Outside the prod Docker stack, the dashboard API key is embedded in the JavaScript bundle (local, single-user use only). The prod stack keeps it in nginx behind basic auth.
 
-## 📦 MCP Tools Available
-
-- **`search_code`** - Natural language code search across repositories
-- **`analyze_repository`** - Repository overview and architectural insights
-- **`explore_functions`** - Function discovery and relationship mapping
-- **`explain_code`** - Detailed code explanations and documentation
-- **`find_patterns`** - Pattern detection for security, performance, architecture
-
-## 🔧 Technical Stack
-
-### Backend
-
-- **FastAPI** - Modern Python web framework
-- **SQLAlchemy** - Database ORM with PostgreSQL/SQLite
-- **Algolia** - Search and indexing engine
-- **Pydantic** - Data validation and settings
-
-### Frontend (Optional)
-
-- **React 18** - Modern UI framework
-- **TypeScript** - Type safety
-- **TailwindCSS** - Utility-first styling
-- **Vite** - Fast development and building
-
-### MCP Integration - Our Core Innovation
-
-- **Model Context Protocol** - AI integration standard (our primary differentiator)
-- **Claude Desktop** - Primary AI client with seamless MCP integration
-- **Tool-based architecture** - Extensible AI capabilities through MCP tools
-- **MCP-First Design** - Every feature built around MCP protocol standards
-
-## 📚 Documentation
-
-- [`docs/architecture.md`](docs/architecture.md) - Technical architecture and implementation details
-- [`.env.example`](.env.example) - Environment configuration template
-
-## 📁 Project Structure
-
-```tree
-codesage-algolia-challenge/
-├── backend/                    # FastAPI MCP Server
-│   ├── app/
-│   │   ├── api/v1/endpoints/  # API endpoints (repositories, ai, performance)
-│   │   ├── core/              # Configuration and database
-│   │   ├── models/            # SQLAlchemy models
-│   │   ├── schemas/           # Pydantic schemas
-│   │   ├── services/          # Business logic services
-│   │   └── main.py           # FastAPI application
-│   ├── requirements.txt       # Python dependencies
-│   └── Dockerfile            # Container configuration
-├── frontend/                  # React TypeScript UI
-│   ├── src/
-│   │   ├── components/       # Reusable UI components
-│   │   ├── pages/           # Application pages
-│   │   ├── services/        # API client and WebSocket
-│   │   └── types/           # TypeScript definitions
-│   └── package.json         # Node.js dependencies
-├── deployment/              # Infrastructure & deployment
-│   ├── docker-compose.yml   # Development setup
-│   ├── docker-compose.prod.yml # Production setup
-│   ├── nginx.conf          # Reverse proxy config
-│   └── DOCKER.md           # Docker documentation
-├── tests/                   # Organized test suites
-│   ├── api/                # API endpoint tests
-│   ├── mcp/                # MCP protocol tests
-│   └── postman/            # Postman collection
-├── docs/                   # Technical documentation
-└── README.md              # Project overview
-```
+See [docs/architecture.md](docs/architecture.md) for how the pieces fit together.

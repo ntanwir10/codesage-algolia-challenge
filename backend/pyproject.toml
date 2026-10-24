@@ -1,0 +1,22 @@
+[tool.ruff]
+target-version = "py313"
+line-length = 100
+extend-exclude = ["alembic/versions"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]
+# Line length is left to the formatter
+ignore = ["E501"]
+
+[tool.ruff.lint.flake8-bugbear]
+# FastAPI's dependency markers are meant to be called in defaults
+extend-immutable-calls = [
+    "fastapi.Depends", "fastapi.Query", "fastapi.Path", "fastapi.Body",
+    "fastapi.File", "fastapi.Header",
+]
+
+[tool.ruff.lint.per-file-ignores]
+# These modules load .env or pin env vars before importing settings
+"app/main.py" = ["E402"]
+"app/core/config.py" = ["E402"]
+"tests/conftest.py" = ["E402"]

@@ -1,6 +1,6 @@
 import { useParams, Link, useNavigate } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { api } from "@/services/api";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -12,6 +12,10 @@ import { SearchInterface } from "@/components/features/search-interface";
 import { AnimatedProgress } from "@/components/ui/animated-progress";
 import { DeleteConfirmationDialog } from "@/components/ui/delete-confirmation-dialog";
 import { useRealtimeStatus } from "@/hooks/useRealtimeStatus";
+import { useToast } from "@/components/ui/toast";
+import { describeError } from "@/lib/errors";
+import { pollWhileActive } from "@/lib/polling";
+import { isHttpUrl } from "@/lib/utils";
 
 export function RepositoryPage() {
   const { id } = useParams<{ id: string }>();
@@ -27,12 +31,10 @@ export function RepositoryPage() {
   });
 
   const queryClient = useQueryClient();
+  const { addToast } = useToast();
   const [isReprocessing, setIsReprocessing] = useState(false);
-  const [reprocessMessage, setReprocessMessage] = useState<string | null>(null);
-  const [reprocessMessageType, setReprocessMessageType] = useState<
-    "success" | "error" | null
-  >(null);
 
+  // Poll every ~3s while pending/processing; stops once completed/failed.
   const {
     data: repository,
     isLoading: isRepoLoading,
@@ -41,20 +43,22 @@ export function RepositoryPage() {
     queryKey: ["repository", repositoryId],
     queryFn: () => api.getRepository(repositoryId),
     enabled: !!repositoryId,
+    refetchInterval: (query) => pollWhileActive(query.state.data),
   });
 
   const { data: status } = useQuery({
     queryKey: ["repository-status", repositoryId],
     queryFn: () => api.getRepositoryStatus(repositoryId),
     enabled: !!repositoryId,
-    refetchInterval: repository?.status === "processing" ? 5000 : false, // Poll every 5 seconds when processing
+    refetchInterval: (query) => pollWhileActive(query.state.data),
   });
 
-  // Enable real-time updates for this specific repository
-  const { connectionStatus } = useRealtimeStatus({
-    repositoryId,
-    enableNotifications: false, // Notifications handled globally
-  });
+  // Live updates: subscribe while the repository is being processed.
+  const repositoryIds = useMemo(
+    () => (repositoryId ? [repositoryId] : []),
+    [repositoryId]
+  );
+  const { connectionStatus } = useRealtimeStatus({ repositoryIds });
 
   const handleDeleteClick = () => {
     setDeleteDialog({
@@ -71,16 +75,24 @@ export function RepositoryPage() {
     try {
       await api.deleteRepository(repository.id);
 
-      console.log("✅ Repository deleted successfully");
-
-      // Navigate back to dashboard
+      addToast({ type: "success", title: "Repository deleted" });
+      queryClient.removeQueries({ queryKey: ["repository", repositoryId] });
+      queryClient.invalidateQueries({ queryKey: ["repositories"] });
       navigate("/dashboard");
     } catch (error) {
-      console.error("❌ Failed to delete repository:", error);
-      setDeleteDialog((prev) => ({ ...prev, isDeleting: false }));
-
-      // Show error message (you could replace this with a toast notification)
-      alert("Failed to delete repository. Please try again.");
+      const { message, status: httpStatus } = describeError(error);
+      setDeleteDialog({ isOpen: false, isDeleting: false });
+      addToast({
+        type: "error",
+        title:
+          httpStatus === 409
+            ? "Cannot delete while processing"
+            : httpStatus === 502
+            ? "Delete failed; nothing was deleted"
+            : "Failed to delete repository",
+        description: message,
+        duration: 8000,
+      });
     }
   };
 
@@ -94,21 +106,28 @@ export function RepositoryPage() {
   const handleReprocess = async () => {
     if (!repository) return;
     setIsReprocessing(true);
-    setReprocessMessage(null);
-    setReprocessMessageType(null);
     try {
       await api.reprocessRepository(repository.id);
-      setReprocessMessage(
-        "Reprocessing started! The repository will be re-analyzed and re-indexed."
-      );
-      setReprocessMessageType("success");
+      addToast({
+        type: "success",
+        title: "Reprocessing started",
+        description: "The repository will be re-analyzed and re-indexed.",
+      });
       queryClient.invalidateQueries({ queryKey: ["repository", repositoryId] });
       queryClient.invalidateQueries({
         queryKey: ["repository-status", repositoryId],
       });
-    } catch {
-      setReprocessMessage("Failed to start reprocessing. Please try again.");
-      setReprocessMessageType("error");
+    } catch (error) {
+      const { message, status: httpStatus } = describeError(error);
+      addToast({
+        type: httpStatus === 409 ? "warning" : "error",
+        title:
+          httpStatus === 409
+            ? "Reprocessing not started"
+            : "Failed to start reprocessing",
+        description: message,
+        duration: 8000,
+      });
     } finally {
       setIsReprocessing(false);
     }
@@ -146,7 +165,7 @@ export function RepositoryPage() {
     );
   }
 
-  const canSearch = repository.status === "completed" && status?.mcp_ready;
+  const canSearch = repository.status === "completed";
 
   return (
     <div className="container mx-auto px-4 py-8">
@@ -185,7 +204,7 @@ export function RepositoryPage() {
                 </p>
               )}
               <div className="flex items-center gap-4 mt-3">
-                {repository.url && (
+                {isHttpUrl(repository.url) && (
                   <a
                     href={repository.url}
                     target="_blank"
@@ -235,79 +254,32 @@ export function RepositoryPage() {
             </CardHeader>
             <CardContent>
               <div className="space-y-4">
-                <p className="text-sm text-muted-foreground">
-                  {status.message}
-                </p>
-
-                {repository.processed_files > 0 ? (
-                  <div>
+                {(() => {
+                  const processed = status.processed_files;
+                  const total = status.total_files;
+                  return total > 0 && processed > 0 ? (
+                    <div>
+                      <AnimatedProgress
+                        value={(processed / total) * 100}
+                        showLabel={true}
+                        animated={true}
+                        color="blue"
+                        size="lg"
+                      />
+                      <div className="text-sm mt-2 text-muted-foreground">
+                        {processed} / {total} files
+                      </div>
+                    </div>
+                  ) : (
                     <AnimatedProgress
-                      value={
-                        (repository.processed_files / repository.total_files) *
-                        100
-                      }
-                      showLabel={true}
+                      value={0}
+                      indeterminate={true}
                       animated={true}
                       color="blue"
                       size="lg"
                     />
-                    <div className="flex items-center justify-between text-sm mt-2">
-                      <span className="text-muted-foreground">
-                        {repository.processed_files} / {repository.total_files}{" "}
-                        files
-                      </span>
-                      <span className="text-xs text-blue-600">
-                        ETA: ~
-                        {Math.ceil(
-                          (repository.total_files -
-                            repository.processed_files) /
-                            10
-                        )}{" "}
-                        min
-                      </span>
-                    </div>
-                  </div>
-                ) : (
-                  <AnimatedProgress
-                    value={0}
-                    indeterminate={true}
-                    animated={true}
-                    color="blue"
-                    size="lg"
-                  />
-                )}
-
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
-                  <div className="flex items-center gap-2">
-                    <span
-                      className={
-                        status.algolia_indexed
-                          ? "text-green-600"
-                          : "text-gray-400"
-                      }
-                    >
-                      {status.algolia_indexed ? "✅" : "⏳"}
-                    </span>
-                    <span>Algolia Search Index</span>
-                    {status.algolia_indexed &&
-                      connectionStatus === "connected" && (
-                        <span className="text-xs text-green-600">Live</span>
-                      )}
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <span
-                      className={
-                        status.mcp_ready ? "text-green-600" : "text-gray-400"
-                      }
-                    >
-                      {status.mcp_ready ? "✅" : "⏳"}
-                    </span>
-                    <span>MCP AI Integration</span>
-                    {status.mcp_ready && connectionStatus === "connected" && (
-                      <span className="text-xs text-green-600">Live</span>
-                    )}
-                  </div>
-                </div>
+                  );
+                })()}
               </div>
             </CardContent>
           </Card>
@@ -338,17 +310,6 @@ export function RepositoryPage() {
                   >
                     {isReprocessing ? "Reprocessing..." : "Reprocess"}
                   </Button>
-                  {reprocessMessage && (
-                    <div
-                      className={`mt-2 text-sm ${
-                        reprocessMessageType === "success"
-                          ? "text-green-700"
-                          : "text-red-700"
-                      }`}
-                    >
-                      {reprocessMessage}
-                    </div>
-                  )}
                 </div>
               </div>
             </CardContent>
@@ -364,8 +325,8 @@ export function RepositoryPage() {
                 <div>
                   <p className="font-medium text-red-700">Processing failed</p>
                   <p className="text-sm text-red-600">
-                    {status?.message ||
-                      "There was an error processing this repository."}
+                    There was an error processing this repository. You can try
+                    reprocessing it.
                   </p>
                   <Button
                     variant="outline"
@@ -375,17 +336,6 @@ export function RepositoryPage() {
                   >
                     {isReprocessing ? "Reprocessing..." : "Reprocess"}
                   </Button>
-                  {reprocessMessage && (
-                    <div
-                      className={`mt-2 text-sm ${
-                        reprocessMessageType === "success"
-                          ? "text-green-700"
-                          : "text-red-700"
-                      }`}
-                    >
-                      {reprocessMessage}
-                    </div>
-                  )}
                 </div>
               </div>
             </CardContent>
@@ -402,19 +352,13 @@ export function RepositoryPage() {
               ← Back to Dashboard
             </Button>
           </Link>
-          {repository.url && (
+          {isHttpUrl(repository.url) && (
             <a href={repository.url} target="_blank" rel="noopener noreferrer">
               <Button variant="outline" className="gap-2">
                 <span>🔗</span>
                 View on GitHub
               </Button>
             </a>
-          )}
-          {canSearch && (
-            <Button variant="outline" className="gap-2">
-              <span>📁</span>
-              Browse Files
-            </Button>
           )}
         </div>
       </div>

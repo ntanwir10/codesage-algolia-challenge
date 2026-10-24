@@ -1,13 +1,3 @@
-/**
- * CodeSage - MCP-First Code Discovery
- * 
- * Frontend Application for CodeSage - the only code discovery tool
- * built entirely around the Model Context Protocol (MCP) for seamless
- * AI integration with Claude Desktop and other MCP-compatible clients.
- * 
- * This frontend provides the repository management interface while
- * all AI interactions happen through MCP integration.
- */
 import { QueryClientProvider } from "@tanstack/react-query";
 import { ReactQueryDevtools } from "@tanstack/react-query-devtools";
 import { BrowserRouter as Router, Routes, Route } from "react-router-dom";
