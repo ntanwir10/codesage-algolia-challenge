@@ -222,9 +222,9 @@ class AlgoliaService:
         entity_key = f"{file_path}:{entity.entity_type}:{entity.name}:{entity.line_start}"
         signature = (entity.content or "")[:MAX_FIELD_CHARS]
         body = (entity.body or "")[:MAX_BODY_CHARS]
-        content = f"{signature}\n{body}" if body and not body.startswith(signature) else (
-            body or signature
-        )
+        # Parsers may strip the signature line while the body keeps its indentation
+        repeats_signature = body.lstrip().startswith(signature.strip())
+        content = f"{signature}\n{body}" if body and not repeats_signature else (body or signature)
         return _fit_record({
             "objectID": f"{repository_id}_{hashlib.sha1(entity_key.encode()).hexdigest()}",
             "repository_id": repository_id,

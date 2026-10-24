@@ -118,3 +118,16 @@ async def test_oversized_record_trims_content_to_fit(algolia_index):
 
     assert record_bytes(record) <= algolia_module.MAX_RECORD_BYTES
     assert record["content"] and set(record["content"]) <= {"😀", "\n"}  # cut on a character boundary
+
+
+async def test_indented_definitions_hold_their_signature_once(algolia_index):
+    # tree-sitter strips the signature while the body keeps its indentation; Python keeps both
+    js = "function outer() {\n  function inner(a) {\n    return a;\n  }\n}\n"
+    py = "class A:\n    def m(self):\n        return 1\n"
+    service = algolia_module.AlgoliaService()
+    for path, source, language, name in (("a.js", js, "javascript", "inner"), ("a.py", py, "python", "m")):
+        entity = next(e for e in CodeParser().parse(path, source, language) if e.name == name)
+
+        record = service._create_algolia_document(entity, 1, path, language)
+
+        assert record["content"].count(record["signature"].strip()) == 1, record["content"]
