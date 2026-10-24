@@ -1,9 +1,9 @@
 """
 Shared fixtures for the ingestion pipeline tests.
 
-Settings are pinned before any app module is imported. load_dotenv() never
-overrides variables that are already set, so the real .env keys and the
-local codesage.db are never used here.
+Settings are pinned before any app module is imported. load_dotenv() and
+pydantic's env_file never override variables that are already set, so these
+keys and the local codesage.db never come from a developer's backend/.env.
 """
 
 import os
@@ -13,6 +13,9 @@ os.environ["DEBUG"] = "false"
 os.environ["GITHUB_TOKEN"] = "test-token"
 os.environ["ALGOLIA_APP_ID"] = "test-app"
 os.environ["ALGOLIA_ADMIN_API_KEY"] = "test-key"
+os.environ["CODESAGE_API_KEY"] = ""  # empty: no key required; tests that need one set it
+os.environ["ENABLE_RATE_LIMITING"] = "true"
+os.environ["MCP_SERVER_HOST"] = "127.0.0.1"
 
 import pytest
 from algoliasearch.exceptions import AlgoliaException

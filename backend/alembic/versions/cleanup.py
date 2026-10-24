@@ -22,8 +22,9 @@ _DUPLICATES = (
 
 
 def upgrade() -> None:
-    op.drop_table("sessions")
-    op.drop_table("search_indexes")
+    # A pre-Alembic database stamped at baseline may never have had these tables
+    op.execute("DROP TABLE IF EXISTS sessions")
+    op.execute("DROP TABLE IF EXISTS search_indexes")
 
     # Keep the newest (highest id) repository per URL; remove children first.
     op.execute(f"DELETE FROM code_entities WHERE repository_id IN ({_DUPLICATES})")

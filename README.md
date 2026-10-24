@@ -108,7 +108,7 @@ export CODESAGE_API_KEY=...   # becomes the frontend build argument; must match 
 make up                       # docker compose -f deployment/docker-compose.yml up -d
 ```
 
-This starts the backend and nginx, which serves the frontend on http://localhost and proxies `/api`, `/ws` and `/health`. The images have never been built in CI, so treat this path as untested. See [deployment/DOCKER.md](deployment/DOCKER.md).
+This starts the backend and nginx, which serves the frontend on http://localhost and proxies `/api`, `/ws` and `/health`. CI checks both Compose files and builds both images on every push, but never starts the containers. See [deployment/DOCKER.md](deployment/DOCKER.md).
 
 ## Testing
 
@@ -120,7 +120,7 @@ cd frontend && npm run lint
 cd frontend && npm run build      # type-check and production build
 ```
 
-CI (`.github/workflows/ci.yml`) runs ruff and pytest for the backend, and lint, build and tests for the frontend. Frontend tests are unit tests only; there are no end-to-end tests.
+CI (`.github/workflows/ci.yml`) runs ruff and pytest for the backend, lint, build and tests for the frontend, and validates the Compose files and builds both Docker images. Frontend tests are unit tests only; there are no end-to-end tests.
 
 ## Configuration
 
@@ -159,7 +159,7 @@ docs/                   architecture and MCP guide
 - Job state and WebSocket subscriptions live in the server process, so run exactly one worker.
 - SQLite only. Alembic migrations run automatically at startup; a database from before Alembic is stamped at `baseline` first.
 - Frontend tests are unit tests only.
-- The Docker images are untested.
+- The Docker images are built in CI but never run there.
 - The dashboard API key is embedded in the JavaScript bundle (local, single-user use only).
 
 See [docs/architecture.md](docs/architecture.md) for how the pieces fit together.

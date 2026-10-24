@@ -1,6 +1,6 @@
 # Docker deployment
 
-Status: the Dockerfiles and Compose files have never been built in CI. Treat everything here as untested and expect to fix small problems.
+Status: CI validates both Compose files and builds both images on every push, but never starts the containers. Expect to fix small problems at runtime.
 
 ## What runs
 

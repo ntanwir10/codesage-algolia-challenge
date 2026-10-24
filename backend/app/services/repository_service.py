@@ -345,12 +345,12 @@ class RepositoryService:
                 continue
             try:
                 manifest = json.loads(file.content)
-            except ValueError:
-                continue
-            dependencies = {
-                **manifest.get("dependencies", {}),
-                **manifest.get("devDependencies", {}),
-            }
+                dependencies = {
+                    **manifest.get("dependencies", {}),
+                    **manifest.get("devDependencies", {}),
+                }
+            except (ValueError, AttributeError, TypeError):
+                continue  # not JSON, or not an object of objects (e.g. a fixture holding a list)
             for package, framework in js_frameworks:
                 if package in dependencies:
                     return framework

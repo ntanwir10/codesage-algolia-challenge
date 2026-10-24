@@ -152,6 +152,18 @@ def test_framework_comes_from_manifests_and_imports():
     assert RepositoryService._detect_framework([github_file("x.py", "print(1)\n")]) is None
 
 
+def test_framework_skips_manifests_that_are_not_objects():
+    # Fixtures deep in a repo can hold any JSON; they used to fail an already-indexed run
+    odd = [
+        github_file(f"fixtures/{i}/package.json", body, language="json")
+        for i, body in enumerate(['["react"]', "null", '"react"', '{"dependencies": ["react"]}'])
+    ]
+    real = github_file("package.json", '{"devDependencies": {"vue": "^3"}}', language="json")
+
+    assert RepositoryService._detect_framework(odd) is None
+    assert RepositoryService._detect_framework([*odd, real]) == "vue"
+
+
 async def test_delete_keeps_the_row_when_algolia_cannot_delete(db_session, algolia_index):
     repo = make_repository(db_session, status="completed")
     algolia_index.fail_deletes = True

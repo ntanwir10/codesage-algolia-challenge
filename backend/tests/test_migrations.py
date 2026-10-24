@@ -102,6 +102,20 @@ def test_legacy_database_is_stamped_and_cleaned(tmp_path):
             conn.execute("INSERT INTO repositories (name, url) VALUES ('n', 'https://x/solo')")
 
 
+def test_legacy_database_without_legacy_tables_upgrades(tmp_path):
+    # Older create_all() runs could leave out sessions and search_indexes
+    db = tmp_path / "legacy-minimal.db"
+    _build_legacy(db)
+    with sqlite3.connect(db) as conn:
+        conn.execute("DROP TABLE sessions")
+        conn.execute("DROP TABLE search_indexes")
+    engine = _engine(db)
+    upgrade_database(engine)
+
+    assert set(inspect(engine).get_table_names()) == NEW_TABLES
+    assert _counts(db) == {"repositories": 2, "code_files": 2, "code_entities": 2}
+
+
 def test_upgrade_twice_is_noop(tmp_path):
     db = tmp_path / "twice.db"
     _build_legacy(db)
