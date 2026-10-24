@@ -53,11 +53,11 @@ make clean         # stop and remove volumes (deletes the database)
 Prod keeps the API key out of the browser. The frontend is built without `VITE_CODESAGE_API_KEY`; instead nginx (`deployment/nginx.prod.conf.template`) asks every visitor for a password with HTTP basic auth and adds `X-API-Key` to each `/api` and `/ws` request itself. `/health` stays open. Before `make prod-up`:
 
 ```bash
-export CODESAGE_API_KEY=...   # the same value as in backend/.env
+export CODESAGE_API_KEY=...   # used by both the backend and nginx; overrides backend/.env
 docker run --rm httpd:alpine htpasswd -nbB <user> <password> > deployment/htpasswd
 ```
 
-`deployment/htpasswd` is gitignored. Basic auth over plain HTTP sends the password in clear text, so enable TLS before exposing the stack beyond a trusted network. The Claude Desktop bridge should talk to the backend directly, not through this nginx.
+`deployment/htpasswd` is gitignored. Basic auth over plain HTTP sends the password in clear text, so enable TLS before exposing the stack beyond a trusted network. To use the Claude Desktop bridge with this stack, put the basic-auth login in its URL, e.g. `make install-claude ARGS="--server-url http://<user>:<password>@your-host"`; nginx adds the API key, so the bridge needs none.
 
 ## Troubleshooting
 

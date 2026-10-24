@@ -12,6 +12,9 @@ services:
       - ../backend/.env
     environment:
       - DATABASE_URL=sqlite:///./data/codesage.db
+      # One source for the key: the shell. nginx gets the same value below, and the
+      # backend refuses to start without it because it binds 0.0.0.0.
+      - CODESAGE_API_KEY=${CODESAGE_API_KEY:-}
       # Algolia records are keyed by repository id, so this database must not
       # share an index with any other one (they'd delete each other's records)
       - ALGOLIA_INDEX_NAME=${PROD_ALGOLIA_INDEX_NAME:-codesage_code_entities_prod}
@@ -43,7 +46,7 @@ services:
       # server block is enabled and ./ssl is populated, add "443:443" and
       # mount ./ssl:/etc/nginx/ssl:ro.
     environment:
-      # Must match CODESAGE_API_KEY in backend/.env; export it before `up`
+      # Same exported value as the backend's; export it before `up`
       - CODESAGE_API_KEY=${CODESAGE_API_KEY:-}
       - NGINX_ENVSUBST_FILTER=^CODESAGE_API_KEY$$
     volumes:
