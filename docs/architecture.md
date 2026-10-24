@@ -47,7 +47,7 @@ repositories 1 --- * code_files 1 --- * code_entities
 | Table | Main columns |
 | --- | --- |
 | `repositories` | `id`, `name`, `url` (unique), `branch` (null = default branch), `language`, `framework`, `status`, `error_message`, `total_files`, `processed_files`, `total_lines`, timestamps |
-| `code_files` | `id`, `repository_id`, `file_path`, `file_name`, `content`, `language`, `size_bytes`, `line_count`, `is_analyzed` |
+| `code_files` | `id`, `repository_id`, `file_path`, `content`, `language`, `line_count` |
 | `code_entities` | `id`, `file_id`, `repository_id`, `entity_type` (`function`, `class`, `import`, `doc_section`), `entity_name`, `start_line`, `end_line`, `signature`, `docstring`, `entity_metadata` (parameters, return type) |
 
 Deleting a repository removes its files and entities (cascade) after its Algolia records are deleted. Status values are `pending`, `processing`, `completed` and `failed`.

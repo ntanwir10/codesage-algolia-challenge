@@ -25,8 +25,8 @@ def make_repo(db, name="zustand", url="https://github.com/pmndrs/zustand", statu
 def add_file(db, repo, path, content, language="typescript"):
     lines = content.count("\n") + 1
     f = CodeFile(
-        repository_id=repo.id, file_path=path, file_name=path.rsplit("/", 1)[-1],
-        content=content, language=language, line_count=lines, size_bytes=len(content),
+        repository_id=repo.id, file_path=path,
+        content=content, language=language, line_count=lines,
     )
     db.add(f)
     db.commit()

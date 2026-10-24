@@ -17,8 +17,6 @@ export interface Repository {
   total_files: number;
   processed_files: number;
   total_lines: number;
-  security_score?: number | null;
-  vulnerability_count: number;
   created_at: string;
   updated_at?: string | null;
   processed_at?: string | null;

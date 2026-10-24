@@ -1,4 +1,4 @@
-from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy import Column, DateTime, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 
@@ -15,12 +15,9 @@ class CodeFile(Base):
         Integer, ForeignKey("repositories.id"), nullable=False, index=True
     )
     file_path = Column(String(1000), nullable=False, index=True)
-    file_name = Column(String(255), nullable=False, index=True)
     content = Column(Text, nullable=False)
     language = Column(String(50), nullable=True, index=True)
-    size_bytes = Column(Integer, default=0)
     line_count = Column(Integer, default=0)
-    is_analyzed = Column(Boolean, default=False)
 
     # Timestamps
     created_at = Column(DateTime(timezone=True), server_default=func.now())

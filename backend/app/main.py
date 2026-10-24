@@ -26,7 +26,6 @@ from app.core.security import limiter
 from app.models import code_entity, code_file, repository  # noqa: F401  registers tables
 from app.services.algolia_service import AlgoliaService
 from app.services.repository_service import recover_interrupted_jobs
-from codesage_mcp import schemas as mcp_schemas
 
 # Get application settings
 settings = get_settings()
@@ -164,10 +163,9 @@ app.add_middleware(
 app.include_router(api_router, prefix="/api/v1")
 
 # Add WebSocket endpoints directly to main app
-from app.services.websocket_service import repository_status_websocket, websocket_health
+from app.services.websocket_service import repository_status_websocket
 
 app.add_api_websocket_route("/ws", repository_status_websocket)
-app.add_api_route("/api/v1/ws/health", websocket_health, methods=["GET"])
 
 
 # Root endpoint
@@ -175,26 +173,11 @@ app.add_api_route("/api/v1/ws/health", websocket_health, methods=["GET"])
 async def root():
     """Root endpoint with MCP server information"""
     return {
-        "message": "CodeSage MCP Server",
+        "name": "CodeSage MCP Server",
         "version": "1.0.0",
-        "architecture": "MCP-first - Simplified",
-        "description": "AI-powered code discovery through the Model Context Protocol",
-        "endpoints": {
-            "docs": "/docs",
-            "health": "/health",
-            "websocket": "/ws",
-            "mcp_tools": "/api/v1/ai/mcp/tools",
-            "mcp_capabilities": "/api/v1/ai/mcp/capabilities",
-        },
-        "realtime_features": {
-            "websocket_url": "/ws",
-            "health_check": "/api/v1/ws/health",
-            "supported_events": [
-                "repository_status",
-                "processing_complete",
-                "processing_failed",
-            ],
-        },
+        "docs": "/docs",
+        "health": "/health",
+        "mcp_capabilities": "/api/v1/ai/mcp/capabilities",
     }
 
 
@@ -252,30 +235,6 @@ async def health_check():
         "components": components,
     }
     return JSONResponse(body, status_code=503 if overall == "unhealthy" else 200)
-
-
-@app.get("/mcp")
-async def mcp_info():
-    """MCP server information endpoint"""
-    return {
-        "server": "CodeSage MCP Server",
-        "protocol": "Model Context Protocol (MCP)",
-        "version": settings.MCP_SERVER_CONFIG["version"],
-        "description": settings.MCP_SERVER_CONFIG["description"],
-        "capabilities": settings.MCP_SERVER_CONFIG["capabilities"],
-        "tools_available": len(mcp_schemas.TOOLS),
-        "realtime_features": {
-            "websocket_endpoint": "/ws",
-            "real_time_processing": True,
-            "status_broadcasting": True,
-            "supported_events": [
-                "repository_status",
-                "processing_complete",
-                "processing_failed",
-            ],
-        },
-        "setup_instructions": "See docs/MCP_INTEGRATION_GUIDE.md",
-    }
 
 
 if __name__ == "__main__":

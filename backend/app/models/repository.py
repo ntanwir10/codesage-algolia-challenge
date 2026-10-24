@@ -1,4 +1,4 @@
-from sqlalchemy import JSON, Column, DateTime, Integer, String, Text
+from sqlalchemy import Column, DateTime, Integer, String, Text
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 
@@ -29,13 +29,6 @@ class Repository(Base):
     total_lines = Column(Integer, default=0)
     processed_files = Column(Integer, default=0)
 
-    # Metadata (renamed to avoid SQLAlchemy conflict)
-    repo_metadata = Column(JSON, nullable=True)
-
-    # Security analysis
-    security_score = Column(Integer, nullable=True)  # 0-100
-    vulnerability_count = Column(Integer, default=0)
-
     # Timestamps
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
@@ -55,11 +48,6 @@ class Repository(Base):
         if self.total_files == 0:
             return 0.0
         return (self.processed_files / self.total_files) * 100
-
-    @property
-    def is_completed(self) -> bool:
-        """Check if repository processing is completed"""
-        return self.status == "completed"
 
     @property
     def is_processing(self) -> bool:

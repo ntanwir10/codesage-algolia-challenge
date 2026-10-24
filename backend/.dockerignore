@@ -11,5 +11,4 @@ __pycache__/
 .pytest_cache/
 .venv/
 data/
-uploads/
 .git/

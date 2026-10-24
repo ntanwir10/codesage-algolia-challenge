@@ -20,9 +20,9 @@ RUN adduser --disabled-password --gecos '' --uid 1000 appuser
 
 COPY . .
 
-# SQLite + uploads dirs must be writable by appuser. Named volumes mounted here
+# The SQLite dir must be writable by appuser. Named volumes mounted here
 # inherit this ownership on first creation.
-RUN mkdir -p /app/data /app/uploads \
+RUN mkdir -p /app/data \
     && chown -R appuser:appuser /app
 USER appuser
 

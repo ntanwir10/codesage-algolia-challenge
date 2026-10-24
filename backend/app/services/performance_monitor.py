@@ -4,7 +4,6 @@ Tracks processing times, memory usage, and throughput metrics.
 """
 
 import itertools
-import json
 import time
 from collections import defaultdict, deque
 from contextlib import asynccontextmanager
@@ -229,16 +228,6 @@ class PerformanceMonitor:
         self.operation_stats.clear()
         logger.info("🔄 Performance metrics reset")
 
-    def export_metrics(self, filepath: str):
-        """Export metrics to JSON file"""
-        try:
-            report = self.get_performance_report()
-            with open(filepath, "w") as f:
-                json.dump(report, f, indent=2, default=str)
-            logger.info(f"📊 Metrics exported to {filepath}")
-        except Exception as e:
-            logger.error(f"Failed to export metrics: {e}")
-
 
 # Global performance monitor instance
 performance_monitor = PerformanceMonitor()
@@ -250,26 +239,4 @@ def monitor_repository_processing(repo_name: str | int, file_count: int = 0):
     return performance_monitor.monitor_operation(
         "repository_processing",
         metadata={"repo_name": repo_name, "file_count": file_count},
-    )
-
-
-def monitor_github_api_call(endpoint: str):
-    """Monitor GitHub API call"""
-    return performance_monitor.monitor_operation(
-        "github_api_call", metadata={"endpoint": endpoint}
-    )
-
-
-def monitor_algolia_indexing(index_name: str, item_count: int):
-    """Monitor Algolia indexing operation"""
-    return performance_monitor.monitor_operation(
-        "algolia_indexing",
-        metadata={"index_name": index_name, "item_count": item_count},
-    )
-
-
-def monitor_code_parsing(language: str, file_count: int):
-    """Monitor code parsing operation"""
-    return performance_monitor.monitor_operation(
-        "code_parsing", metadata={"language": language, "file_count": file_count}
     )

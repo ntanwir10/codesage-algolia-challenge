@@ -58,10 +58,6 @@ class RepositoryResponse(RepositoryBase):
     total_files: int = Field(default=0, description="Total number of files")
     processed_files: int = Field(default=0, description="Number of processed files")
     total_lines: int = Field(default=0, description="Total lines of code")
-    security_score: int | None = Field(None, description="Security score (0-100)")
-    vulnerability_count: int = Field(
-        default=0, description="Number of vulnerabilities found"
-    )
     created_at: datetime = Field(..., description="Creation timestamp")
     updated_at: datetime | None = Field(None, description="Last update timestamp")
     processed_at: datetime | None = Field(
