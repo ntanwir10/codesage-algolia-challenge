@@ -377,7 +377,9 @@ class CodeParser:
             kind = node.type
             child_scope, child_in_class = scope, in_class
 
-            if kind in spec.imports or (language == "ruby" and kind == "call" and self._is_ruby_require(node)):
+            if (kind in spec.imports
+                    or (language == "ruby" and kind == "call" and self._is_ruby_require(node))
+                    or (language in ("javascript", "typescript") and self._is_js_require(node))):
                 self._emit_import(spec, node, lines, entities)
                 continue
 
@@ -561,6 +563,23 @@ class CodeParser:
         method = node.child_by_field_name("method")
         return (method is not None and self._text(method) in _RUBY_REQUIRES
                 and node.child_by_field_name("receiver") is None)
+
+    def _is_js_require(self, node) -> bool:
+        """CommonJS `const x = require('m')` declarations and bare `require('m');` statements"""
+        if node.type in ("lexical_declaration", "variable_declaration"):
+            values = [d.child_by_field_name("value") for d in node.named_children
+                      if d.type == "variable_declarator"]
+            # A declaration that also defines a function is left to the function walk
+            return bool(values) and all(self._is_require_call(v) for v in values)
+        if node.type == "expression_statement":
+            return any(self._is_require_call(child) for child in node.named_children)
+        return False
+
+    def _is_require_call(self, node) -> bool:
+        while node is not None and node.type == "member_expression":  # require('m').prop
+            node = node.child_by_field_name("object")
+        return (node is not None and node.type == "call_expression"
+                and self._text(node.child_by_field_name("function")) == "require")
 
     def _js_named_function(self, spec, node, scope, lines, entities, claimed) -> str | None:
         """Functions that get their name from context: variables, assignments, properties, export default.

@@ -10,6 +10,7 @@ to keep the event loop (API, WebSocket, MCP) responsive.
 
 import asyncio
 import hashlib
+import json
 import time
 from typing import Any
 
@@ -32,9 +33,27 @@ DELETE_WAIT_SECONDS = 120
 
 # Characters of entity body stored with each record, well under the 10 KB record limit
 MAX_BODY_CHARS = 2000
+# Algolia rejects a whole batch if one record is over 10 KB; keep headroom below it
+MAX_RECORD_BYTES = 9000
+# Name, description, signature and return type are display text, not the body
+MAX_FIELD_CHARS = 500
 
 # Higher ranks first when relevance ties
 RANK_WEIGHTS = {"class": 3, "function": 2, "doc_section": 1, "import": 0}
+
+
+def _fit_record(record: dict[str, Any]) -> dict[str, Any]:
+    """Trim content, then parameters, until the record's UTF-8 JSON fits MAX_RECORD_BYTES"""
+    while (excess := len(json.dumps(record, ensure_ascii=False).encode()) - MAX_RECORD_BYTES) > 0:
+        if record["content"]:
+            # Dropping n source bytes drops at least n JSON bytes, so one pass is enough
+            raw = record["content"].encode()
+            record["content"] = raw[: max(0, len(raw) - excess)].decode(errors="ignore")
+        elif record["parameters"]:
+            record["parameters"] = []
+        else:
+            break  # only capped fields are left
+    return record
 
 INDEX_SETTINGS = {
     "searchableAttributes": [
@@ -201,20 +220,20 @@ class AlgoliaService:
         """Algolia record for one code entity"""
         # Stable ID: re-indexing the same entity overwrites its record instead of duplicating it
         entity_key = f"{file_path}:{entity.entity_type}:{entity.name}:{entity.line_start}"
-        signature = entity.content or ""
+        signature = (entity.content or "")[:MAX_FIELD_CHARS]
         body = (entity.body or "")[:MAX_BODY_CHARS]
         content = f"{signature}\n{body}" if body and not body.startswith(signature) else (
             body or signature
         )
-        return {
+        return _fit_record({
             "objectID": f"{repository_id}_{hashlib.sha1(entity_key.encode()).hexdigest()}",
             "repository_id": repository_id,
             "file_path": file_path,
             "entity_type": entity.entity_type,
-            "entity_name": entity.name,
-            "description": entity.description,
+            "entity_name": entity.name[:MAX_FIELD_CHARS],
+            "description": entity.description[:MAX_FIELD_CHARS],
             "parameters": entity.parameters or [],
-            "return_type": entity.return_type,
+            "return_type": entity.return_type[:MAX_FIELD_CHARS] if entity.return_type else None,
             "line_start": entity.line_start,
             "line_end": entity.line_end,
             "language": language,
@@ -223,7 +242,7 @@ class AlgoliaService:
             "rank_weight": RANK_WEIGHTS.get(entity.entity_type, 0),
             "parameter_count": len(entity.parameters) if entity.parameters else 0,
             "lines_of_code": max(entity.line_end - entity.line_start + 1, 1),
-        }
+        })
 
     async def search_code(
         self,

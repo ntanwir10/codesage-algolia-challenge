@@ -23,6 +23,7 @@ from app.models.code_entity import CodeEntity
 from app.models.code_file import CodeFile
 from app.models.repository import Repository
 from app.services import algolia_service
+from app.services.github_service import quote_path
 from app.services.repository_service import RepositoryService
 from codesage_mcp import schemas
 
@@ -124,7 +125,7 @@ def _permalink(repository: Repository | None, hit: dict) -> str | None:
         return None
     start = hit.get("line_start")
     end = hit.get("line_end") or start
-    url = f"{GITHUB_PREFIX}{path}/blob/{repository.branch or 'HEAD'}/{file_path}"
+    url = f"{GITHUB_PREFIX}{path}/blob/{quote_path(repository.branch or 'HEAD')}/{quote_path(file_path)}"
     if start:
         url += f"#L{start}-L{end}"
     return url

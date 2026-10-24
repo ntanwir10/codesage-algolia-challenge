@@ -76,6 +76,8 @@ async def github_api():
         state["max_in_flight"] = max(state["max_in_flight"], state["in_flight"])
         try:
             await asyncio.sleep(state["raw_delay"])
+            if (err := failure(f"raw:{request.match_info['path']}")) is not None:
+                return err
             key = f"{request.match_info['branch']}:{request.match_info['path']}"
             if key not in state["raw"]:
                 return web.Response(status=404)
@@ -278,13 +280,36 @@ async def test_downloads_run_concurrently_within_the_limit(github_api):
     assert elapsed < 1.6
 
 
-async def test_failed_downloads_are_skipped(github_api):
+async def test_failed_download_fails_the_fetch(github_api):
+    # A partial file list would let a reprocess replace a complete index
     github_api["trees"]["main"] = [blob("ok.py", 5), blob("gone.py", 5)]
     github_api["raw"] = {"main:ok.py": b"x = 1\n"}  # gone.py -> 404
 
+    with pytest.raises(GitHubAPIError, match=r"\(404\) for gone.py"):
+        await service_for(github_api).get_repository_files(REPO_URL, "main")
+
+    assert downloads(github_api).count("/raw/octo/demo/main/gone.py") == 1  # 4xx isn't retried
+
+
+async def test_transient_download_failure_is_retried(github_api):
+    github_api["trees"]["main"] = [blob("a.py", 5)]
+    github_api["raw"] = {"main:a.py": b"x = 1\n"}
+    github_api["fail"]["raw:a.py"] = [(503, {}), (429, {})]
+
     files = await service_for(github_api).get_repository_files(REPO_URL, "main")
 
-    assert [f.path for f in files] == ["ok.py"]
+    assert [f.path for f in files] == ["a.py"]
+    assert len(downloads(github_api)) == 3
+
+
+async def test_persistent_download_failure_raises_after_max_retries(github_api):
+    github_api["trees"]["main"] = [blob("a.py", 5)]
+    github_api["always_fail"]["raw:a.py"] = (502, {})
+
+    with pytest.raises(GitHubAPIError, match=r"\(502\) for a.py"):
+        await service_for(github_api).get_repository_files(REPO_URL, "main")
+
+    assert len(downloads(github_api)) == gh.MAX_RETRIES
 
 
 async def test_5xx_is_retried_then_succeeds(github_api):

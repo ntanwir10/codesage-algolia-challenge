@@ -306,6 +306,28 @@ async def test_javascript_export_is_not_an_import():
     assert [e.name for e in imports] == ["import fs from 'fs';", "import { a, b } from './x';"]
 
 
+async def test_commonjs_require_is_an_import():
+    source = textwrap.dedent("""\
+        const fs = require('fs');
+        var { join } = require("path"), y = require('x').y;
+        require('./polyfill');
+        const notRequire = load('x');
+        const a = require('a'), f = () => 1;
+        function main() { const lazy = require('lazy'); return lazy; }
+        """)
+    for language in ("javascript", "typescript"):
+        entities = await parse(source, language)
+        imports = [(e.name, e.line_start) for e in entities if e.entity_type == "import"]
+        assert imports == [
+            ("const fs = require('fs');", 1),
+            ("var { join } = require(\"path\"), y = require('x').y;", 2),
+            ("require('./polyfill');", 3),
+            ("const lazy = require('lazy');", 6),
+        ]
+        # A declaration that also defines a function keeps the function
+        assert {"f", "main"} <= set(by_name(entities, "function"))
+
+
 async def test_javascript_has_no_junk_entities():
     entities = await parse(JS, "javascript")
     assert all(e.name != "unknown_function" for e in entities)

@@ -1,6 +1,9 @@
 """Algolia queries scoped to one repository use the filter form a live index honours"""
 
+import json
+
 from app.services import algolia_service as algolia_module
+from app.services.code_parser import CodeParser, ParsedCodeEntity
 
 
 async def test_search_scopes_by_repository_with_a_numeric_filter(algolia_index):
@@ -87,3 +90,31 @@ async def test_settings_create_a_brand_new_index(algolia_index, monkeypatch):
 
     assert algolia_index.settings_writes == 1
     assert algolia_index.settings == algolia_module.INDEX_SETTINGS
+
+
+def record_bytes(record):
+    return len(json.dumps(record, ensure_ascii=False).encode())
+
+
+async def test_long_docstring_record_stays_under_the_size_limit(algolia_index):
+    # A 9,000-character first docstring line used to make an ~11 KB record, failing the batch
+    source = 'def f():\n    """' + "x" * 9000 + '"""\n    return 1\n'
+    entity = next(e for e in CodeParser().parse("a.py", source, "python") if e.name == "f")
+
+    record = algolia_module.AlgoliaService()._create_algolia_document(entity, 1, "a.py", "python")
+
+    assert record_bytes(record) <= algolia_module.MAX_RECORD_BYTES
+    assert len(record["description"]) == algolia_module.MAX_FIELD_CHARS
+
+
+async def test_oversized_record_trims_content_to_fit(algolia_index):
+    wide = "😀" * 600  # 4 bytes per character
+    entity = ParsedCodeEntity(
+        entity_type="function", name="f", description=wide, line_start=1, line_end=9,
+        content=wide, body="😀" * 2000,
+    )
+
+    record = algolia_module.AlgoliaService()._create_algolia_document(entity, 1, "a.py", "python")
+
+    assert record_bytes(record) <= algolia_module.MAX_RECORD_BYTES
+    assert record["content"] and set(record["content"]) <= {"😀", "\n"}  # cut on a character boundary

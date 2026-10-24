@@ -130,6 +130,16 @@ async def test_search_all_repos_looks_up_hit_repository(db_session, repo, algoli
     assert result["results"][0]["url"] == "https://github.com/a/o/blob/HEAD/src/vanilla.ts#L5-L20"
 
 
+async def test_search_permalink_percent_encodes_branch_and_path(db_session, algolia_index):
+    other = make_repo(db_session, name="o", url="https://github.com/a/o", branch="feat/50%")
+    hit = {**HIT, "file_path": "docs/setup#linux v2.md", "repository_id": other.id}
+    algolia_index.search = lambda q, params: {"hits": [hit], "nbHits": 1}
+    result = await call_tool(db_session, "search_code", {"query": "create"})
+    assert result["results"][0]["url"] == (
+        "https://github.com/a/o/blob/feat/50%25/docs/setup%23linux%20v2.md#L5-L20"
+    )
+
+
 async def test_search_requires_completed(db_session, algolia_index):
     make_repo(db_session, name="busy", url=None, status="processing")
     with pytest.raises(ToolError, match="processing"):

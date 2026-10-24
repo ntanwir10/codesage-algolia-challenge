@@ -136,7 +136,7 @@ def parse_github_url(url: str) -> tuple[str, str, str | None]:
     return owner, repo, branch
 
 
-def _quote_path(path: str) -> str:
+def quote_path(path: str) -> str:
     """Percent-encode each segment of a slash-separated path"""
     return "/".join(urlquote(seg, safe="") for seg in path.split("/"))
 
@@ -365,7 +365,7 @@ class GitHubService:
         entries: list[tuple[str, int]],
     ) -> None:
         """Fallback listing: one contents request per directory, denied dirs pruned"""
-        url = f"{self.base_url}/repos/{owner}/{repo}/contents/{_quote_path(path) if path else ''}"
+        url = f"{self.base_url}/repos/{owner}/{repo}/contents/{quote_path(path) if path else ''}"
         contents = await self._make_request_with_retries(
             session, url, owner, repo, path, params={"ref": branch}
         )
@@ -385,15 +385,15 @@ class GitHubService:
         branch: str,
         candidates: list[tuple[str, int]],
     ) -> list[GitHubFile]:
-        """Download candidates concurrently; failed, empty and binary files are skipped"""
+        """Download candidates concurrently; empty and binary files are skipped, failures raise"""
 
         async def fetch(path: str, size: int) -> GitHubFile | None:
             url = (
                 f"{self.raw_base_url}/{urlquote(owner, safe='')}/{urlquote(repo, safe='')}"
-                f"/{_quote_path(branch)}/{_quote_path(path)}"
+                f"/{quote_path(branch)}/{quote_path(path)}"
             )
             async with self._semaphore:
-                raw = await self._download_file_content(session, url)
+                raw = await self._download_file_content(session, url, path)
             content = self._decode_content(raw)
             if content is None:
                 logger.debug("Skipped empty or binary file", file_path=path)
@@ -407,7 +407,14 @@ class GitHubService:
                 filename=filename,
             )
 
-        results = await asyncio.gather(*(fetch(p, s) for p, s in candidates))
+        tasks = [asyncio.create_task(fetch(p, s)) for p, s in candidates]
+        try:
+            results = await asyncio.gather(*tasks)
+        except BaseException:
+            # One failed download fails the run; stop the rest before the session closes
+            for task in tasks:
+                task.cancel()
+            raise
         return [f for f in results if f is not None]
 
     def _detect_language(self, filename: str) -> str:
@@ -440,15 +447,31 @@ class GitHubService:
         return raw.decode("utf-8-sig", errors="replace")
 
     async def _download_file_content(
-        self, session: aiohttp.ClientSession, download_url: str
+        self, session: aiohttp.ClientSession, download_url: str, path: str
     ) -> bytes:
-        """Download individual file content as bytes; b"" (skipped) on failure"""
-        try:
-            async with session.get(download_url) as response:
-                if response.status == 200:
-                    return await response.read()
-                logger.warning("Failed to download file", url=download_url, status=response.status)
-                return b""
-        except Exception as e:
-            logger.warning("Failed to download file", url=download_url, error=str(e))
-            return b""
+        """Download one file's bytes, retrying timeouts, 429 and 5xx up to MAX_RETRIES.
+
+        Raises GitHubAPIError when the file can't be fetched: skipping it would let
+        a reprocess replace a complete index with a partial one.
+        """
+        attempt = 0
+        while True:
+            failure: GitHubAPIError
+            try:
+                async with session.get(download_url) as response:
+                    if response.status == 200:
+                        return await response.read()
+                    status = response.status
+                logger.warning("Failed to download file", url=download_url, status=status)
+                failure = GitHubAPIError(status, f"GitHub download failed ({status}) for {path}")
+                if status < 500 and status != 429:
+                    raise failure
+            except TimeoutError:
+                failure = GitHubAPIError(504, f"GitHub download timed out (504) for {path}")
+            except aiohttp.ClientError as e:
+                failure = GitHubAPIError(503, f"GitHub download failed (503) for {path}: {e}")
+
+            attempt += 1
+            if attempt >= MAX_RETRIES:
+                raise failure
+            await asyncio.sleep(RETRY_BACKOFF_BASE * 2 ** (attempt - 1))
