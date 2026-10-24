@@ -3,6 +3,11 @@
 Configuration comes from the environment only:
     MCP_SERVER_URL    backend base URL (default http://127.0.0.1:8001)
     CODESAGE_API_KEY  sent as X-API-Key when set
+    CODESAGE_BASIC_AUTH_USER / CODESAGE_BASIC_AUTH_PASSWORD
+                      login for a basic-auth proxy (the prod nginx); the launcher
+                      reads the password from the macOS Keychain
+    CODESAGE_ALLOW_INSECURE_AUTH=1
+                      allow that login over plain http to a non-loopback host
 
 Tool schemas are single-sourced from ``codesage_mcp.schemas``, so ``tools/list``
 works even when the backend is down. stdout carries protocol messages only;
@@ -16,6 +21,7 @@ import sys
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
+from urllib.parse import urlsplit
 
 import httpx2 as httpx
 import mcp_types as types
@@ -29,6 +35,7 @@ from codesage_mcp.schemas import TOOLS, input_schema
 logger = logging.getLogger("codesage_mcp")
 
 DEFAULT_SERVER_URL = "http://127.0.0.1:8001"
+LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1"}
 API_PREFIX = "/api/v1/ai"
 REQUEST_TIMEOUT = 30.0
 SERVER_NAME = "codesage"
@@ -39,12 +46,39 @@ SERVER_VERSION = "1.0.0"
 class Config:
     server_url: str = DEFAULT_SERVER_URL
     api_key: str | None = None
+    basic_user: str | None = None
+    basic_password: str | None = None
+    allow_insecure_auth: bool = False
 
     @classmethod
     def from_env(cls) -> "Config":
-        url = os.environ.get("MCP_SERVER_URL", "").strip() or DEFAULT_SERVER_URL
-        key = os.environ.get("CODESAGE_API_KEY", "").strip() or None
-        return cls(server_url=url.rstrip("/"), api_key=key)
+        env = os.environ
+        url = env.get("MCP_SERVER_URL", "").strip() or DEFAULT_SERVER_URL
+        return cls(
+            server_url=url.rstrip("/"),
+            api_key=env.get("CODESAGE_API_KEY", "").strip() or None,
+            basic_user=env.get("CODESAGE_BASIC_AUTH_USER", "").strip() or None,
+            basic_password=env.get("CODESAGE_BASIC_AUTH_PASSWORD") or None,
+            allow_insecure_auth=env.get("CODESAGE_ALLOW_INSECURE_AUTH") == "1",
+        )
+
+    @property
+    def auth(self) -> tuple[str, str] | None:
+        return (self.basic_user, self.basic_password or "") if self.basic_user else None
+
+    @property
+    def insecure_auth_problem(self) -> str | None:
+        """Why a login must not be sent: over plain http it's readable on the network"""
+        parts = urlsplit(self.server_url)
+        has_login = bool(self.basic_user or parts.username)
+        if not has_login or self.allow_insecure_auth or parts.scheme == "https":
+            return None
+        if parts.hostname in LOOPBACK_HOSTS:
+            return None
+        return (
+            f"Refusing to send the CodeSage login over plain http to {parts.hostname}; "
+            "use an https:// MCP_SERVER_URL, or set CODESAGE_ALLOW_INSECURE_AUTH=1 on a trusted network"
+        )
 
     @property
     def base_url(self) -> str:
@@ -60,7 +94,7 @@ ClientFactory = Callable[[Config], httpx.AsyncClient]
 
 def default_client_factory(config: Config) -> httpx.AsyncClient:
     return httpx.AsyncClient(
-        base_url=config.base_url, headers=config.headers, timeout=REQUEST_TIMEOUT
+        base_url=config.base_url, headers=config.headers, auth=config.auth, timeout=REQUEST_TIMEOUT
     )
 
 
@@ -105,7 +139,13 @@ class CodeSageBridge:
     def _http_error(self, response: httpx.Response, tool: str) -> types.CallToolResult:
         status = response.status_code
         detail = self._detail(response)
-        if status == 401:
+        if status == 401 and "basic" in response.headers.get("www-authenticate", "").lower():
+            # Only a basic-auth proxy (the prod nginx) asks for a login; the backend never does
+            msg = (
+                "The proxy in front of CodeSage rejected the login (401); check the user and "
+                "password (CODESAGE_BASIC_AUTH_USER and its Keychain entry)"
+            )
+        elif status == 401:
             msg = "CodeSage backend rejected the API key (401); check CODESAGE_API_KEY in the MCP server config"
         elif status == 404:
             msg = f"Unknown tool '{tool}' (404): {detail}"
@@ -123,6 +163,8 @@ class CodeSageBridge:
         spec = TOOLS.get(name)
         if spec is None:
             return self._error(f"Unknown tool '{name}'. Available tools: {', '.join(TOOLS)}")
+        if problem := self.config.insecure_auth_problem:
+            return self._error(problem)
         try:
             args = spec.args_model.model_validate(arguments or {})
         except ValidationError as exc:

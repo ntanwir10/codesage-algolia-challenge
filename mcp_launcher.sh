@@ -12,4 +12,12 @@ if [ ! -x "$PYTHON" ]; then
   exit 1
 fi
 
+# A basic-auth password lives in the macOS Keychain, not in the Claude Desktop config
+if [ -n "${CODESAGE_BASIC_AUTH_USER:-}" ] && [ -z "${CODESAGE_BASIC_AUTH_PASSWORD:-}" ] \
+    && command -v security >/dev/null; then
+  CODESAGE_BASIC_AUTH_PASSWORD="$(security find-generic-password -s codesage-mcp \
+    -a "$CODESAGE_BASIC_AUTH_USER" -w 2>/dev/null || true)"
+  export CODESAGE_BASIC_AUTH_PASSWORD
+fi
+
 cd "$REPO/backend" && exec "$PYTHON" -m codesage_mcp

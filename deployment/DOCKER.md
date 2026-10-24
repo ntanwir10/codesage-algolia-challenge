@@ -57,7 +57,7 @@ export CODESAGE_API_KEY=...   # used by both the backend and nginx; overrides ba
 docker run --rm httpd:alpine htpasswd -nbB <user> <password> > deployment/htpasswd
 ```
 
-`deployment/htpasswd` is gitignored. Basic auth over plain HTTP sends the password in clear text, so enable TLS before exposing the stack beyond a trusted network. To use the Claude Desktop bridge with this stack, put the basic-auth login in its URL, e.g. `make install-claude ARGS="--server-url http://<user>:<password>@your-host"`; nginx adds the API key, so the bridge needs none.
+`deployment/htpasswd` is gitignored. Basic auth over plain HTTP sends the password in clear text, so enable TLS before exposing the stack beyond a trusted network. To use the Claude Desktop bridge with this stack, run `make install-claude ARGS="--server-url https://your-host --basic-auth <user>"`. It asks for the password and stores it in the macOS Keychain (service `codesage-mcp`); the Claude Desktop config holds only the user name. nginx adds the API key, so the bridge needs none. The bridge refuses to send the login over plain `http://` to a non-loopback host unless `CODESAGE_ALLOW_INSECURE_AUTH=1` is set in its environment.
 
 ## Troubleshooting
 

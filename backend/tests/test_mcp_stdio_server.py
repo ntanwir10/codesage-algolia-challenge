@@ -30,13 +30,18 @@ class Backend:
             return self.handler(request)
 
         return httpx.AsyncClient(
-            base_url=config.base_url, headers=config.headers, transport=httpx.MockTransport(respond)
+            base_url=config.base_url,
+            headers=config.headers,
+            auth=config.auth,
+            transport=httpx.MockTransport(respond),
         )
 
 
-def make_client(backend: Backend, api_key: str | None = None, mode: str = "auto") -> Client:
+def make_client(
+    backend: Backend, api_key: str | None = None, mode: str = "auto", config: Config | None = None
+) -> Client:
     server = build_server(
-        Config(server_url="http://backend.test", api_key=api_key), backend.factory
+        config or Config(server_url="http://backend.test", api_key=api_key), backend.factory
     )
     return Client(server, mode=mode)
 
@@ -218,3 +223,42 @@ async def test_stdio_subprocess_smoke():
         assert result.is_error
         assert "not reachable" in result.content[0].text
         await client.send_ping()
+
+
+async def test_proxy_401_blames_the_login_not_the_api_key():
+    challenge = {"WWW-Authenticate": 'Basic realm="CodeSage"'}
+    async with make_client(Backend(lambda r: httpx.Response(401, headers=challenge))) as client:
+        result = await client.call_tool("list_repositories", {})
+    assert result.is_error
+    assert "rejected the login" in result.content[0].text
+    assert "CODESAGE_API_KEY" not in result.content[0].text
+
+
+async def test_basic_auth_login_is_sent():
+    backend = Backend()
+    config = Config(server_url="https://codesage.example", basic_user="ann", basic_password="pw")
+    async with make_client(backend, config=config) as client:
+        await client.call_tool("list_repositories", {})
+    assert backend.requests[0].headers["authorization"].startswith("Basic ")
+
+
+@pytest.mark.parametrize(
+    ("url", "allow", "refused"),
+    [
+        ("http://codesage.example", False, True),
+        ("http://ann:pw@codesage.example", False, True),  # a login inside the URL counts too
+        ("http://codesage.example", True, False),
+        ("https://codesage.example", False, False),
+        ("http://127.0.0.1", False, False),
+    ],
+)
+async def test_login_is_never_sent_over_plain_http_to_another_host(url, allow, refused):
+    backend = Backend()
+    user = None if "@" in url else "ann"
+    config = Config(server_url=url, basic_user=user, basic_password="pw", allow_insecure_auth=allow)
+    async with make_client(backend, config=config) as client:
+        result = await client.call_tool("list_repositories", {})
+    assert result.is_error is refused
+    assert (backend.requests == []) is refused
+    if refused:
+        assert "CODESAGE_ALLOW_INSECURE_AUTH" in result.content[0].text

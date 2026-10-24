@@ -80,3 +80,25 @@ def test_custom_name(tmp_path, name):
     cfg = tmp_path / "c.json"
     assert run(cfg, "--name", name) == 0
     assert name in json.loads(cfg.read_text())["mcpServers"]
+
+
+def test_refuses_a_password_in_the_url(tmp_path, capsys):
+    cfg = tmp_path / "c.json"
+    assert installer.main(["--config", str(cfg), "--server-url", "https://ann:pw@h"]) == 1
+    assert "--basic-auth" in capsys.readouterr().err
+    assert not cfg.exists()
+
+
+def test_basic_auth_stores_password_in_keychain_and_only_user_in_config(tmp_path, monkeypatch):
+    calls = []
+    monkeypatch.setattr(installer.shutil, "which", lambda name: "/usr/bin/security")
+    monkeypatch.setattr(
+        installer.subprocess, "run", lambda cmd: calls.append(cmd) or type("R", (), {"returncode": 0})()
+    )
+    cfg = tmp_path / "c.json"
+    assert run(cfg, "--basic-auth", "ann") == 0
+    env = json.loads(cfg.read_text())["mcpServers"]["codesage"]["env"]
+    assert env["CODESAGE_BASIC_AUTH_USER"] == "ann"
+    assert "pw" not in cfg.read_text() and "PASSWORD" not in cfg.read_text()
+    # -w is last, so `security` prompts and the password never appears in argv
+    assert calls == [["security", "add-generic-password", "-U", "-s", "codesage-mcp", "-a", "ann", "-w"]]

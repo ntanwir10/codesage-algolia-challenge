@@ -8,10 +8,13 @@ backs the file up first, and writes atomically with mode 600.
 import argparse
 import json
 import os
+import shutil
+import subprocess
 import sys
 import tempfile
 import time
 from pathlib import Path
+from urllib.parse import urlsplit
 
 REPO = Path(__file__).resolve().parent.parent
 LAUNCHER = REPO / "mcp_launcher.sh"
@@ -110,6 +113,12 @@ def main(argv: list[str] | None = None) -> int:
         "--api-key", default=None, help="API key (default: CODESAGE_API_KEY from backend/.env)"
     )
     ap.add_argument(
+        "--basic-auth",
+        metavar="USER",
+        default=None,
+        help="login for a basic-auth proxy; the password is stored in the macOS Keychain",
+    )
+    ap.add_argument(
         "--dry-run", action="store_true", help="print the merged config (key masked); write nothing"
     )
     args = ap.parse_args(argv)
@@ -117,6 +126,17 @@ def main(argv: list[str] | None = None) -> int:
     config_path = args.config or default_config_path()
     server_url = args.server_url or os.environ.get("MCP_SERVER_URL") or DEFAULT_URL
     api_key = args.api_key or read_env_value(ENV_FILE, "CODESAGE_API_KEY") or ""
+
+    if urlsplit(server_url).password:
+        print(
+            "error: --server-url contains a password, which would be stored in plain text; "
+            "use --basic-auth USER instead (the password goes to the macOS Keychain)",
+            file=sys.stderr,
+        )
+        return 1
+    if args.basic_auth and not shutil.which("security"):
+        print("error: --basic-auth needs the macOS Keychain (`security`)", file=sys.stderr)
+        return 1
 
     existing: dict = {}
     if config_path.exists():
@@ -139,6 +159,8 @@ def main(argv: list[str] | None = None) -> int:
         "command": str(LAUNCHER),
         "env": {"MCP_SERVER_URL": server_url, "CODESAGE_API_KEY": api_key},
     }
+    if args.basic_auth:
+        entry["env"]["CODESAGE_BASIC_AUTH_USER"] = args.basic_auth
     try:
         merged = merge_config(existing, args.name, entry)
     except ValueError as exc:
@@ -150,7 +172,14 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps(masked(merged, args.name), indent=2))
         return 0
 
-    if not api_key:
+    if args.basic_auth:
+        print(f"Enter the password for {args.basic_auth}; it is stored in the Keychain only.")
+        # -w as the last option makes `security` prompt, so the password is never in argv
+        cmd = ["security", "add-generic-password", "-U", "-s", "codesage-mcp", "-a", args.basic_auth, "-w"]
+        if subprocess.run(cmd).returncode != 0:
+            print("error: could not store the password in the Keychain", file=sys.stderr)
+            return 1
+    if not api_key and not args.basic_auth:
         print(
             "warning: no API key found (--api-key or CODESAGE_API_KEY in backend/.env); writing it empty",
             file=sys.stderr,
