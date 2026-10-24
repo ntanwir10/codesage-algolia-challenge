@@ -27,7 +27,7 @@ make up      # docker compose -f deployment/docker-compose.yml up -d
 - The backend reads `backend/.env` (`env_file`).
 - The container binds `0.0.0.0`, so `CODESAGE_API_KEY` is mandatory: the backend refuses to start without it.
 - Export `CODESAGE_API_KEY` in your shell before building. Compose passes it to the frontend build as `VITE_CODESAGE_API_KEY`, and Vite embeds it in the JavaScript bundle. It must match the value in `backend/.env`. This is acceptable for local, single-user use only.
-- Open http://localhost for the app. The backend is also published on http://localhost:8001 (API docs at `/docs`).
+- Open http://localhost for the app. The dev file publishes nginx (port 80) and the backend (http://localhost:8001, API docs at `/docs`) on 127.0.0.1 only, because the bundle embeds the API key. The prod file publishes only port 80; reach the API through nginx at http://localhost/api/v1, and set `MCP_SERVER_URL=http://localhost` for the Claude Desktop bridge.
 - The SQLite database lives in the `backend_data` volume at `/app/data` (`DATABASE_URL=sqlite:///./data/codesage.db`). Migrations run automatically at startup.
 - Port 443 is not published: TLS is not configured. `nginx.conf` has a commented-out HTTPS server block to start from.
 

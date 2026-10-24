@@ -64,7 +64,9 @@ export function SearchInterface({
           limit: 5,
           signal: controller.signal,
         });
-        if (cancelled) return;
+        // A search submitted after the timer started doesn't change searchQuery,
+        // so this effect wasn't cleaned up; don't reopen over the results.
+        if (cancelled || suppressedFor.current === searchQuery) return;
         setSuggestions(result);
         setShowSuggestions(result.length > 0);
       } catch (error: unknown) {

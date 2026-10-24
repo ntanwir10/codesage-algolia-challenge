@@ -5,8 +5,7 @@ services:
       context: ../backend
       dockerfile: Dockerfile.prod
     container_name: codesage_mcp_server_prod
-    ports:
-      - "8001:8001"
+    # Not published: nginx proxies /api, /ws and /health over codesage_network
     volumes:
       - backend_data_prod:/app/data # SQLite database storage
     env_file:
