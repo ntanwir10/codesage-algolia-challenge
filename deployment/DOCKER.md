@@ -29,7 +29,7 @@ make up      # docker compose -f deployment/docker-compose.yml up -d
 - Export `CODESAGE_API_KEY` in your shell before building. Compose passes it to the frontend build as `VITE_CODESAGE_API_KEY`, and Vite embeds it in the JavaScript bundle. It must match the value in `backend/.env`. This is acceptable for local, single-user use only, which is why the dev file binds to 127.0.0.1. The prod stack does not embed the key (see below).
 - Open http://localhost for the app. The dev file publishes nginx (port 80) and the backend (http://localhost:8001, API docs at `/docs`) on 127.0.0.1 only, because the bundle embeds the API key. The prod file publishes only port 80, behind basic auth.
 - The SQLite database lives in the `backend_data` volume at `/app/data` (`DATABASE_URL=sqlite:///./data/codesage.db`). Migrations run automatically at startup.
-- Port 443 is not published: TLS is not configured. `nginx.conf` has a commented-out HTTPS server block to start from.
+- Dev: port 443 is not published and TLS is not configured. Prod serves HTTPS on 443 (see below).
 
 Each stack writes to its own Algolia index, because records are keyed by repository id and two databases sharing an index would delete each other's records. Dev compose sets `ALGOLIA_INDEX_NAME=codesage_code_entities_docker` (override with `DOCKER_ALGOLIA_INDEX_NAME`) and prod compose sets `codesage_code_entities_prod` (override with `PROD_ALGOLIA_INDEX_NAME`). Both differ from the local-run default `codesage_code_entities`.
 
@@ -55,9 +55,14 @@ Prod keeps the API key out of the browser. The frontend is built without `VITE_C
 ```bash
 export CODESAGE_API_KEY=...   # used by both the backend and nginx; overrides backend/.env
 docker run --rm httpd:alpine htpasswd -nbB <user> <password> > deployment/htpasswd
+mkdir -p deployment/ssl   # then put cert.pem and key.pem there, for example:
+openssl req -x509 -newkey rsa:2048 -nodes -days 365 -subj "/CN=your-host" \
+  -addext "subjectAltName=DNS:your-host" -keyout deployment/ssl/key.pem -out deployment/ssl/cert.pem
 ```
 
-`deployment/htpasswd` is gitignored. Basic auth over plain HTTP sends the password in clear text, so enable TLS before exposing the stack beyond a trusted network. To use the Claude Desktop bridge with this stack, run `make install-claude ARGS="--server-url https://your-host --basic-auth <user>"`. It asks for the password and stores it in the macOS Keychain (service `codesage-mcp`); the Claude Desktop config holds only the user name. nginx adds the API key, so the bridge needs none. The bridge refuses to send the login over plain `http://` to a non-loopback host unless `CODESAGE_ALLOW_INSECURE_AUTH=1` is set in its environment.
+Use a real certificate (for example from Let's Encrypt) for anything public. Port 80 answers only `/health` and redirects everything else to HTTPS.
+
+`deployment/htpasswd` and `deployment/ssl/` are gitignored. To use the Claude Desktop bridge with this stack, run `make install-claude ARGS="--server-url https://your-host --basic-auth <user>"`. It asks for the password and stores it in the macOS Keychain (service `codesage-mcp`); the Claude Desktop config holds only the user name. nginx adds the API key, so the bridge needs none. The bridge refuses to send the login over plain `http://` to a non-loopback host unless `CODESAGE_ALLOW_INSECURE_AUTH=1` is set in its environment. With a self-signed certificate, add `SSL_CERT_FILE=/path/to/cert.pem` to the bridge's `env` in the Claude Desktop config. The Keychain needs macOS; elsewhere, set `CODESAGE_BASIC_AUTH_PASSWORD` in that `env` block instead (it is then stored in plain text, in a file the installer keeps at mode 600).
 
 ## Troubleshooting
 

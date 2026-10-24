@@ -87,6 +87,7 @@ Thumbs.db
 *.db-wal
 *.db-shm
 deployment/htpasswd
+deployment/ssl/
 *.sqlite
 *.sqlite3
 

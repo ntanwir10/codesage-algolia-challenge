@@ -14,17 +14,39 @@ upstream codesage_backend {
     server backend:8001;
 }
 
+# Plain HTTP serves only /health; everything else moves to HTTPS, because basic
+# auth over HTTP would send the password in clear text.
 server {
     listen 80;
+    server_name _;
+
+    location = /health {
+        proxy_pass http://codesage_backend;
+        proxy_set_header Host $host;
+    }
+
+    location / {
+        return 301 https://$host$request_uri;
+    }
+}
+
+server {
+    listen 443 ssl;
+    http2 on;
     server_name _;  # Replace with your domain
+
+    # Certificates are mounted from deployment/ssl (see DOCKER.md)
+    ssl_certificate /etc/nginx/ssl/cert.pem;
+    ssl_certificate_key /etc/nginx/ssl/key.pem;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_session_cache shared:SSL:10m;
+    add_header Strict-Transport-Security "max-age=63072000" always;
     client_max_body_size 2M;
 
     gzip on;
     gzip_proxied any;
     gzip_types text/plain text/css application/json application/javascript;
 
-    # Basic auth over plain HTTP sends the password in clear text: enable TLS
-    # before exposing this beyond a trusted network.
     auth_basic "CodeSage";
     auth_basic_user_file /etc/nginx/htpasswd;
 
@@ -35,6 +57,7 @@ server {
         proxy_set_header Connection $connection_upgrade;
         proxy_set_header Host $host;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto https;
         proxy_set_header X-API-Key "${CODESAGE_API_KEY}";
         proxy_set_header Authorization "";
         proxy_read_timeout 3600s;
@@ -46,6 +69,7 @@ server {
         proxy_http_version 1.1;
         proxy_set_header Host $host;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto https;
         proxy_set_header X-API-Key "${CODESAGE_API_KEY}";
         proxy_set_header Authorization "";
         proxy_read_timeout 60s;
