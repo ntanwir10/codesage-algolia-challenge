@@ -58,7 +58,10 @@ def request_refusal(scope) -> str | None:
         return None
     # Browsers always send Origin on cross-site writes and WebSocket handshakes; other clients may not
     origin = headers.get("origin")
-    if origin is None or origin in settings.cors_origins_list or (host and origin.partition("://")[2] == host):
+    # The scheme counts too (http://host is another origin than https://host). It comes from the
+    # connection, which uvicorn rewrites only for proxies it trusts (prod: nginx, which sets it)
+    scheme = {"ws": "http", "wss": "https"}.get(scope.get("scheme", "http"), scope.get("scheme", "http"))
+    if origin is None or origin in settings.cors_origins_list or (host and origin == f"{scheme}://{host}"):
         return None
     return "Cross-origin request refused"
 

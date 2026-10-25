@@ -239,6 +239,11 @@ async def test_max_files_applies_after_filtering_in_sorted_order(github_api):
     assert [f.path for f in files] == ["a.py", "b.py"]
     assert service.skipped_files == 1
 
+    # A reused instance reports only its latest listing
+    service.max_files = 1000
+    await service.get_repository_files(REPO_URL)
+    assert service.skipped_files == 0
+
 
 async def test_truncated_tree_falls_back_to_contents_walk_on_the_branch(github_api):
     github_api["trees"]["dev"] = {"tree": [], "truncated": True}

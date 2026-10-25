@@ -83,6 +83,14 @@ class TestBrowserRequests:
     def test_listed_and_same_origin_writes_pass(self, client, origin):
         assert client.post(REPOS, json={"url": URL}, headers={"Origin": origin}).status_code == 201
 
+    def test_same_host_on_another_scheme_is_another_origin(self, client):
+        # http://localhost is the request's own origin; https://localhost is not
+        response = client.post(REPOS, json={"url": URL}, headers={"Origin": "https://localhost"})
+        assert response.status_code == 403
+        https_client = TestClient(client.app, base_url="https://localhost")
+        response = https_client.post(REPOS, json={"url": URL}, headers={"Origin": "https://localhost"})
+        assert response.status_code == 201
+
     def test_cross_site_reads_are_served(self, client):
         assert client.get(REPOS, headers={"Origin": EVIL}).status_code == 200
 
@@ -100,6 +108,9 @@ class TestBrowserRequests:
         with ws_client.websocket_connect(
             "ws://localhost/ws", headers={"Origin": "http://localhost:5173"}
         ) as ws:
+            assert ws.receive_json()["type"] == "connected"
+        # ws:// maps to http://, so a page served from the API's own host connects
+        with ws_client.websocket_connect("ws://localhost/ws", headers={"Origin": "http://localhost"}) as ws:
             assert ws.receive_json()["type"] == "connected"
 
     def test_without_a_key_only_loopback_hosts_are_served(self, client):

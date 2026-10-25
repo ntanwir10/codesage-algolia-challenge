@@ -315,6 +315,7 @@ class GitHubService:
                 continue
             selected.append((path, size))
         selected.sort()
+        self.skipped_files = 0  # describes this listing only, even on a reused instance
         if len(selected) > self.max_files:
             logger.warning(
                 "Repository has too many files, limiting to max",
