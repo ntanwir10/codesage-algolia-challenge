@@ -244,6 +244,9 @@ class CodeSageBridge:
         )
 
     async def _resource_request(self, path: str, **kwargs: Any) -> httpx.Response:
+        # Resource reads carry the same key or login as tool calls
+        if problem := self.config.insecure_auth_problem:
+            raise MCPError(types.INVALID_REQUEST, problem)
         try:
             response = await self._request("GET", path, **kwargs)
         except BackendUnreachable:
