@@ -360,6 +360,10 @@ class RepositoryService:
                 f"{github.skipped_files} files over the {github.max_files}-file or "
                 f"{github.max_total_bytes // 2**20} MB limit were skipped"
             )
+        if github.listing_truncated:
+            problems.append(
+                "the repository is too large to list in full, so some directories were not indexed"
+            )
         if problems:
             repository.error_message = "Partially indexed: " + "; ".join(problems)
 

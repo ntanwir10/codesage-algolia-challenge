@@ -2,6 +2,7 @@ import asyncio
 import fnmatch
 import re
 import time
+from collections import deque
 from dataclasses import dataclass
 from typing import Any
 from urllib.parse import quote as urlquote
@@ -19,6 +20,9 @@ MAX_CONCURRENT_REQUESTS = 5  # GitHub API rate limiting
 MAX_RETRIES = 3  # Retry timeouts and 5xx responses
 RETRY_BACKOFF_BASE = 1.0  # Seconds; attempt n waits base * 2**n
 MAX_RATE_LIMIT_WAIT = 60  # Longest we will sleep for a rate-limit reset
+# Directories the contents-API fallback lists (one request each) before it stops. It only runs
+# for trees too big for one git trees call, and 5000 requests is a token's whole hourly quota
+MAX_WALK_REQUESTS = 300
 
 # Directory names (matched as path segments) that hold generated or third-party code
 DENIED_DIRS = frozenset(
@@ -183,6 +187,8 @@ class GitHubService:
         self.max_file_size = 1024 * 1024  # 1MB file size limit
         self.max_total_bytes = 100 * 1024 * 1024  # a run holds every file in memory at once
         self.skipped_files = 0  # Code files the last listing dropped over max_files / max_total_bytes
+        self.listing_truncated = False  # The last listing stopped at MAX_WALK_REQUESTS directories
+        self._walk_requests = 0
 
         if not self.token:
             logger.warning("GitHub token not found. Rate limits will be lower.")
@@ -291,6 +297,7 @@ class GitHubService:
                         )
                 logger.info("Fetching repository files", owner=owner, repo=repo, branch=branch)
 
+                self._walk_requests, self.listing_truncated = 0, False
                 entries = await self._list_entries(session, owner, repo, branch)
                 candidates = self._select_candidates(entries)
                 files = await self._download_all(session, owner, repo, branch, candidates)
@@ -360,16 +367,19 @@ class GitHubService:
                 session, f"{self.base_url}/repos/{owner}/{repo}", owner, repo
             )
             raise GitHubAPIError(404, f"Branch '{branch}' not found in {owner}/{repo}") from e
-        if tree.get("truncated"):
-            logger.warning("Git tree truncated, walking contents API", owner=owner, repo=repo)
-            entries: list[tuple[str, int]] = []
-            await self._walk_contents(session, owner, repo, branch, "", entries)
-            return entries
-        return [
+        listed = [
             (item["path"], item.get("size", 0))
             for item in tree.get("tree", [])
             if item.get("type") == "blob" and item.get("mode") != "120000"
         ]
+        if not tree.get("truncated"):
+            return listed
+        logger.warning("Git tree truncated, walking contents API", owner=owner, repo=repo)
+        walked: list[tuple[str, int]] = []
+        await self._walk_contents(session, owner, repo, branch, walked)
+        # The truncated tree still lists its first entries; keep them, so a walk cut short
+        # by its request cap never indexes fewer files than the tree alone would have
+        return list({**dict(listed), **dict(walked)}.items())
 
     async def _walk_contents(
         self,
@@ -377,21 +387,32 @@ class GitHubService:
         owner: str,
         repo: str,
         branch: str,
-        path: str,
         entries: list[tuple[str, int]],
     ) -> None:
-        """Fallback listing: one contents request per directory, denied dirs pruned"""
-        url = f"{self.base_url}/repos/{owner}/{repo}/contents/{quote_path(path) if path else ''}"
-        contents = await self._make_request_with_retries(
-            session, url, owner, repo, path, params={"ref": branch}
-        )
-        if not isinstance(contents, list):
-            return
-        for item in contents:
-            if item["type"] == "file":
-                entries.append((item["path"], item.get("size", 0)))
-            elif item["type"] == "dir" and not is_denied_path(item["path"] + "/x"):
-                await self._walk_contents(session, owner, repo, branch, item["path"], entries)
+        """Fallback listing: one contents request per directory, denied dirs pruned.
+
+        Breadth-first, so when MAX_WALK_REQUESTS runs out it is the deepest directories
+        that go unlisted, not whole top-level ones after a deep one early in the order.
+        """
+        pending = deque([""])
+        while pending:
+            if self._walk_requests >= MAX_WALK_REQUESTS:
+                logger.warning("Contents walk hit its request cap", owner=owner, repo=repo)
+                self.listing_truncated = True
+                return
+            self._walk_requests += 1
+            path = pending.popleft()
+            url = f"{self.base_url}/repos/{owner}/{repo}/contents/{quote_path(path) if path else ''}"
+            contents = await self._make_request_with_retries(
+                session, url, owner, repo, path, params={"ref": branch}
+            )
+            if not isinstance(contents, list):
+                continue
+            for item in contents:
+                if item["type"] == "file":
+                    entries.append((item["path"], item.get("size", 0)))
+                elif item["type"] == "dir" and not is_denied_path(item["path"] + "/x"):
+                    pending.append(item["path"])
 
     async def _download_all(
         self,

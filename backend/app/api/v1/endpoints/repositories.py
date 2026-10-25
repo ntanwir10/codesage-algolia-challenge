@@ -6,6 +6,7 @@ from fastapi import (
     Query,
     Request,
 )
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
@@ -20,6 +21,7 @@ from app.schemas.repository import (
 from app.services.repository_service import (
     RepositoryBusyError,
     RepositoryService,
+    is_processing,
     start_processing,
 )
 
@@ -86,7 +88,14 @@ async def create_repository(
         )
 
     service = RepositoryService(db)
-    new_repository = await service.create_repository(repository)
+    try:
+        new_repository = await service.create_repository(repository)
+    except IntegrityError as e:
+        # Another request added the same URL between the check above and this insert
+        db.rollback()
+        raise HTTPException(
+            status_code=409, detail=f"Repository with URL {repository.url} already exists"
+        ) from e
 
     logger.info("Repository created", repository_id=new_repository.id)
     return new_repository
@@ -129,8 +138,23 @@ async def update_repository(
             status_code=404, detail=f"Repository {repository_id} not found"
         )
 
-    # Update repository fields
     update_data = repository_update.model_dump(exclude_unset=True)
+    # A run (or a delete) holds the repository: a new branch mid-run would label the old
+    # branch's index with it, and the run sets language and framework itself when it ends
+    held = [
+        field for field in ("branch", "language", "framework")
+        if field in update_data and update_data[field] != getattr(repository, field)
+    ]
+    if held and is_processing(repository_id):
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Repository {repository_id} is being processed; "
+                f"change {', '.join(held)} when it finishes"
+            ),
+        )
+
+    # Update repository fields
     for key, value in update_data.items():
         setattr(repository, key, value)
 

@@ -28,6 +28,7 @@ def _isolate(monkeypatch):
 @pytest.fixture
 def api_key(monkeypatch):
     monkeypatch.setattr(get_settings(), "codesage_api_key", "s3cret")
+    monkeypatch.setattr(get_settings(), "allowed_hosts", "codesage.example.com")
     return "s3cret"
 
 
@@ -121,8 +122,57 @@ class TestBrowserRequests:
         assert client.get(REPOS, headers={"Host": "127.0.0.1:8001"}).status_code == 200
         assert client.get(REPOS, headers={"Host": "[::1]:8001"}).status_code == 200
 
-    def test_with_a_key_any_host_is_served(self, client, api_key):
+    def test_with_a_key_only_allowed_hosts_are_served(self, client, api_key, monkeypatch):
+        # DNS rebinding still matters with a key: the dev bundle embeds it, so a rebound page can read it
         assert client.get(REPOS, headers={"Host": "codesage.example.com"}).status_code == 200
+        assert client.get(REPOS, headers={"Host": "127.0.0.1:8001"}).status_code == 200
+        rebound = {"Host": "evil.example", "Origin": "http://evil.example", "X-API-Key": api_key}
+        response = client.post(REPOS, json={"url": URL}, headers=rebound)
+        assert response.status_code == 403
+        assert response.json()["detail"] == "Host not allowed"
+        # CORS_ORIGINS hosts count, without their scheme or port
+        monkeypatch.setattr(get_settings(), "cors_origins", "https://app.example.org:8443")
+        assert client.get(REPOS, headers={"Host": "app.example.org:8443"}).status_code == 200
+
+    @pytest.mark.parametrize("entry", ["codesage.example.com:8443", "[2001:db8::1]", " Codesage.Example.com "])
+    def test_allowed_hosts_entries_match_without_their_port(self, client, api_key, monkeypatch, entry):
+        monkeypatch.setattr(get_settings(), "allowed_hosts", entry)
+        host = "[2001:db8::1]:8001" if "[" in entry else "codesage.example.com:8443"
+        assert client.get(REPOS, headers={"Host": host}).status_code == 200
+
+    def test_a_wildcard_entry_allows_subdomains_only(self, client, api_key, monkeypatch):
+        monkeypatch.setattr(get_settings(), "allowed_hosts", "*.example.org")
+        assert client.get(REPOS, headers={"Host": "app.example.org"}).status_code == 200
+        assert client.get(REPOS, headers={"Host": "a.b.example.org:8443"}).status_code == 200
+        assert client.get(REPOS, headers={"Host": "evilexample.org"}).status_code == 403
+        assert client.get(REPOS, headers={"Host": "example.org.evil.com"}).status_code == 403
+
+    def test_with_a_key_a_request_without_host_is_served(self, client, api_key):
+        # HTTP/1.0 clients may omit Host; browsers never do, so it can't be a rebound page
+        from app.core.security import request_refusal
+
+        scope = {"type": "http", "method": "GET", "path": REPOS, "headers": [], "client": LOCAL}
+        assert request_refusal(scope) is None
+
+    def test_without_a_key_a_request_without_host_is_refused(self):
+        from app.core.security import request_refusal
+
+        scope = {"type": "http", "method": "GET", "path": REPOS, "headers": [], "client": LOCAL}
+        assert request_refusal(scope) == "Host not allowed"
+
+    def test_the_host_list_is_parsed_once_and_follows_setting_changes(self, api_key, monkeypatch):
+        settings = get_settings()
+        first = settings.allowed_hosts_list
+        assert settings.allowed_hosts_list is first  # cached, not rebuilt per request
+        monkeypatch.setattr(settings, "allowed_hosts", "other.example.com")
+        assert "other.example.com" in settings.allowed_hosts_list
+
+    def test_allowed_hosts_star_serves_any_host(self, client, api_key, monkeypatch):
+        monkeypatch.setattr(get_settings(), "allowed_hosts", "*")
+        assert client.get(REPOS, headers={"Host": "anything.example"}).status_code == 200
+
+    def test_health_is_served_on_any_host(self, client, api_key):
+        assert client.get("/health", headers={"Host": "10.0.0.5"}).status_code == 200
 
     @pytest.mark.parametrize(
         ("host", "served"),
@@ -249,6 +299,14 @@ class TestUrlValidation:
         assert body["url"] == URL
         assert body["name"] == "octocat/hello"
 
+    def test_a_null_branch_falls_back_to_the_url_branch(self, client):
+        response = client.post(REPOS, json={"url": f"{URL}/tree/dev", "branch": None})
+        assert response.json()["branch"] == "dev"
+
+    def test_an_explicit_empty_branch_beats_the_url_branch(self, client):
+        response = client.post(REPOS, json={"url": f"{URL}/tree/dev", "branch": ""})
+        assert response.json()["branch"] is None
+
     def test_branch_is_taken_from_the_url(self, client):
         response = client.post(REPOS, json={"url": f"{URL}/tree/dev"})
         assert response.json()["branch"] == "dev"
@@ -261,6 +319,48 @@ class TestUrlValidation:
     def test_duplicate_url_is_409(self, client):
         assert client.post(REPOS, json={"url": URL}).status_code == 201
         assert client.post(REPOS, json={"url": URL + ".git"}).status_code == 409
+
+    def test_a_duplicate_that_slips_past_the_check_is_409(self, client, monkeypatch):
+        # Two creates racing: both pass the lookup, the second insert hits the unique index
+        assert client.post(REPOS, json={"url": URL}).status_code == 201
+        from sqlalchemy.orm import Query
+
+        monkeypatch.setattr(Query, "first", lambda self: None)
+        response = client.post(REPOS, json={"url": URL})
+        assert response.status_code == 409
+        assert "already exists" in response.json()["detail"]
+
+    def test_the_branch_cannot_change_while_a_job_holds_the_repository(self, client, monkeypatch):
+        created = client.post(REPOS, json={"url": URL}).json()
+        monkeypatch.setattr("app.api.v1.endpoints.repositories.is_processing", lambda _id: True)
+        url = f"{REPOS}{created['id']}"
+        assert client.put(url, json={"branch": "dev"}).status_code == 409
+        # The run sets these itself when it ends, so an edit now would be overwritten
+        response = client.put(url, json={"language": "go", "framework": "gin"})
+        assert response.status_code == 409
+        assert "language, framework" in response.json()["detail"]
+        # Other fields, or the same branch (empty is the same as null), are fine
+        assert client.put(url, json={"name": "renamed", "branch": None}).status_code == 200
+        assert client.put(url, json={"branch": ""}).status_code == 200
+
+    def test_a_bad_body_is_not_logged_as_a_database_error(self, monkeypatch):
+        # FastAPI raises a body's 422 through get_db (the client fixture overrides it, so drive it here)
+        from fastapi.exceptions import RequestValidationError
+
+        from app.core import database
+
+        logged = []
+
+        class Logger:
+            def error(self, *args, **kwargs):
+                logged.append(args)
+
+        monkeypatch.setattr(database, "logger", Logger())
+        session = database.get_db()
+        next(session)
+        with pytest.raises(RequestValidationError):
+            session.throw(RequestValidationError([{"loc": ("body", "url"), "input": "secret body"}]))
+        assert logged == []
 
     def test_limit_must_be_positive(self, client):
         assert client.get(REPOS, params={"limit": 0}).status_code == 422
@@ -283,10 +383,14 @@ class TestUrlValidation:
 
     def test_put_accepts_a_branch_or_the_default(self, client):
         created = client.post(REPOS, json={"url": URL}).json()
-        for branch in ("feature/x", "", None):
+        # Empty is stored as null, which the UI shows as "default" (it showed "" as a blank)
+        for branch, stored in (("feature/x", "feature/x"), ("", None), (None, None)):
             response = client.put(f"{REPOS}{created['id']}", json={"branch": branch})
             assert response.status_code == 200
-            assert response.json()["branch"] == branch
+            assert response.json()["branch"] == stored
+
+    def test_an_empty_branch_on_create_is_stored_as_null(self, client):
+        assert client.post(REPOS, json={"url": URL, "branch": ""}).json()["branch"] is None
 
     def test_explicit_branch_is_validated_on_create(self, client):
         assert client.post(REPOS, json={"url": URL, "branch": "../main"}).status_code == 422
@@ -346,6 +450,14 @@ class TestRuntimeSettings:
             validate_runtime_settings(
                 Settings(mcp_server_host="0.0.0.0", codesage_api_key=None)
             )
+
+    @pytest.mark.parametrize(("key", "warned"), [("k", True), (None, False)])
+    def test_allowed_hosts_star_warns_only_when_it_applies(self, monkeypatch, key, warned):
+        # Without a key ALLOWED_HOSTS is ignored, and the loopback-only Host check still holds
+        messages = []
+        monkeypatch.setattr("app.core.config.logger.warning", lambda message, **_: messages.append(message))
+        validate_runtime_settings(Settings(allowed_hosts="*", codesage_api_key=key))
+        assert any("ALLOWED_HOSTS" in m for m in messages) is warned
 
     def test_public_host_with_key_is_allowed(self):
         validate_runtime_settings(Settings(mcp_server_host="0.0.0.0", codesage_api_key="k"))

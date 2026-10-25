@@ -23,7 +23,6 @@ export type ConnectionStatus = "connecting" | "connected" | "disconnected";
 type StatusUpdateCallback = (update: RepositoryStatusUpdate) => void;
 type ConnectionStatusCallback = (status: ConnectionStatus) => void;
 
-const WS_CONNECTING = 0;
 const WS_OPEN = 1;
 const BASE_DELAY_MS = 1000;
 const MAX_DELAY_MS = 30000;
@@ -61,6 +60,9 @@ export function buildWebSocketProtocols(): string[] {
 export class WebSocketService {
   private ws: WebSocket | null = null;
   private isConnecting = false;
+  // Set by the server's "connected" frame. Until then an open socket may still be turned away
+  // (a full server accepts and then closes with 1013), so it counts as connecting
+  private welcomed = false;
   private reconnectAttempts = 0;
   private reconnectTimeout: ReturnType<typeof setTimeout> | null = null;
   private heartbeatInterval: ReturnType<typeof setInterval> | null = null;
@@ -141,8 +143,8 @@ export class WebSocketService {
   }
 
   getStatus(): ConnectionStatus {
-    if (this.ws?.readyState === WS_OPEN) return "connected";
-    if (this.isConnecting || this.ws?.readyState === WS_CONNECTING) {
+    if (this.ws?.readyState === WS_OPEN && this.welcomed) return "connected";
+    if (this.isConnecting || this.ws) {
       return "connecting";
     }
     return "disconnected";
@@ -188,16 +190,13 @@ export class WebSocketService {
       return;
     }
     this.ws = socket;
+    this.welcomed = false;
 
     socket.onopen = () => {
       if (this.ws !== socket) return;
+      // Still "connecting": the backoff reset, the status and the subscriptions wait for the
+      // server's "connected" frame (see onWelcome), so a full server's 1013 isn't a connection
       this.isConnecting = false;
-      this.reconnectAttempts = 0;
-      this.notifyConnection("connected");
-      for (const repositoryId of this.repoListeners.keys()) {
-        this.send({ type: "subscribe", repository_id: repositoryId });
-      }
-      this.startHeartbeat();
     };
 
     socket.onmessage = (event) => {
@@ -222,6 +221,7 @@ export class WebSocketService {
     socket.onclose = (event) => {
       if (this.ws !== socket) return;
       this.ws = null;
+      this.welcomed = false;
       this.isConnecting = false;
       this.stopHeartbeat();
       this.notifyConnection("disconnected");
@@ -240,6 +240,7 @@ export class WebSocketService {
     this.stopHeartbeat();
     const socket = this.ws;
     this.ws = null;
+    this.welcomed = false;
     this.isConnecting = false;
     if (socket) {
       socket.onopen = socket.onmessage = socket.onerror = socket.onclose = null;
@@ -311,8 +312,20 @@ export class WebSocketService {
     }
   }
 
+  /** The server's "connected" frame: the connection is now really up. */
+  private onWelcome(): void {
+    this.welcomed = true;
+    this.reconnectAttempts = 0;
+    this.notifyConnection("connected");
+    for (const repositoryId of this.repoListeners.keys()) {
+      this.send({ type: "subscribe", repository_id: repositoryId });
+    }
+    this.startHeartbeat();
+  }
+
   private send(payload: Record<string, unknown>): void {
-    if (this.ws?.readyState === WS_OPEN) {
+    // Before the welcome, onWelcome subscribes to everything listened to by then
+    if (this.welcomed && this.ws?.readyState === WS_OPEN) {
       this.ws.send(JSON.stringify(payload));
     }
   }
@@ -327,11 +340,14 @@ export class WebSocketService {
           ?.forEach((cb) => cb(update));
         break;
       }
+      case "connected":
+        this.onWelcome();
+        break;
       case "error":
         console.warn("WebSocket server error:", message.data?.message);
         break;
       default:
-        // connected / subscribed / unsubscribed / pong need no handling
+        // subscribed / unsubscribed / pong need no handling
         break;
     }
   }
