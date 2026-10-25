@@ -1,0 +1,699 @@
+{
+  "schema_version": 2,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "Indexing pipeline: from POST /repositories to a searchable index",
+    "quality_profile": "showcase",
+    "output": ".archify/workflow-indexing-pipeline-20261025-165005/indexing-pipeline.html",
+    "repository": {
+      "url": "https://github.com/ntanwir10/codesage-algolia-challenge.git",
+      "provider": "github",
+      "revision": "e7c2fd783a6c2d99eec8e85bd7516200636d39e3"
+    }
+  },
+  "lanes": [
+    {
+      "id": "api",
+      "label": "HTTP API"
+    },
+    {
+      "id": "svc",
+      "label": "Job scheduling"
+    },
+    {
+      "id": "run",
+      "label": "Run control"
+    },
+    {
+      "id": "err",
+      "label": "Failure path",
+      "variant": "exception"
+    },
+    {
+      "id": "gh",
+      "label": "GitHub fetch"
+    },
+    {
+      "id": "al",
+      "label": "Algolia + rows"
+    },
+    {
+      "id": "parse",
+      "label": "Per-batch loop (200 files)"
+    },
+    {
+      "id": "bf",
+      "label": "Batch failure",
+      "variant": "exception"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "post",
+      "lane": "api",
+      "col": 0,
+      "type": "external",
+      "label": "POST /repositories",
+      "sublabel": "create_repository",
+      "sources": [
+        {
+          "path": "backend/app/api/v1/endpoints/repositories.py",
+          "line": 67,
+          "end_line": 92
+        }
+      ]
+    },
+    {
+      "id": "validate",
+      "lane": "api",
+      "col": 1,
+      "type": "backend",
+      "label": "Validate input",
+      "sublabel": "parse_github_url, is_valid_branch",
+      "sources": [
+        {
+          "path": "backend/app/schemas/repository.py",
+          "line": 29,
+          "end_line": 39
+        },
+        {
+          "path": "backend/app/services/github_service.py",
+          "line": 90,
+          "end_line": 92
+        },
+        {
+          "path": "backend/app/services/github_service.py",
+          "line": 95,
+          "end_line": 142
+        }
+      ]
+    },
+    {
+      "id": "dup",
+      "lane": "api",
+      "col": 2,
+      "type": "security",
+      "label": "URL already stored?",
+      "sublabel": "lookup by url",
+      "sources": [
+        {
+          "path": "backend/app/api/v1/endpoints/repositories.py",
+          "line": 80,
+          "end_line": 86
+        }
+      ]
+    },
+    {
+      "id": "conflict",
+      "lane": "api",
+      "col": 3,
+      "type": "security",
+      "label": "409 Conflict",
+      "sublabel": "duplicate, or job running",
+      "sources": [
+        {
+          "path": "backend/app/api/v1/endpoints/repositories.py",
+          "line": 81,
+          "end_line": 86
+        },
+        {
+          "path": "backend/app/api/v1/endpoints/repositories.py",
+          "line": 242,
+          "end_line": 245
+        }
+      ]
+    },
+    {
+      "id": "create",
+      "lane": "svc",
+      "col": 2,
+      "type": "database",
+      "label": "Create row",
+      "sublabel": "status pending",
+      "sources": [
+        {
+          "path": "backend/app/services/repository_service.py",
+          "line": 154,
+          "end_line": 169
+        }
+      ]
+    },
+    {
+      "id": "sched",
+      "lane": "svc",
+      "col": 3,
+      "type": "backend",
+      "label": "Schedule job",
+      "sublabel": "start_processing",
+      "tag": "one job per repo",
+      "sources": [
+        {
+          "path": "backend/app/services/repository_service.py",
+          "line": 64,
+          "end_line": 82
+        },
+        {
+          "path": "backend/app/services/repository_service.py",
+          "line": 171,
+          "end_line": 171
+        }
+      ]
+    },
+    {
+      "id": "mark",
+      "lane": "svc",
+      "col": 4,
+      "type": "backend",
+      "label": "Mark processing",
+      "sublabel": "processed_files 0, broadcast",
+      "sources": [
+        {
+          "path": "backend/app/services/repository_service.py",
+          "line": 85,
+          "end_line": 93
+        },
+        {
+          "path": "backend/app/services/repository_service.py",
+          "line": 183,
+          "end_line": 191
+        }
+      ]
+    },
+    {
+      "id": "slot",
+      "lane": "svc",
+      "col": 5,
+      "type": "security",
+      "label": "Wait for run slot",
+      "sublabel": "2 runs at once",
+      "sources": [
+        {
+          "path": "backend/app/services/repository_service.py",
+          "line": 41,
+          "end_line": 53
+        },
+        {
+          "path": "backend/app/services/repository_service.py",
+          "line": 193,
+          "end_line": 196
+        }
+      ]
+    },
+    {
+      "id": "cfg",
+      "lane": "run",
+      "col": 5,
+      "type": "security",
+      "label": "Algolia configured?",
+      "sublabel": "is_available, url set",
+      "sources": [
+        {
+          "path": "backend/app/services/repository_service.py",
+          "line": 228,
+          "end_line": 240
+        }
+      ]
+    },
+    {
+      "id": "fetch",
+      "lane": "gh",
+      "col": 5,
+      "type": "cloud",
+      "label": "List files",
+      "sublabel": "tree list, select, download",
+      "sources": [
+        {
+          "path": "backend/app/services/github_service.py",
+          "line": 266,
+          "end_line": 311
+        },
+        {
+          "path": "backend/app/services/repository_service.py",
+          "line": 242,
+          "end_line": 248
+        }
+      ]
+    },
+    {
+      "id": "select",
+      "lane": "gh",
+      "col": 4,
+      "type": "backend",
+      "label": "Select files",
+      "sublabel": "deny-list, 1 MB, 1000 / 100 MB",
+      "sources": [
+        {
+          "path": "backend/app/services/github_service.py",
+          "line": 313,
+          "end_line": 340
+        }
+      ]
+    },
+    {
+      "id": "download",
+      "lane": "gh",
+      "col": 3,
+      "type": "cloud",
+      "label": "Download raw",
+      "sublabel": "concurrent, retried",
+      "tag": "failure raises",
+      "sources": [
+        {
+          "path": "backend/app/services/github_service.py",
+          "line": 396,
+          "end_line": 434
+        },
+        {
+          "path": "backend/app/services/github_service.py",
+          "line": 465,
+          "end_line": 493
+        }
+      ]
+    },
+    {
+      "id": "clear",
+      "lane": "al",
+      "col": 3,
+      "type": "database",
+      "label": "Clear previous data",
+      "sublabel": "Algolia delete + wait, bulk row delete",
+      "sources": [
+        {
+          "path": "backend/app/services/repository_service.py",
+          "line": 250,
+          "end_line": 254
+        },
+        {
+          "path": "backend/app/services/repository_service.py",
+          "line": 453,
+          "end_line": 469
+        },
+        {
+          "path": "backend/app/services/algolia_service.py",
+          "line": 302,
+          "end_line": 327
+        }
+      ],
+      "tag": "raises on error"
+    },
+    {
+      "id": "parse",
+      "lane": "parse",
+      "col": 3,
+      "type": "backend",
+      "label": "Parse each file",
+      "sublabel": "tree-sitter, ast, line scanner",
+      "sources": [
+        {
+          "path": "backend/app/services/repository_service.py",
+          "line": 263,
+          "end_line": 279
+        },
+        {
+          "path": "backend/app/services/code_parser.py",
+          "line": 107,
+          "end_line": 146
+        },
+        {
+          "path": "backend/app/services/code_parser.py",
+          "line": 369,
+          "end_line": 376
+        }
+      ]
+    },
+    {
+      "id": "store",
+      "lane": "parse",
+      "col": 2,
+      "type": "database",
+      "label": "Add file + entity rows",
+      "sublabel": "plus Algolia records",
+      "sources": [
+        {
+          "path": "backend/app/services/repository_service.py",
+          "line": 280,
+          "end_line": 308
+        },
+        {
+          "path": "backend/app/services/algolia_service.py",
+          "line": 174,
+          "end_line": 185
+        }
+      ]
+    },
+    {
+      "id": "commit",
+      "lane": "parse",
+      "col": 1,
+      "type": "security",
+      "label": "Commit batch?",
+      "sublabel": "off the event loop",
+      "sources": [
+        {
+          "path": "backend/app/services/repository_service.py",
+          "line": 310,
+          "end_line": 326
+        }
+      ]
+    },
+    {
+      "id": "progress",
+      "lane": "parse",
+      "col": 0,
+      "type": "backend",
+      "label": "Broadcast progress",
+      "sublabel": "processed_files updated",
+      "sources": [
+        {
+          "path": "backend/app/services/repository_service.py",
+          "line": 326,
+          "end_line": 341
+        }
+      ],
+      "tag": "none indexed raises"
+    },
+    {
+      "id": "rb",
+      "lane": "bf",
+      "col": 1,
+      "type": "security",
+      "label": "Rollback batch",
+      "sublabel": "failed_files counted",
+      "sources": [
+        {
+          "path": "backend/app/services/repository_service.py",
+          "line": 314,
+          "end_line": 324
+        }
+      ]
+    },
+    {
+      "id": "index",
+      "lane": "al",
+      "col": 0,
+      "type": "cloud",
+      "label": "Index into Algolia",
+      "sublabel": "batches of 1000",
+      "tag": "rejection fails run",
+      "sources": [
+        {
+          "path": "backend/app/services/repository_service.py",
+          "line": 337,
+          "end_line": 345
+        },
+        {
+          "path": "backend/app/services/algolia_service.py",
+          "line": 187,
+          "end_line": 219
+        }
+      ]
+    },
+    {
+      "id": "detect",
+      "lane": "run",
+      "col": 1,
+      "type": "backend",
+      "label": "Detect language",
+      "sublabel": "and framework",
+      "sources": [
+        {
+          "path": "backend/app/services/repository_service.py",
+          "line": 347,
+          "end_line": 350
+        },
+        {
+          "path": "backend/app/services/repository_service.py",
+          "line": 403,
+          "end_line": 431
+        }
+      ]
+    },
+    {
+      "id": "partial",
+      "lane": "run",
+      "col": 2,
+      "type": "backend",
+      "label": "Partial-index note",
+      "sublabel": "only if files were left out",
+      "sources": [
+        {
+          "path": "backend/app/services/repository_service.py",
+          "line": 352,
+          "end_line": 364
+        }
+      ]
+    },
+    {
+      "id": "done",
+      "lane": "run",
+      "col": 3,
+      "type": "database",
+      "label": "Completed",
+      "sublabel": "status, processed_at, broadcast",
+      "sources": [
+        {
+          "path": "backend/app/services/repository_service.py",
+          "line": 214,
+          "end_line": 226
+        }
+      ]
+    },
+    {
+      "id": "fail",
+      "lane": "err",
+      "col": 4,
+      "type": "security",
+      "label": "Mark failed",
+      "sublabel": "sanitized error_message, broadcast",
+      "sources": [
+        {
+          "path": "backend/app/services/repository_service.py",
+          "line": 197,
+          "end_line": 212
+        },
+        {
+          "path": "backend/app/core/security.py",
+          "line": 36,
+          "end_line": 41
+        }
+      ]
+    },
+    {
+      "id": "crash",
+      "lane": "run",
+      "col": 4,
+      "type": "security",
+      "label": "Runner marks failed",
+      "sublabel": "_fail_if_still_processing",
+      "sources": [
+        {
+          "path": "backend/app/services/repository_service.py",
+          "line": 94,
+          "end_line": 102
+        },
+        {
+          "path": "backend/app/services/repository_service.py",
+          "line": 105,
+          "end_line": 115
+        }
+      ]
+    }
+  ],
+  "edges": [
+    {
+      "id": "e-post-validate",
+      "from": "post",
+      "to": "validate",
+      "variant": "emphasis"
+    },
+    {
+      "id": "e-validate-dup",
+      "from": "validate",
+      "to": "dup",
+      "label": "valid"
+    },
+    {
+      "id": "e-dup-conflict",
+      "from": "dup",
+      "to": "conflict",
+      "label": "yes",
+      "variant": "security",
+      "role": "error"
+    },
+    {
+      "id": "e-dup-create",
+      "from": "dup",
+      "to": "create",
+      "label": "no"
+    },
+    {
+      "id": "e-create-sched",
+      "from": "create",
+      "to": "sched",
+      "label": "commit"
+    },
+    {
+      "id": "e-sched-conflict",
+      "from": "sched",
+      "to": "conflict",
+      "label": "busy (/process)",
+      "variant": "security",
+      "role": "error"
+    },
+    {
+      "id": "e-sched-mark",
+      "from": "sched",
+      "to": "mark",
+      "label": "task starts"
+    },
+    {
+      "id": "e-mark-slot",
+      "from": "mark",
+      "to": "slot"
+    },
+    {
+      "id": "e-slot-cfg",
+      "from": "slot",
+      "to": "cfg",
+      "label": "slot free"
+    },
+    {
+      "id": "e-cfg-fetch",
+      "from": "cfg",
+      "to": "fetch",
+      "label": "yes",
+      "variant": "emphasis"
+    },
+    {
+      "id": "e-fetch-select",
+      "from": "fetch",
+      "to": "select"
+    },
+    {
+      "id": "e-select-download",
+      "from": "select",
+      "to": "download"
+    },
+    {
+      "id": "e-download-clear",
+      "from": "download",
+      "to": "clear",
+      "label": "files found"
+    },
+    {
+      "id": "e-clear-parse",
+      "from": "clear",
+      "to": "parse",
+      "label": "next batch"
+    },
+    {
+      "id": "e-parse-store",
+      "from": "parse",
+      "to": "store",
+      "label": "ok or counted"
+    },
+    {
+      "id": "e-store-commit",
+      "from": "store",
+      "to": "commit"
+    },
+    {
+      "id": "e-commit-progress",
+      "from": "commit",
+      "to": "progress",
+      "label": "ok"
+    },
+    {
+      "id": "e-commit-rb",
+      "from": "commit",
+      "to": "rb",
+      "label": "error",
+      "variant": "security",
+      "role": "error"
+    },
+    {
+      "id": "e-rb-parse",
+      "from": "rb",
+      "to": "parse",
+      "label": "next batch",
+      "variant": "dashed",
+      "role": "branch"
+    },
+    {
+      "id": "e-progress-index",
+      "from": "progress",
+      "to": "index",
+      "label": "all batches"
+    },
+    {
+      "id": "e-index-detect",
+      "from": "index",
+      "to": "detect",
+      "label": "accepted"
+    },
+    {
+      "id": "e-detect-partial",
+      "from": "detect",
+      "to": "partial"
+    },
+    {
+      "id": "e-partial-done",
+      "from": "partial",
+      "to": "done"
+    },
+    {
+      "id": "e-cfg-fail",
+      "from": "cfg",
+      "to": "fail",
+      "label": "not configured",
+      "variant": "security",
+      "role": "error"
+    },
+    {
+      "id": "e-fetch-fail",
+      "from": "fetch",
+      "to": "fail",
+      "label": "GitHub error / none",
+      "variant": "security",
+      "role": "error"
+    },
+    {
+      "id": "e-index-fail",
+      "from": "index",
+      "to": "fail",
+      "label": "rejected",
+      "variant": "security",
+      "role": "error"
+    },
+    {
+      "id": "e-fail-crash",
+      "from": "fail",
+      "to": "crash",
+      "label": "commit fails",
+      "variant": "security",
+      "role": "error"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Corrections to the expected shape",
+      "items": [
+        "The 409 for a running job comes from POST /repositories/{id}/process, not from creating a new row",
+        "Algolia settings and the clear step run after the GitHub fetch, so a fetch error never wipes a working index",
+        "A run shows processing while it waits for a run slot",
+        "Any exception inside the run, including DB errors, ends in Mark failed"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "Batch loop and partial index",
+      "items": [
+        "A parse failure stores the file with no entities and counts it as unparsed",
+        "A failed commit rolls back, counts the batch as failed and moves on",
+        "Zero indexed entities fails the run",
+        "Skipped, unparsed or failed files add a Partially indexed note to error_message"
+      ]
+    }
+  ]
+}

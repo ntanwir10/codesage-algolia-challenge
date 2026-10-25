@@ -1,0 +1,684 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "CodeSage system architecture",
+    "output": ".archify/architecture-codesage-system-20261025-164830/codesage-system.html",
+    "quality_profile": "showcase",
+    "repository": {
+      "url": "https://github.com/ntanwir10/codesage-algolia-challenge.git",
+      "provider": "github",
+      "link_mode": "web",
+      "revision": "e7c2fd783a6c2d99eec8e85bd7516200636d39e3"
+    }
+  },
+  "components": [
+    {
+      "id": "browserUser",
+      "type": "external",
+      "label": "Browser user",
+      "sublabel": "web UI",
+      "pos": [
+        40,
+        40
+      ],
+      "size": [
+        100,
+        60
+      ],
+      "sources": [
+        {
+          "path": "frontend/src/App.tsx",
+          "line": 11,
+          "end_line": 33,
+          "label": "SPA routes"
+        }
+      ]
+    },
+    {
+      "id": "spa",
+      "type": "frontend",
+      "label": "React SPA",
+      "sublabel": "dev: direct / Vite proxy",
+      "pos": [
+        210,
+        40
+      ],
+      "size": [
+        140,
+        60
+      ],
+      "sources": [
+        {
+          "path": "frontend/src/services/api.ts",
+          "line": 66,
+          "end_line": 85,
+          "label": "REST + X-API-Key"
+        },
+        {
+          "path": "frontend/src/services/websocket.ts",
+          "line": 52,
+          "end_line": 59,
+          "label": "key subprotocol"
+        },
+        {
+          "path": "frontend/src/services/websocket.ts",
+          "line": 180,
+          "end_line": 182,
+          "label": "opens /ws"
+        }
+      ]
+    },
+    {
+      "id": "nginx",
+      "type": "security",
+      "label": "nginx edge",
+      "sublabel": "prod: TLS :443, htpasswd",
+      "pos": [
+        470,
+        40
+      ],
+      "size": [
+        130,
+        60
+      ],
+      "sources": [
+        {
+          "path": "deployment/nginx.prod.conf.template",
+          "line": 19,
+          "end_line": 32,
+          "label": "port 80"
+        },
+        {
+          "path": "deployment/nginx.prod.conf.template",
+          "line": 56,
+          "end_line": 87,
+          "label": "auth, key, XFF"
+        },
+        {
+          "path": "deployment/nginx.prod.conf.template",
+          "line": 97,
+          "end_line": 101,
+          "label": "serves SPA"
+        }
+      ]
+    },
+    {
+      "id": "keychain",
+      "type": "security",
+      "label": "macOS Keychain",
+      "sublabel": "codesage-mcp item",
+      "pos": [
+        210,
+        250
+      ],
+      "size": [
+        130,
+        56
+      ],
+      "sources": [
+        {
+          "path": "mcp_launcher.sh",
+          "line": 15,
+          "end_line": 21,
+          "label": "reads password"
+        }
+      ]
+    },
+    {
+      "id": "claude",
+      "type": "external",
+      "label": "Claude Desktop",
+      "sublabel": "MCP client",
+      "pos": [
+        40,
+        380
+      ],
+      "size": [
+        100,
+        60
+      ],
+      "sources": [
+        {
+          "path": "claude_desktop_config.example.json",
+          "line": 1,
+          "end_line": 11,
+          "label": "launcher config"
+        }
+      ]
+    },
+    {
+      "id": "launcher",
+      "type": "backend",
+      "label": "mcp_launcher.sh",
+      "sublabel": "optional pw lookup",
+      "pos": [
+        210,
+        380
+      ],
+      "size": [
+        130,
+        60
+      ],
+      "sources": [
+        {
+          "path": "mcp_launcher.sh",
+          "line": 15,
+          "end_line": 23,
+          "label": "keychain then exec"
+        }
+      ]
+    },
+    {
+      "id": "bridge",
+      "type": "backend",
+      "label": "MCP stdio bridge",
+      "sublabel": "codesage_mcp",
+      "pos": [
+        470,
+        380
+      ],
+      "size": [
+        130,
+        60
+      ],
+      "sources": [
+        {
+          "path": "backend/codesage_mcp/server.py",
+          "line": 182,
+          "end_line": 214,
+          "label": "tools/call"
+        },
+        {
+          "path": "backend/codesage_mcp/server.py",
+          "line": 232,
+          "end_line": 244,
+          "label": "resources/read"
+        },
+        {
+          "path": "backend/codesage_mcp/server.py",
+          "line": 312,
+          "end_line": 328,
+          "label": "stdio server"
+        }
+      ]
+    },
+    {
+      "id": "api",
+      "type": "backend",
+      "label": "FastAPI app",
+      "sublabel": "guard, CORS, limits",
+      "pos": [
+        730,
+        200
+      ],
+      "size": [
+        130,
+        110
+      ],
+      "sources": [
+        {
+          "path": "backend/app/main.py",
+          "line": 112,
+          "end_line": 170,
+          "label": "middleware, routers, /ws"
+        },
+        {
+          "path": "backend/app/core/security.py",
+          "line": 63,
+          "end_line": 105,
+          "label": "BrowserRequestGuard"
+        },
+        {
+          "path": "backend/app/api/v1/router.py",
+          "line": 10,
+          "end_line": 22,
+          "label": "v1 routers"
+        }
+      ]
+    },
+    {
+      "id": "mcpTools",
+      "type": "backend",
+      "label": "MCP tools",
+      "sublabel": "6 tools + resources",
+      "pos": [
+        960,
+        40
+      ],
+      "size": [
+        130,
+        60
+      ],
+      "sources": [
+        {
+          "path": "backend/app/services/mcp_tools.py",
+          "line": 142,
+          "end_line": 159,
+          "label": "search_code"
+        },
+        {
+          "path": "backend/app/services/mcp_tools.py",
+          "line": 200,
+          "end_line": 213,
+          "label": "get_file reads DB"
+        },
+        {
+          "path": "backend/app/services/mcp_tools.py",
+          "line": 392,
+          "end_line": 407,
+          "label": "tool handlers"
+        }
+      ]
+    },
+    {
+      "id": "sqlite",
+      "type": "database",
+      "label": "SQLite",
+      "sublabel": "SQLAlchemy ORM",
+      "pos": [
+        960,
+        200
+      ],
+      "size": [
+        130,
+        60
+      ],
+      "sources": [
+        {
+          "path": "backend/app/core/database.py",
+          "line": 11,
+          "end_line": 32,
+          "label": "engine, WAL"
+        },
+        {
+          "path": "backend/app/models/code_file.py",
+          "line": 8,
+          "end_line": 20,
+          "label": "CodeFile"
+        },
+        {
+          "path": "backend/app/models/code_entity.py",
+          "line": 16,
+          "end_line": 24,
+          "label": "CodeEntity"
+        }
+      ]
+    },
+    {
+      "id": "job",
+      "type": "backend",
+      "label": "Indexing job",
+      "sublabel": "asyncio task, 2 slots",
+      "pos": [
+        960,
+        360
+      ],
+      "size": [
+        130,
+        80
+      ],
+      "sources": [
+        {
+          "path": "backend/app/services/repository_service.py",
+          "line": 41,
+          "end_line": 53,
+          "label": "max 2 runs"
+        },
+        {
+          "path": "backend/app/services/repository_service.py",
+          "line": 69,
+          "end_line": 93,
+          "label": "start_processing"
+        },
+        {
+          "path": "backend/app/services/repository_service.py",
+          "line": 179,
+          "end_line": 345,
+          "label": "pipeline"
+        }
+      ]
+    },
+    {
+      "id": "ws",
+      "type": "backend",
+      "label": "WebSocketManager",
+      "sublabel": "/ws status push",
+      "pos": [
+        730,
+        520
+      ],
+      "size": [
+        130,
+        60
+      ],
+      "sources": [
+        {
+          "path": "backend/app/services/websocket_service.py",
+          "line": 42,
+          "end_line": 49,
+          "label": "manager"
+        },
+        {
+          "path": "backend/app/services/websocket_service.py",
+          "line": 120,
+          "end_line": 150,
+          "label": "broadcast"
+        },
+        {
+          "path": "backend/app/services/websocket_service.py",
+          "line": 183,
+          "end_line": 196,
+          "label": "/ws route, key"
+        }
+      ]
+    },
+    {
+      "id": "parser",
+      "type": "backend",
+      "label": "CodeParser",
+      "sublabel": "tree-sitter + ast",
+      "pos": [
+        960,
+        520
+      ],
+      "size": [
+        130,
+        60
+      ],
+      "sources": [
+        {
+          "path": "backend/app/services/code_parser.py",
+          "line": 94,
+          "end_line": 126,
+          "label": "dispatch"
+        },
+        {
+          "path": "backend/app/services/code_parser.py",
+          "line": 140,
+          "end_line": 146,
+          "label": "Python ast"
+        },
+        {
+          "path": "backend/app/services/code_parser.py",
+          "line": 363,
+          "end_line": 375,
+          "label": "tree-sitter"
+        }
+      ]
+    },
+    {
+      "id": "algolia",
+      "type": "cloud",
+      "label": "Algolia",
+      "sublabel": "search index",
+      "pos": [
+        1170,
+        200
+      ],
+      "size": [
+        120,
+        60
+      ],
+      "sources": [
+        {
+          "path": "backend/app/services/algolia_service.py",
+          "line": 93,
+          "end_line": 107,
+          "label": "client"
+        },
+        {
+          "path": "backend/app/services/algolia_service.py",
+          "line": 187,
+          "end_line": 206,
+          "label": "save_objects"
+        },
+        {
+          "path": "backend/app/services/algolia_service.py",
+          "line": 255,
+          "end_line": 288,
+          "label": "search"
+        }
+      ]
+    },
+    {
+      "id": "github",
+      "type": "cloud",
+      "label": "GitHub",
+      "sublabel": "api + raw files",
+      "pos": [
+        1170,
+        520
+      ],
+      "size": [
+        120,
+        60
+      ],
+      "sources": [
+        {
+          "path": "backend/app/services/github_service.py",
+          "line": 175,
+          "end_line": 179,
+          "label": "hosts"
+        },
+        {
+          "path": "backend/app/services/github_service.py",
+          "line": 346,
+          "end_line": 353,
+          "label": "git tree"
+        },
+        {
+          "path": "backend/app/services/github_service.py",
+          "line": 406,
+          "end_line": 412,
+          "label": "raw bytes"
+        }
+      ]
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "region",
+      "label": "User's machine",
+      "wraps": [
+        "keychain",
+        "claude",
+        "launcher",
+        "bridge"
+      ]
+    },
+    {
+      "kind": "region",
+      "label": "Backend process",
+      "wraps": [
+        "api",
+        "mcpTools",
+        "sqlite",
+        "job",
+        "ws",
+        "parser"
+      ]
+    },
+    {
+      "kind": "region",
+      "label": "External SaaS",
+      "wraps": [
+        "algolia",
+        "github"
+      ]
+    }
+  ],
+  "connections": [
+    {
+      "id": "user-to-spa",
+      "from": "browserUser",
+      "to": "spa",
+      "label": "uses",
+      "variant": "emphasis"
+    },
+    {
+      "id": "spa-to-nginx",
+      "from": "spa",
+      "to": "nginx",
+      "label": "HTTPS /api, /ws",
+      "variant": "emphasis"
+    },
+    {
+      "id": "nginx-to-api",
+      "from": "nginx",
+      "to": "api",
+      "label": "adds X-API-Key",
+      "variant": "security"
+    },
+    {
+      "id": "claude-to-launcher",
+      "from": "claude",
+      "to": "launcher",
+      "label": "spawns"
+    },
+    {
+      "id": "launcher-to-keychain",
+      "from": "launcher",
+      "to": "keychain",
+      "label": "reads basic-auth pw",
+      "variant": "security"
+    },
+    {
+      "id": "launcher-to-bridge",
+      "from": "launcher",
+      "to": "bridge",
+      "label": "exec bridge"
+    },
+    {
+      "id": "bridge-to-claude",
+      "from": "bridge",
+      "to": "claude",
+      "label": "MCP JSON-RPC (stdio)",
+      "fromSide": "bottom",
+      "toSide": "bottom",
+      "via": [
+        [
+          535,
+          500
+        ],
+        [
+          90,
+          500
+        ]
+      ]
+    },
+    {
+      "id": "bridge-to-api",
+      "from": "bridge",
+      "to": "api",
+      "label": "POST tools/call, GET resources",
+      "variant": "emphasis"
+    },
+    {
+      "id": "api-to-tools",
+      "from": "api",
+      "to": "mcpTools",
+      "label": "tools/call",
+      "fromSide": "top",
+      "toSide": "left"
+    },
+    {
+      "id": "api-to-job",
+      "from": "api",
+      "to": "job",
+      "label": "start job"
+    },
+    {
+      "id": "api-to-ws",
+      "from": "api",
+      "to": "ws",
+      "label": "/ws handshake"
+    },
+    {
+      "id": "ws-to-api",
+      "from": "ws",
+      "to": "api",
+      "label": "status frames",
+      "variant": "dashed"
+    },
+    {
+      "id": "tools-to-sqlite",
+      "from": "mcpTools",
+      "to": "sqlite",
+      "label": "read rows"
+    },
+    {
+      "id": "tools-to-algolia",
+      "from": "mcpTools",
+      "to": "algolia",
+      "label": "search_code"
+    },
+    {
+      "id": "job-to-sqlite",
+      "from": "job",
+      "to": "sqlite",
+      "label": "write rows"
+    },
+    {
+      "id": "job-to-algolia",
+      "from": "job",
+      "to": "algolia",
+      "label": "index entities"
+    },
+    {
+      "id": "job-to-github",
+      "from": "job",
+      "to": "github",
+      "label": "fetch tree + files"
+    },
+    {
+      "id": "job-to-parser",
+      "from": "job",
+      "to": "parser",
+      "label": "parse files"
+    },
+    {
+      "id": "job-to-ws",
+      "from": "job",
+      "to": "ws",
+      "label": "status events",
+      "variant": "dashed"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Browser path",
+      "items": [
+        "SPA sends X-API-Key when VITE_CODESAGE_API_KEY is set, and the key as a codesage.key.<hex> WebSocket subprotocol",
+        "Dev: no nginx; SPA reaches the backend directly or through the Vite proxy (/api, /ws to :8001)"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "Prod edge",
+      "items": [
+        "Port 80 serves only /health and a 301 to HTTPS",
+        "nginx overwrites X-API-Key on /api/ and /ws, and overwrites X-Forwarded-For",
+        "Basic auth (htpasswd) required except /health; serves the built SPA"
+      ]
+    },
+    {
+      "dot": "violet",
+      "title": "Claude Desktop path",
+      "items": [
+        "Bridge adds X-API-Key and optional basic auth; MCP_SERVER_URL may point at nginx in prod",
+        "tools/call and resources/read require the API key; slowapi limits apply"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "Backend guards",
+      "items": [
+        "BrowserRequestGuard refuses cross-origin writes and WS handshakes; with no key set only loopback clients are served",
+        "require_api_key guards writes, performance, tools/call, resources/read and suggestions",
+        "Indexing: at most 2 runs at once, one per repository; GitHub and Algolia calls are outbound HTTPS"
+      ]
+    }
+  ]
+}

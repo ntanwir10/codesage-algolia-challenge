@@ -99,3 +99,6 @@ logs/
 tmp/
 temp/
 .tmp/
+
+# archify work folders (diagram renders and receipts); exported SVGs and sources live in docs/diagrams
+.archify/

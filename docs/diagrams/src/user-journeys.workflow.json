@@ -1,0 +1,250 @@
+{
+  "schema_version": 2,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "User journeys: web dashboard and Claude Desktop",
+    "output": ".archify/workflow-user-journeys-20261025-165059/user-journeys.html",
+    "quality_profile": "showcase",
+    "repository": {
+      "url": "https://github.com/ntanwir10/codesage-algolia-challenge.git",
+      "provider": "github",
+      "revision": "e7c2fd783a6c2d99eec8e85bd7516200636d39e3"
+    }
+  },
+  "lanes": [
+    { "id": "web_add", "label": "Web: add a repository" },
+    { "id": "web_err", "label": "Web: rejected input", "variant": "exception" },
+    { "id": "web_page", "label": "Web: repository page" },
+    { "id": "web_out", "label": "Web: how the run ends" },
+    { "id": "web_use", "label": "Web: search and manage" },
+    { "id": "cd_setup", "label": "Claude Desktop: set up" },
+    { "id": "cd_opt", "label": "Claude Desktop: proxy login", "variant": "exception" },
+    { "id": "cd_ask", "label": "Claude Desktop: ask" }
+  ],
+  "groups": [
+    { "id": "run_ends", "label": "One of three outcomes", "lane": "web_out", "fromCol": 2, "toCol": 4, "variant": "emphasis" }
+  ],
+  "mainPath": ["form", "valid", "post", "ok", "nav", "live"],
+  "nodes": [
+    {
+      "id": "form", "lane": "web_add", "col": 0, "type": "frontend",
+      "label": "Paste URL", "sublabel": "optional branch",
+      "sources": [
+        { "path": "frontend/src/components/forms/github-form.tsx", "line": 98, "end_line": 129, "label": "URL and branch inputs" },
+        { "path": "frontend/src/pages/HomePage.tsx", "line": 17, "end_line": 27, "label": "empty fields omitted" }
+      ]
+    },
+    {
+      "id": "valid", "lane": "web_add", "col": 1, "type": "security",
+      "label": "Client check", "sublabel": "github.com/owner/repo",
+      "sources": [
+        { "path": "frontend/src/components/forms/github-form.tsx", "line": 15, "end_line": 28, "label": "zod schema" },
+        { "path": "frontend/src/components/forms/github-form.tsx", "line": 148, "end_line": 152, "label": "submit needs isValid" }
+      ]
+    },
+    {
+      "id": "post", "lane": "web_add", "col": 2, "type": "backend",
+      "label": "POST /repositories", "sublabel": "api.createRepository",
+      "sources": [
+        { "path": "frontend/src/pages/HomePage.tsx", "line": 28, "end_line": 28, "label": "createRepository call" },
+        { "path": "frontend/src/services/api.ts", "line": 99, "end_line": 102, "label": "POST /repositories/" }
+      ]
+    },
+    {
+      "id": "ok", "lane": "web_add", "col": 3, "type": "frontend",
+      "label": "Toast + refresh", "sublabel": "list invalidated",
+      "sources": [
+        { "path": "frontend/src/pages/HomePage.tsx", "line": 29, "end_line": 35, "label": "invalidate and toast" }
+      ]
+    },
+    {
+      "id": "nav", "lane": "web_add", "col": 4, "type": "frontend",
+      "label": "Go to page", "sublabel": "/repository/:id",
+      "sources": [
+        { "path": "frontend/src/pages/HomePage.tsx", "line": 36, "end_line": 36, "label": "navigate" }
+      ]
+    },
+    {
+      "id": "inline", "lane": "web_err", "col": 1, "type": "security",
+      "label": "Inline error", "sublabel": "submit disabled",
+      "sources": [
+        { "path": "frontend/src/components/forms/github-form.tsx", "line": 104, "end_line": 106, "label": "field error" },
+        { "path": "frontend/src/components/forms/github-form.tsx", "line": 148, "end_line": 152, "label": "disabled until valid" }
+      ]
+    },
+    {
+      "id": "toast_err", "lane": "web_err", "col": 2, "type": "security",
+      "label": "Error toast", "sublabel": "422 shown inline",
+      "sources": [
+        { "path": "frontend/src/pages/HomePage.tsx", "line": 37, "end_line": 58, "label": "toast by status" },
+        { "path": "frontend/src/components/forms/github-form.tsx", "line": 65, "end_line": 78, "label": "server messages kept" }
+      ]
+    },
+    {
+      "id": "live", "lane": "web_page", "col": 4, "type": "messagebus",
+      "label": "Live progress", "sublabel": "WebSocket + 3 s poll",
+      "sources": [
+        { "path": "frontend/src/pages/RepositoryPage.tsx", "line": 37, "end_line": 60, "label": "poll and subscribe" },
+        { "path": "frontend/src/hooks/useRealtimeStatus.ts", "line": 20, "end_line": 65, "label": "socket updates the cache" },
+        { "path": "frontend/src/lib/polling.ts", "line": 1, "end_line": 15, "label": "poll while active" }
+      ]
+    },
+    {
+      "id": "completed", "lane": "web_out", "col": 2, "type": "backend", "icon": "success",
+      "label": "Completed", "sublabel": "green card",
+      "sources": [
+        { "path": "frontend/src/pages/RepositoryPage.tsx", "line": 289, "end_line": 321, "label": "completion card" }
+      ]
+    },
+    {
+      "id": "partial", "lane": "web_out", "col": 3, "type": "cloud", "icon": "waiting",
+      "label": "Partly indexed", "sublabel": "amber, error_message",
+      "sources": [
+        { "path": "frontend/src/pages/RepositoryPage.tsx", "line": 289, "end_line": 326, "label": "amber when error_message" }
+      ]
+    },
+    {
+      "id": "failed", "lane": "web_out", "col": 4, "type": "security", "icon": "failure",
+      "label": "Failed", "sublabel": "red, reason shown",
+      "sources": [
+        { "path": "frontend/src/pages/RepositoryPage.tsx", "line": 341, "end_line": 365, "label": "failure card" }
+      ]
+    },
+    {
+      "id": "reprocess", "lane": "web_out", "col": 5, "type": "backend",
+      "label": "Reprocess", "sublabel": "also on completed",
+      "sources": [
+        { "path": "frontend/src/pages/RepositoryPage.tsx", "line": 106, "end_line": 134, "label": "handleReprocess" },
+        { "path": "frontend/src/services/api.ts", "line": 137, "end_line": 142, "label": "force_reprocess" }
+      ]
+    },
+    {
+      "id": "suggest", "lane": "web_use", "col": 2, "type": "frontend",
+      "label": "Type a query", "sublabel": "300 ms suggestions",
+      "sources": [
+        { "path": "frontend/src/components/features/search-interface.tsx", "line": 51, "end_line": 83, "label": "debounced suggestions" }
+      ]
+    },
+    {
+      "id": "results", "lane": "web_use", "col": 3, "type": "frontend",
+      "label": "Results", "sublabel": "link to GitHub",
+      "sources": [
+        { "path": "frontend/src/components/features/search-interface.tsx", "line": 85, "end_line": 119, "label": "runSearch" },
+        { "path": "frontend/src/components/features/search-interface.tsx", "line": 279, "end_line": 298, "label": "result links" }
+      ]
+    },
+    {
+      "id": "dash", "lane": "web_use", "col": 4, "type": "frontend",
+      "label": "Dashboard", "sublabel": "list and view",
+      "sources": [
+        { "path": "frontend/src/pages/DashboardPage.tsx", "line": 33, "end_line": 53, "label": "list and live status" },
+        { "path": "frontend/src/pages/DashboardPage.tsx", "line": 282, "end_line": 299, "label": "view and delete buttons" }
+      ]
+    },
+    {
+      "id": "delete", "lane": "web_use", "col": 5, "type": "security",
+      "label": "Delete", "sublabel": "confirm dialog",
+      "sources": [
+        { "path": "frontend/src/pages/DashboardPage.tsx", "line": 63, "end_line": 98, "label": "handleDeleteConfirm" }
+      ]
+    },
+    {
+      "id": "install", "lane": "cd_setup", "col": 0, "type": "external",
+      "label": "make install-claude", "sublabel": "install script",
+      "sources": [
+        { "path": "Makefile", "line": 181, "end_line": 182, "label": "install-claude target" },
+        { "path": "scripts/install_claude_desktop.py", "line": 159, "end_line": 169, "label": "builds the entry" }
+      ]
+    },
+    {
+      "id": "config", "lane": "cd_setup", "col": 2, "type": "database",
+      "label": "Write config", "sublabel": "backup, mode 600",
+      "sources": [
+        { "path": "scripts/install_claude_desktop.py", "line": 85, "end_line": 98, "label": "write_atomic 0600" },
+        { "path": "scripts/install_claude_desktop.py", "line": 188, "end_line": 194, "label": "backup then write" }
+      ]
+    },
+    {
+      "id": "restart", "lane": "cd_setup", "col": 3, "type": "external",
+      "label": "Restart Claude", "sublabel": "picks up the server",
+      "sources": [
+        { "path": "scripts/install_claude_desktop.py", "line": 194, "end_line": 195, "label": "restart message" }
+      ]
+    },
+    {
+      "id": "keychain", "lane": "cd_opt", "col": 1, "type": "security",
+      "label": "Keychain", "sublabel": "--basic-auth password",
+      "sources": [
+        { "path": "scripts/install_claude_desktop.py", "line": 176, "end_line": 182, "label": "security add-generic-password" },
+        { "path": "mcp_launcher.sh", "line": 15, "end_line": 21, "label": "launcher reads it back" }
+      ]
+    },
+    {
+      "id": "ask", "lane": "cd_ask", "col": 3, "type": "external",
+      "label": "Ask a question", "sublabel": "in Claude Desktop",
+      "sources": [
+        { "path": "backend/codesage_mcp/server.py", "line": 273, "end_line": 283, "label": "tools/list works offline" }
+      ]
+    },
+    {
+      "id": "call", "lane": "cd_ask", "col": 4, "type": "backend",
+      "label": "Claude calls a tool", "sublabel": "one of six",
+      "sources": [
+        { "path": "backend/codesage_mcp/schemas.py", "line": 75, "end_line": 115, "label": "the six tools" },
+        { "path": "backend/codesage_mcp/server.py", "line": 182, "end_line": 214, "label": "call_tool" }
+      ]
+    },
+    {
+      "id": "answer", "lane": "cd_ask", "col": 5, "type": "external",
+      "label": "Claude answers", "sublabel": "from the tool result",
+      "sources": [
+        { "path": "backend/codesage_mcp/server.py", "line": 213, "end_line": 214, "label": "result as JSON text" }
+      ]
+    }
+  ],
+  "edges": [
+    { "id": "e-submit", "from": "form", "to": "valid", "variant": "default" },
+    { "id": "e-invalid", "from": "valid", "to": "inline", "label": "invalid", "variant": "security", "role": "error" },
+    { "id": "e-valid", "from": "valid", "to": "post", "label": "valid", "variant": "emphasis" },
+    { "id": "e-rejected", "from": "post", "to": "toast_err", "label": "rejected", "variant": "security", "role": "error" },
+    { "id": "e-created", "from": "post", "to": "ok", "label": "created", "variant": "emphasis" },
+    { "id": "e-nav", "from": "ok", "to": "nav", "variant": "default" },
+    { "id": "e-page", "from": "nav", "to": "live", "variant": "emphasis" },
+    { "id": "e-completed", "from": "live", "to": "completed", "label": "no error_message", "variant": "emphasis" },
+    { "id": "e-partial", "from": "live", "to": "partial", "label": "error_message", "variant": "default" },
+    { "id": "e-failed", "from": "live", "to": "failed", "label": "failed", "variant": "security", "role": "error" },
+    { "id": "e-reprocess", "from": "failed", "to": "reprocess", "variant": "dashed", "role": "branch" },
+    { "id": "e-again", "from": "reprocess", "to": "live", "label": "runs again", "variant": "dashed", "role": "return" },
+    { "id": "e-search", "from": "completed", "to": "suggest", "label": "searchable", "variant": "emphasis" },
+    { "id": "e-results", "from": "suggest", "to": "results", "variant": "emphasis" },
+    { "id": "e-dash", "from": "results", "to": "dash", "label": "Back to Dashboard", "variant": "default" },
+    { "id": "e-delete", "from": "dash", "to": "delete", "variant": "security", "role": "branch" },
+    { "id": "c-install", "from": "install", "to": "config", "label": "merge config", "variant": "emphasis" },
+    { "id": "c-basic", "from": "install", "to": "keychain", "label": "--basic-auth", "variant": "dashed", "role": "branch" },
+    { "id": "c-stored", "from": "keychain", "to": "config", "variant": "dashed", "role": "branch" },
+    { "id": "c-restart", "from": "config", "to": "restart", "variant": "default" },
+    { "id": "c-ask", "from": "restart", "to": "ask", "variant": "emphasis" },
+    { "id": "c-call", "from": "ask", "to": "call", "variant": "emphasis" },
+    { "id": "c-answer", "from": "call", "to": "answer", "variant": "emphasis" }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Web journey",
+      "items": [
+        "Search runs search_code on the same /mcp/tools/call endpoint",
+        "Polling every 3 s runs next to the socket while pending or processing",
+        "Reprocess sits on the completed and failed cards"
+      ]
+    },
+    {
+      "dot": "violet",
+      "title": "Claude Desktop journey",
+      "items": [
+        "Tools: list_repositories, search_code, get_file, list_definitions, find_patterns, analyze_repository",
+        "The password never enters the config: the launcher reads the Keychain",
+        "See the tool-call sequence diagram for what happens per call"
+      ]
+    }
+  ]
+}
