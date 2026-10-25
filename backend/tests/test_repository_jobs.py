@@ -1,6 +1,8 @@
 """Background jobs, batching, statistics and the process/delete endpoints"""
 
 import asyncio
+import threading
+import weakref
 
 import pytest
 
@@ -77,7 +79,8 @@ async def test_background_job_processes_with_its_own_session(
 
 
 async def test_runs_beyond_the_limit_wait_for_a_free_slot(db_session, job_sessions, monkeypatch):
-    monkeypatch.setattr(repository_service, "_run_slots", asyncio.Semaphore(1))
+    monkeypatch.setattr(repository_service, "MAX_CONCURRENT_RUNS", 1)
+    monkeypatch.setattr(repository_service, "_run_slots", weakref.WeakKeyDictionary())
     started, release = [], asyncio.Event()
 
     async def blocking_files(self, repository):
@@ -97,6 +100,48 @@ async def test_runs_beyond_the_limit_wait_for_a_free_slot(db_session, job_sessio
     release.set()
     await asyncio.gather(first, second)
     assert started == [a.id, b.id]
+
+
+def test_run_slots_work_on_every_event_loop():
+    # One module-level semaphore raised "bound to a different event loop" on the second run
+    async def contend():
+        async def hold():
+            async with repository_service._run_slot():
+                await asyncio.sleep(0.01)
+
+        # One more holder than there are slots, so someone has to wait
+        await asyncio.gather(*(hold() for _ in range(repository_service.MAX_CONCURRENT_RUNS + 1)))
+
+    asyncio.run(contend())
+    asyncio.run(contend())
+
+
+async def test_a_cancelled_delete_keeps_the_slot_until_its_row_clear_finishes(
+    db_session, algolia_index, monkeypatch
+):
+    repo = make_repository(db_session, status="completed")
+    in_thread, release = threading.Event(), threading.Event()
+    real_commit = db_session.commit
+
+    def commit():
+        if threading.current_thread() is not threading.main_thread():
+            in_thread.set()
+            release.wait(5)
+        real_commit()
+
+    monkeypatch.setattr(db_session, "commit", commit)
+    deleting = asyncio.create_task(RepositoryService(db_session).delete_repository(repo))
+    await asyncio.to_thread(in_thread.wait, 5)
+
+    deleting.cancel()
+    await asyncio.sleep(0.05)
+    # The thread is still committing, so a new run must not be able to start yet
+    assert repository_service.is_processing(repo.id)
+
+    release.set()
+    with pytest.raises(asyncio.CancelledError):
+        await deleting
+    assert not repository_service.is_processing(repo.id)
 
 
 async def test_a_crashed_job_does_not_stay_processing(db_session, job_sessions, monkeypatch):

@@ -293,8 +293,7 @@ export class WebSocketService {
       // Nothing since the last ping: the connection is half-open (laptop
       // sleep, NAT drop) and would never fire onclose, so start over
       if (this.awaitingPong) {
-        this.teardownSocket(4000, "heartbeat timeout");
-        this.notifyConnection("disconnected");
+        this.teardownSocket(4000, "heartbeat timeout"); // also reports "disconnected"
         if (this.hasSubscribers()) this.scheduleReconnect();
         return;
       }

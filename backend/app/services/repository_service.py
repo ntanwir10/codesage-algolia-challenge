@@ -8,7 +8,9 @@ repository, and always ends in `completed` or `failed` with a reason.
 """
 
 import asyncio
+import contextlib
 import json
+import weakref
 from collections import Counter
 from datetime import UTC, datetime
 
@@ -38,7 +40,17 @@ _jobs: dict[int, asyncio.Task] = {}
 
 # Each run holds up to GitHubService.max_total_bytes of files in memory; cap how many run at once
 MAX_CONCURRENT_RUNS = 2
-_run_slots = asyncio.Semaphore(MAX_CONCURRENT_RUNS)
+_run_slots: "weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, asyncio.Semaphore]" = (
+    weakref.WeakKeyDictionary()
+)
+
+
+def _run_slot() -> asyncio.Semaphore:
+    """This event loop's semaphore: one shared across loops raises once both have waited on it"""
+    loop = asyncio.get_running_loop()
+    if loop not in _run_slots:
+        _run_slots[loop] = asyncio.Semaphore(MAX_CONCURRENT_RUNS)
+    return _run_slots[loop]
 
 
 class IngestionError(Exception):
@@ -101,6 +113,18 @@ def _fail_if_still_processing(repository_id: int) -> None:
                 db.commit()
     except Exception as e:
         logger.error("Could not mark the crashed job failed", repository_id=repository_id, error=str(e))
+
+
+async def _to_thread_to_completion(fn):
+    """asyncio.to_thread that, if the caller is cancelled, still waits for the thread, so
+    the caller's finally (freeing the job slot) can't run while the thread uses its session"""
+    future = asyncio.ensure_future(asyncio.to_thread(fn))
+    try:
+        return await asyncio.shield(future)
+    except asyncio.CancelledError:
+        with contextlib.suppress(Exception):
+            await future
+        raise
 
 
 def _failure_message(error: Exception) -> str:
@@ -175,7 +199,7 @@ class RepositoryService:
 
         try:
             # A run already shows "processing" while it waits here for a free slot
-            async with _run_slots, monitor_repository_processing(repository.id):
+            async with _run_slot(), monitor_repository_processing(repository.id):
                 await self.process_repository_files(repository)
         except Exception as e:
             # Discard any half-written work so recording the failure can't fail too
@@ -436,7 +460,7 @@ class RepositoryService:
             self.db.commit()
 
         # Large repositories have thousands of rows to delete; keep it off the event loop
-        await asyncio.to_thread(clear_rows)
+        await _to_thread_to_completion(clear_rows)
 
     async def delete_repository(self, repository: Repository) -> bool:
         """Delete a repository and its Algolia records.

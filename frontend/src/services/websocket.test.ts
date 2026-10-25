@@ -144,8 +144,11 @@ describe("WebSocketService", () => {
     vi.advanceTimersByTime(25000); // answered: ping again, no reconnect
     expect(first.closed).toBeNull();
 
+    const statuses: string[] = [];
+    service.onConnectionStatusChange((status) => statuses.push(status));
     vi.advanceTimersByTime(25000); // unanswered
     expect(first.closed).toEqual({ code: 4000 });
+    expect(statuses).toEqual(["disconnected"]); // reported once, not twice
     vi.advanceTimersByTime(1000);
     expect(FakeWebSocket.instances).toHaveLength(2);
   });
