@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ToastProvider } from "@/components/ui/toast";
@@ -24,7 +24,7 @@ const repository: Repository = {
   created_at: "2026-10-25T00:00:00Z",
 };
 
-function renderPage(repo: Repository) {
+function renderPage(repo: Repository, client?: QueryClient) {
   vi.spyOn(api, "getRepository").mockResolvedValue(repo);
   vi.spyOn(api, "getRepositoryStatus").mockResolvedValue({
     repository_id: repo.id,
@@ -34,7 +34,7 @@ function renderPage(repo: Repository) {
     progress: 100,
   });
   vi.spyOn(api, "getRepositoryStats").mockReturnValue(new Promise(() => {}));
-  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  client ??= new QueryClient({ defaultOptions: { queries: { retry: false } } });
   render(
     <QueryClientProvider client={client}>
       <ToastProvider>
@@ -62,5 +62,26 @@ describe("RepositoryPage completion card", () => {
     expect(await screen.findByText("Repository partially indexed")).toBeInTheDocument();
     expect(screen.getByText(message)).toBeInTheDocument();
     expect(screen.queryByText("Repository analysis complete!")).not.toBeInTheDocument();
+  });
+});
+
+describe("RepositoryPage failures", () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it("shows the failure reason on the failed card", async () => {
+    renderPage({ ...repository, status: "failed", error_message: "Clone failed: auth required" });
+    expect(await screen.findByText("Processing failed")).toBeInTheDocument();
+    expect(screen.getByText("Clone failed: auth required")).toBeInTheDocument();
+  });
+
+  it("keeps showing the repository when a background refetch fails", async () => {
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    renderPage(repository, client);
+    expect(await screen.findByText("Repository analysis complete!")).toBeInTheDocument();
+    vi.spyOn(api, "getRepository").mockRejectedValue(new Error("network"));
+    await client.refetchQueries({ queryKey: ["repository", 1] });
+    await waitFor(() => expect(client.getQueryState(["repository", 1])?.error).toBeTruthy());
+    expect(screen.getByText("Repository analysis complete!")).toBeInTheDocument();
+    expect(screen.queryByText("Repository not found")).not.toBeInTheDocument();
   });
 });

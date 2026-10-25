@@ -26,11 +26,11 @@ make install-claude ARGS=--dry-run  # print the merged config (key masked), writ
 - finds the config file for your OS (macOS: `~/Library/Application Support/Claude/claude_desktop_config.json`; Windows: `%APPDATA%\Claude\...`; Linux: `~/.config/Claude/...`)
 - adds or replaces only `mcpServers.codesage` and keeps every other key
 - backs up the existing file as `claude_desktop_config.json.bak-<timestamp>`
-- writes atomically and sets mode 600, because the file holds the API key
+- writes atomically and sets mode 600 on the file and its backup, because they hold the API key
 - refuses to touch a file that is not valid JSON
 - reads `CODESAGE_API_KEY` from `backend/.env`
 
-Options go through `ARGS`, for example `make install-claude ARGS="--server-url http://127.0.0.1:8001 --name codesage"`. Others: `--config PATH`, `--api-key KEY`. Restart Claude Desktop afterwards.
+Options go through `ARGS`, for example `make install-claude ARGS="--server-url http://127.0.0.1:8001 --name codesage"`. Others: `--config PATH`, `--api-key KEY`, and `--basic-auth USER` for the prod stack behind nginx (the password goes to the macOS Keychain; nginx adds the API key, so none is written). Restart Claude Desktop afterwards.
 
 ### Manual install
 
@@ -50,7 +50,7 @@ Copy `claude_desktop_config.example.json` into your Claude Desktop config and fi
 }
 ```
 
-The bridge reads only `MCP_SERVER_URL` (default `http://127.0.0.1:8001`) and `CODESAGE_API_KEY` (sent as `X-API-Key`). Set `CODESAGE_MCP_LOG_LEVEL` to change its log level (default `INFO`).
+The bridge reads `MCP_SERVER_URL` (default `http://127.0.0.1:8001`), `CODESAGE_API_KEY` (sent as `X-API-Key`), `CODESAGE_BASIC_AUTH_USER` and `CODESAGE_BASIC_AUTH_PASSWORD` (a login for the prod nginx; the launcher reads the password from the Keychain), and `CODESAGE_ALLOW_INSECURE_AUTH`. It refuses to send the key or login over plain `http://` to a non-loopback host unless `CODESAGE_ALLOW_INSECURE_AUTH=1`. Set `CODESAGE_MCP_LOG_LEVEL` to change its log level (default `INFO`).
 
 ## Tools
 
@@ -72,7 +72,7 @@ Full-text search over indexed functions, classes, imports and doc sections. Retu
 | `page` | integer >= 0, default 0 | Zero-based |
 
 ### `get_file`
-Read a file with line numbers. Returns at most 400 lines per call.
+Read a file with line numbers. Returns at most 400 lines, and 100,000 characters, per call.
 
 | Argument | Type | Notes |
 | --- | --- | --- |
@@ -110,9 +110,11 @@ Find lines in a repository's files that match a literal string or a regular expr
 | `path_glob` | string | For example `src/*.py` |
 | `max_results` | integer 1-500, default 100 | |
 
+A regex search spends at most 1 second per file and 10 seconds per call; files it could not finish are listed in `skipped_files` (the first 50) with `skipped_count`, and a call that ran out of time is marked `truncated`.
+
 ### Resources
 
-The bridge also serves `resources/list` and `resources/read`. `codesage://repositories` lists repositories, and `codesage://repositories/{id}/files` lists the files of one repository.
+The bridge also serves `resources/list` and `resources/read`. `codesage://repositories` lists repositories, and `codesage://repositories/{id}/files` lists the files of one repository (the first 5000, with `total_files` and `truncated`).
 
 ## HTTP endpoints
 
@@ -124,7 +126,7 @@ The bridge uses these; you can call them directly (for example for testing). All
 | `GET /mcp/tools` | none | Tool list with JSON Schemas |
 | `POST /mcp/tools/call` | `X-API-Key` | Run a tool |
 | `GET /mcp/resources` | none | Resource list |
-| `GET /mcp/resources/read?uri=...` | none | Read a resource |
+| `GET /mcp/resources/read?uri=...` | `X-API-Key` | Read a resource |
 
 ```bash
 curl -X POST http://127.0.0.1:8001/api/v1/ai/mcp/tools/call \

@@ -12,6 +12,8 @@ from app.services.performance_monitor import (
     performance_monitor,
 )
 
+LOCAL = ("127.0.0.1", 50000)  # TestClient's default peer, "testclient", is not a loopback address
+
 
 @pytest.fixture(autouse=True)
 def reset_global_monitor():
@@ -79,6 +81,16 @@ async def test_failed_operation_recorded_and_cleaned_up():
     assert performance_monitor.metrics_history[0].errors_count == 1
 
 
+async def test_failed_operation_keeps_sql_and_file_contents_out_of_metrics():
+    from sqlalchemy.exc import OperationalError
+
+    with pytest.raises(OperationalError):
+        async with performance_monitor.monitor_operation("repository_processing"):
+            raise OperationalError("INSERT INTO code_files VALUES (?)", ("SECRET FILE BODY",), Exception())
+    error = performance_monitor.metrics_history[-1].metadata["error"]
+    assert error == "Database error while storing the repository"
+
+
 @pytest.mark.parametrize(
     "path",
     [
@@ -90,7 +102,7 @@ async def test_failed_operation_recorded_and_cleaned_up():
     ],
 )
 def test_endpoints_return_200_quickly(path):
-    client = TestClient(app, base_url="http://localhost")
+    client = TestClient(app, base_url="http://localhost", client=LOCAL)
     start = time.perf_counter()
     response = client.get(path)
     assert response.status_code == 200, response.text
@@ -98,7 +110,7 @@ def test_endpoints_return_200_quickly(path):
 
 
 def test_reset_and_operation_endpoints():
-    client = TestClient(app, base_url="http://localhost")
+    client = TestClient(app, base_url="http://localhost", client=LOCAL)
     assert client.post("/api/v1/performance/reset").status_code == 200
     assert client.get("/api/v1/performance/operations/nope").status_code == 404
 
@@ -113,5 +125,5 @@ def test_health_computes_system_metrics_once(monkeypatch):
         return original()
 
     monkeypatch.setattr(performance_monitor, "get_system_metrics", counting)
-    TestClient(app, base_url="http://localhost").get("/api/v1/performance/health-check")
+    TestClient(app, base_url="http://localhost", client=LOCAL).get("/api/v1/performance/health-check")
     assert calls == 1

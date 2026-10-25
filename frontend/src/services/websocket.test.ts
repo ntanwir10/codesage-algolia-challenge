@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { onApiAuthError } from "@/services/api";
 import {
   WebSocketService,
   buildWebSocketProtocols,
@@ -171,6 +172,18 @@ describe("WebSocketService", () => {
     last().drop(1008);
     vi.advanceTimersByTime(60000);
     expect(FakeWebSocket.instances).toHaveLength(1);
+  });
+
+  it("raises the auth-error notice when the server rejects the API key", () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    vi.advanceTimersByTime(10000); // clear the 5s notice throttle left by earlier tests
+    const onAuthError = vi.fn();
+    const off = onApiAuthError(onAuthError);
+    service.onRepositoryUpdate(4, () => {});
+    last().open();
+    last().drop(1008);
+    expect(onAuthError).toHaveBeenCalledTimes(1);
+    off();
   });
 
   it("builds a wss: URL on https pages, never with the key in it", () => {

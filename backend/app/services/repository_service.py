@@ -16,10 +16,10 @@ from datetime import UTC, datetime
 
 import structlog
 from sqlalchemy import func
-from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.core.database import SessionLocal
+from app.core.security import failure_message
 from app.models.code_entity import CodeEntity
 from app.models.code_file import CodeFile
 from app.models.repository import Repository
@@ -127,14 +127,6 @@ async def _to_thread_to_completion(fn):
         raise
 
 
-def _failure_message(error: Exception) -> str:
-    """What a failed run records and broadcasts; the full error goes to the log only"""
-    # A SQLAlchemy error's text carries the SQL and its parameters, which include file contents
-    if isinstance(error, SQLAlchemyError):
-        return "Database error while storing the repository"
-    return f"{type(error).__name__}: {error}"[:500]
-
-
 def recover_interrupted_jobs(db: Session) -> int:
     """Fail repositories a previous server process left pending or processing"""
     stuck = (
@@ -193,6 +185,7 @@ class RepositoryService:
             return repository
 
         repository.status = "processing"
+        repository.processed_files = 0  # the previous run's count would show as progress
         repository.error_message = None
         self.db.commit()
         await self._broadcast_repository_status(repository)
@@ -205,12 +198,12 @@ class RepositoryService:
             # Discard any half-written work so recording the failure can't fail too
             self.db.rollback()
             repository.status = "failed"
-            repository.error_message = _failure_message(e)
+            repository.error_message = failure_message(e)
             self.db.commit()
             logger.error(
                 "Repository processing failed",
                 repository_id=repository.id,
-                error=str(e),
+                error=repository.error_message,
                 error_type=type(e).__name__,
             )
             await self._broadcast_repository_status(
@@ -265,14 +258,25 @@ class RepositoryService:
         documents = []
         processed_files = 0
         failed_files = 0
+        unparsed_files = 0
 
         for start in range(0, len(files), DB_BATCH_SIZE):
             batch = files[start : start + DB_BATCH_SIZE]
             batch_documents = []
             for file in batch:
-                entities = await code_parser.extract_entities(
-                    file.path, file.content, file.language
-                )
+                try:
+                    entities = await code_parser.extract_entities(
+                        file.path, file.content, file.language
+                    )
+                except Exception as e:
+                    # Still stored, just without entities; the run reports it
+                    entities = []
+                    unparsed_files += 1
+                    logger.error(
+                        "Failed to parse code file",
+                        file_path=file.path,
+                        error=failure_message(e),
+                    )
                 code_file = CodeFile(
                     repository_id=repository.id,
                     file_path=file.path,
@@ -315,7 +319,7 @@ class RepositoryService:
                     "Failed to store file batch",
                     repository_id=repository.id,
                     first_file=batch[0].path,
-                    error=str(e),
+                    error=failure_message(e),
                 )
                 continue
 
@@ -349,6 +353,8 @@ class RepositoryService:
         problems = []
         if failed_files:
             problems.append(f"{failed_files} of {len(files)} files could not be stored")
+        if unparsed_files:
+            problems.append(f"{unparsed_files} files could not be parsed")
         if github.skipped_files:
             problems.append(
                 f"{github.skipped_files} files over the {github.max_files}-file or "
@@ -484,6 +490,9 @@ class RepositoryService:
 
             self.db.delete(repository)
             self.db.commit()
+            from app.services.websocket_service import websocket_manager
+
+            websocket_manager.forget_repository(repository.id)
             return True
         finally:
             del _jobs[repository.id]

@@ -7,6 +7,8 @@ from fastapi.testclient import TestClient
 from app.core.config import get_settings
 from app.main import app
 
+LOCAL = ("127.0.0.1", 50000)  # TestClient's default peer, "testclient", is not a loopback address
+
 TOOL_CALL = "/api/v1/ai/mcp/tools/call"
 
 
@@ -51,7 +53,7 @@ def key_protocols(key: str) -> list[str]:
 
 
 def test_websocket_rejects_a_missing_or_wrong_key(api_key):
-    client = TestClient(app, base_url="http://localhost")
+    client = TestClient(app, base_url="http://localhost", client=LOCAL)
     attempts = [
         ("/ws", None),
         ("/ws", key_protocols("wrong")),
@@ -67,7 +69,7 @@ def test_websocket_rejects_a_missing_or_wrong_key(api_key):
 
 
 def test_websocket_accepts_the_key_in_a_subprotocol(api_key):
-    client = TestClient(app, base_url="http://localhost")
+    client = TestClient(app, base_url="http://localhost", client=LOCAL)
     with client.websocket_connect("ws://localhost/ws", subprotocols=key_protocols(api_key)) as ws:
         assert ws.accepted_subprotocol == "codesage"
         assert ws.receive_json()["type"] == "connected"
@@ -75,9 +77,9 @@ def test_websocket_accepts_the_key_in_a_subprotocol(api_key):
 
 def test_websocket_accepts_the_key_as_a_header(api_key):
     # The prod nginx proxy injects the key as a header; browsers never hold it
-    with TestClient(app, base_url="http://localhost").websocket_connect("/ws", headers={"X-API-Key": api_key}) as ws:
+    with TestClient(app, base_url="http://localhost", client=LOCAL).websocket_connect("/ws", headers={"X-API-Key": api_key}) as ws:
         assert ws.receive_json()["type"] == "connected"
-    with pytest.raises(WebSocketDisconnect) as excinfo, TestClient(app, base_url="http://localhost").websocket_connect(
+    with pytest.raises(WebSocketDisconnect) as excinfo, TestClient(app, base_url="http://localhost", client=LOCAL).websocket_connect(
         "/ws", headers={"X-API-Key": "wrong"}
     ) as ws:
         ws.receive_json()

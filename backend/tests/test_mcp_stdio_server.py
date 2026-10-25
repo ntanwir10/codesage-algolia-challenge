@@ -135,6 +135,40 @@ async def test_unreachable_backend_retries_once_and_reports():
     assert len(calls) == 2
 
 
+async def test_a_login_in_the_url_stays_out_of_messages():
+    def down(request):
+        raise httpx.ConnectError("refused")
+
+    config = Config(server_url="https://ann:s3cret@codesage.example")
+    assert config.display_url == "https://codesage.example"
+    async with make_client(Backend(down), config=config) as client:
+        result = await client.call_tool("list_repositories", {})
+    text = result.content[0].text
+    assert "not reachable at https://codesage.example" in text
+    assert "s3cret" not in text and "ann" not in text
+
+
+@pytest.mark.parametrize("body", [["a", "list"], "a string", 42])
+async def test_an_unexpected_200_body_is_a_tool_error(body):
+    backend = Backend(lambda request: httpx.Response(200, json=body))
+    async with make_client(backend) as client:
+        result = await client.call_tool("list_repositories", {})
+    assert result.is_error
+    assert "unexpected response" in result.content[0].text
+
+
+async def test_unexpected_resource_bodies_are_mcp_errors():
+    for body in ([1, 2], {"resources": [{"no_uri": True}]}):
+        backend = Backend(lambda request, body=body: httpx.Response(200, json=body))
+        async with make_client(backend) as client:
+            with pytest.raises(MCPError, match="unexpected response"):
+                await client.list_resources()
+    backend = Backend(lambda request: httpx.Response(200, json=["not", "an", "object"]))
+    async with make_client(backend) as client:
+        with pytest.raises(MCPError, match="unexpected response"):
+            await client.read_resource("codesage://repositories")
+
+
 async def test_retry_recovers_after_one_connection_error():
     state = {"n": 0}
 

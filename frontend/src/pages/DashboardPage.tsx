@@ -31,7 +31,7 @@ export function DashboardPage() {
   });
 
   const {
-    data: repositories = [],
+    data: loaded,
     isLoading,
     error,
     refetch,
@@ -41,6 +41,8 @@ export function DashboardPage() {
     // Poll every ~3s while any repository is pending/processing.
     refetchInterval: (query) => pollWhileAnyActive(query.state.data),
   });
+
+  const repositories = useMemo(() => loaded ?? [], [loaded]);
 
   // Live updates for repositories still being processed.
   // Completion toasts are handled globally in Layout.
@@ -117,7 +119,8 @@ export function DashboardPage() {
     );
   }
 
-  if (error) {
+  // A failed background refetch keeps the old data; only show the error with none.
+  if (error && !loaded) {
     return (
       <div className="container mx-auto px-4 py-8">
         <div className="max-w-6xl mx-auto">

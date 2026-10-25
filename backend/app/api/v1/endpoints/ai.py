@@ -111,8 +111,15 @@ async def list_mcp_resources():
     return {"resources": resources, "count": len(resources)}
 
 
-@router.get("/mcp/resources/read", summary="Read MCP Resource")
+# Lists a repository's file paths, which no public GET shows, so it takes the key like the tools
+@router.get(
+    "/mcp/resources/read",
+    summary="Read MCP Resource",
+    dependencies=[Depends(require_api_key)],
+)
+@limiter.limit(lambda: settings.rate_limit_ai)
 async def read_mcp_resource(
+    request: Request,  # slowapi needs the request under this name
     uri: str = Query(..., description="Resource URI"),
     db: Session = Depends(get_db),
 ):

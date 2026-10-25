@@ -7,6 +7,8 @@ from app.core.config import Settings, get_settings, validate_runtime_settings
 from app.core.security import limiter
 from app.models.repository import Repository
 
+LOCAL = ("127.0.0.1", 50000)  # TestClient's default peer, "testclient", is not a loopback address
+
 URL = "https://github.com/octocat/hello"
 REPOS = "/api/v1/repositories/"
 
@@ -87,7 +89,7 @@ class TestBrowserRequests:
         # http://localhost is the request's own origin; https://localhost is not
         response = client.post(REPOS, json={"url": URL}, headers={"Origin": "https://localhost"})
         assert response.status_code == 403
-        https_client = TestClient(client.app, base_url="https://localhost")
+        https_client = TestClient(client.app, base_url="https://localhost", client=LOCAL)
         response = https_client.post(REPOS, json={"url": URL}, headers={"Origin": "https://localhost"})
         assert response.status_code == 201
 
@@ -99,7 +101,7 @@ class TestBrowserRequests:
 
         from app.main import app
 
-        ws_client = TestClient(app)
+        ws_client = TestClient(app, client=LOCAL)
         with pytest.raises(WebSocketDisconnect) as excinfo, ws_client.websocket_connect(
             "ws://localhost/ws", headers={"Origin": EVIL}
         ) as ws:
@@ -137,6 +139,28 @@ class TestBrowserRequests:
     def test_host_is_parsed_strictly_without_a_key(self, client, host, served):
         assert (client.get(REPOS, headers={"Host": host}).status_code == 200) is served
 
+    def test_without_a_key_only_loopback_peers_are_served(self, client):
+        # A server bound to 0.0.0.0 by hand: a LAN client can send Host: localhost, not a loopback address
+        lan = TestClient(client.app, base_url="http://localhost", client=("192.168.1.20", 50000))
+        response = lan.get(REPOS)
+        assert response.status_code == 403
+        assert response.json()["detail"] == "Only local clients are served without an API key"
+        assert TestClient(client.app, base_url="http://localhost", client=("::1", 50000)).get(REPOS).status_code == 200
+
+    def test_without_a_key_a_lan_websocket_is_refused(self):
+        from fastapi import WebSocketDisconnect
+
+        from app.main import app
+
+        lan = TestClient(app, client=("192.168.1.20", 50000))
+        with pytest.raises(WebSocketDisconnect) as excinfo, lan.websocket_connect("ws://localhost/ws") as ws:
+            ws.receive_json()
+        assert excinfo.value.code == 1008
+
+    def test_with_a_key_lan_peers_are_served(self, client, api_key):
+        lan = TestClient(client.app, base_url="http://codesage.example.com", client=("192.168.1.20", 50000))
+        assert lan.get(REPOS).status_code == 200
+
     def test_null_origin_is_refused(self, client):
         assert client.post(REPOS, json={"url": URL}, headers={"Origin": "null"}).status_code == 403
 
@@ -147,7 +171,7 @@ class TestBrowserRequests:
 
     def test_same_origin_on_a_non_default_port(self, client, api_key):
         # Prod nginx forwards Host with its port, so an Origin with a port matches it
-        https_client = TestClient(client.app, base_url="https://codesage.example.com:8443")
+        https_client = TestClient(client.app, base_url="https://codesage.example.com:8443", client=LOCAL)
         headers = {"Origin": "https://codesage.example.com:8443", "X-API-Key": api_key}
         assert https_client.post(REPOS, json={"url": URL}, headers=headers).status_code == 201
 
@@ -160,7 +184,7 @@ class TestBehindTheProdProxy:
         from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 
         app = ProxyHeadersMiddleware(client.app, trusted_hosts="*")
-        return TestClient(app, base_url="http://codesage.example.com")
+        return TestClient(app, base_url="http://codesage.example.com", client=LOCAL)
 
     def forwarded(self, ip, origin):
         # What nginx sends on: forwarded headers it sets itself, the browser's Origin, the key
@@ -202,7 +226,15 @@ class TestRateLimit:
 
 class TestUrlValidation:
     @pytest.mark.parametrize(
-        "url", ["not a url", "", "https://gitlab.com/o/r", "https://github.com/onlyowner"]
+        "url",
+        [
+            "not a url",
+            "",
+            "https://gitlab.com/o/r",
+            "https://github.com/onlyowner",
+            "https://github.com/../user",  # would call api.github.com/user with the token
+            "https://github.com/./r",
+        ],
     )
     def test_bad_urls_are_422(self, client, url):
         assert client.post(REPOS, json={"url": url}).status_code == 422
@@ -271,7 +303,7 @@ class TestErrors:
 
         app.dependency_overrides[get_db] = boom
         try:
-            response = TestClient(app, base_url="http://localhost", raise_server_exceptions=False).get(REPOS)
+            response = TestClient(app, base_url="http://localhost", raise_server_exceptions=False, client=LOCAL).get(REPOS)
         finally:
             app.dependency_overrides.clear()
         assert response.status_code == 500

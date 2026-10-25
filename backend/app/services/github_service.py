@@ -134,7 +134,8 @@ def parse_github_url(url: str) -> tuple[str, str, str | None]:
 
     if repo.endswith(".git"):
         repo = repo[: -len(".git")]
-    if not _NAME_RE.match(owner) or not repo or not _NAME_RE.match(repo) or repo in (".", ".."):
+    # "." and ".." as owner would turn api.github.com/users/<owner> into api.github.com/user
+    if not _NAME_RE.match(owner) or owner in (".", "..") or not repo or not _NAME_RE.match(repo) or repo in (".", ".."):
         raise ValueError(f"Invalid GitHub URL (bad owner or repository name): {url}")
     if branch is not None and not is_valid_branch(branch):
         raise ValueError(f"Invalid GitHub URL (bad branch): {url}")

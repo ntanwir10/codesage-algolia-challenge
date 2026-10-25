@@ -41,8 +41,8 @@ help:
 	@echo "  db-migration    - Autogenerate a new Alembic migration (prompts for a message)"
 	@echo ""
 	@echo "🧹 Maintenance:"
-	@echo "  clean           - Remove containers and volumes, then prune Docker"
-	@echo "  clean-all       - Like clean, but also prune unused images"
+	@echo "  clean           - Remove this project's containers, networks and volumes"
+	@echo "  clean-all       - Like clean, and also remove the images it built"
 	@echo "  status          - Show running containers"
 	@echo ""
 	@echo "🚢 Production:"
@@ -158,13 +158,12 @@ db-migration:
 	cd backend && ../.venv/bin/python -m alembic revision --autogenerate -m "$$message"
 
 # Cleanup
+# Scoped to this project: a host-wide `docker system prune` would also delete other projects' data
 clean:
-	$(COMPOSE) down -v
-	docker system prune -f
+	$(COMPOSE) down -v --remove-orphans
 
 clean-all:
-	$(COMPOSE) down -v
-	docker system prune -a -f
+	$(COMPOSE) down -v --remove-orphans --rmi local
 
 # Production
 prod-build:

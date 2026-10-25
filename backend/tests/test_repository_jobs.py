@@ -237,6 +237,46 @@ async def test_a_failed_batch_completes_but_says_what_is_missing(
     assert {r["file_path"] for r in algolia_index.records.values()} == {"a.py"}
 
 
+async def test_a_file_that_fails_to_parse_is_stored_and_reported(
+    db_session, github, algolia_index, monkeypatch
+):
+    from app.models.code_file import CodeFile
+    from app.services.code_parser import CodeParser
+
+    real_parse = CodeParser.parse
+
+    def parse(self, file_path, content, language):
+        if file_path == "b.py":
+            raise RuntimeError("tree-sitter blew up")
+        return real_parse(self, file_path, content, language)
+
+    monkeypatch.setattr(CodeParser, "parse", parse)
+    repo = make_repository(db_session, status="pending")
+    github.files = [github_file("a.py", MODULE), github_file("b.py", MODULE)]
+
+    await RepositoryService(db_session).process_repository(repo)
+
+    assert repo.status == "completed"
+    assert repo.error_message == "Partially indexed: 1 files could not be parsed"
+    stored = {f.file_path for f in db_session.query(CodeFile).filter_by(repository_id=repo.id)}
+    assert stored == {"a.py", "b.py"}
+
+
+async def test_a_reprocess_starts_progress_from_zero(db_session, github, algolia_index, monkeypatch):
+    repo = make_repository(db_session, status="completed")
+    repo.processed_files = repo.total_files = 10
+    db_session.commit()
+    seen = []
+
+    async def record_progress(self, repository):
+        seen.append(repository.processed_files)
+
+    monkeypatch.setattr(RepositoryService, "process_repository_files", record_progress)
+    await RepositoryService(db_session).process_repository(repo, force_reprocess=True)
+
+    assert seen == [0]  # not the previous run's 10/10, which reads as 100%
+
+
 async def test_files_over_the_limit_are_reported(db_session, github, algolia_index):
     repo = make_repository(db_session, status="pending")
     github.files = [github_file("a.py", MODULE)]

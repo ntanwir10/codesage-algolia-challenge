@@ -1,5 +1,6 @@
 import subprocess
 import sys
+import time
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -152,8 +153,10 @@ async def test_search_algolia_failure(db_session, repo, algolia_index):
         raise RuntimeError("down")
 
     algolia_index.search = boom
-    with pytest.raises(ToolError, match="Search is unavailable: down"):
+    # The client's text can name the Algolia host or app id, so it stays in the log
+    with pytest.raises(ToolError, match="Search is unavailable") as excinfo:
         await call_tool(db_session, "search_code", {"query": "x"})
+    assert "down" not in str(excinfo.value)
 
 
 @pytest.fixture
@@ -258,6 +261,63 @@ async def test_find_patterns_skips_large_and_slow_files(db_session, repo, monkey
     r = await call_tool(db_session, "find_patterns",
                         {"repository": "zustand", "pattern": r"(a|aa)+$", "regex": True, "path_glob": "slow.txt"})
     assert r["skipped_files"] == ["slow.txt"]
+
+
+async def test_find_patterns_has_a_budget_for_the_whole_call(db_session, repo, monkeypatch):
+    # Each file stays under its own budget, but together they'd run files x budget
+    monkeypatch.setattr(mcp_tools, "REGEX_FILE_TIMEOUT", 0.2)
+    monkeypatch.setattr(mcp_tools, "REGEX_CALL_TIMEOUT", 0.3)
+    for i in range(20):
+        add_file(db_session, repo, f"slow{i:02}.txt", "a" * 40 + "!")
+    started = time.monotonic()
+    r = await call_tool(db_session, "find_patterns",
+                        {"repository": "zustand", "pattern": r"(a|aa)+$", "regex": True, "path_glob": "slow*"})
+    assert time.monotonic() - started < 1.5  # not 20 x 0.2s
+    assert r["truncated"] is True
+    assert r["skipped_count"] == 20
+
+
+async def test_find_patterns_lists_at_most_50_skipped_files(db_session, repo):
+    for i in range(60):
+        add_file(db_session, repo, f"big{i:02}.txt", "a" * 1_000_001)
+    r = await call_tool(db_session, "find_patterns", {"repository": "zustand", "pattern": "b", "regex": True})
+    assert len(r["skipped_files"]) == 50 and r["skipped_count"] == 60
+
+
+def test_out_of_range_ids_are_not_found(db_session, repo):
+    for ref in ("9" * 5000, "9" * 19, "18446744073709551616"):
+        with pytest.raises(ToolError, match="not found"):
+            resolve_repository(db_session, ref)
+
+
+async def test_out_of_range_resource_ids_are_not_found(db_session, repo):
+    for uri in (f"codesage://repositories/{'9' * 19}/files", f"codesage://repositories/{'9' * 40}/files"):
+        with pytest.raises(ToolError):
+            await mcp_tools.read_resource(db_session, uri)
+
+
+async def test_file_resource_is_capped(db_session, repo, monkeypatch):
+    monkeypatch.setattr(mcp_tools, "MAX_RESOURCE_FILES", 3)
+    for i in range(5):
+        add_file(db_session, repo, f"f{i}.ts", "x")
+    content = (await mcp_tools.read_resource(db_session, f"codesage://repositories/{repo.id}/files"))["content"]
+    assert [f["file_path"] for f in content["files"]] == ["f0.ts", "f1.ts", "f2.ts"]
+    assert content["total_files"] == 5 and content["truncated"] is True
+
+
+async def test_get_file_caps_characters_as_well_as_lines(db_session, repo):
+    add_file(db_session, repo, "min.js", "\n".join("x" * 5000 for _ in range(100)))
+    r = await call_tool(db_session, "get_file", {"repository": "zustand", "path": "min.js"})
+    assert len(r["content"]) == mcp_tools.FILE_CHARS and r["truncated"] is True
+
+
+async def test_long_signatures_are_truncated(db_session, repo, algolia_index):
+    f = add_file(db_session, repo, "src/a.ts", "x")
+    entity = add_entity(db_session, f, "huge")
+    entity.signature = "s" * 5000
+    db_session.commit()
+    r = await call_tool(db_session, "list_definitions", {"repository": "zustand"})
+    assert all(len(d["signature"]) <= mcp_tools.SIGNATURE_CHARS for d in r["definitions"])
 
 
 async def test_resources(db_session, repo):

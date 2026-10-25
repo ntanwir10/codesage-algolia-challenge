@@ -13,6 +13,8 @@ from typing import Any
 import psutil
 import structlog
 
+from app.core.security import failure_message
+
 logger = structlog.get_logger()
 
 MAX_HISTORY = 1000
@@ -115,9 +117,10 @@ class PerformanceMonitor:
 
         except Exception as e:
             metrics.errors_count += 1
-            metrics.metadata["error"] = str(e)
+            # Metrics are served to API-key holders, so keep SQL and file contents out of them
+            metrics.metadata["error"] = failure_message(e)
             # The operation's owner logs the failure; this only records the timing
-            logger.warning(f"❌ Operation failed: {operation_name}", error=str(e))
+            logger.warning(f"❌ Operation failed: {operation_name}", error=metrics.metadata["error"])
             raise
 
         finally:

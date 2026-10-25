@@ -79,6 +79,16 @@ INDEX_SETTINGS = {
 # Indexes whose settings this process has already applied
 _configured_indexes: set[str] = set()
 
+# One client per credentials: each holds its own HTTP connection pool, and a service is
+# built per request, so a fresh client each time meant no connection reuse
+_clients: dict[tuple[str, str], SearchClient] = {}
+
+
+def _client_for(app_id: str, api_key: str) -> SearchClient:
+    if (app_id, api_key) not in _clients:
+        _clients[(app_id, api_key)] = SearchClient.create(app_id=app_id, api_key=api_key)
+    return _clients[(app_id, api_key)]
+
 
 class AlgoliaService:
     """Service for Algolia search index management and MCP server integration"""
@@ -92,9 +102,7 @@ class AlgoliaService:
                 self.index = None
                 return
 
-            self.client = SearchClient.create(
-                app_id=settings.algolia_app_id, api_key=settings.algolia_admin_api_key
-            )
+            self.client = _client_for(settings.algolia_app_id, settings.algolia_admin_api_key)
             self.index_name = settings.algolia_index_name
             self.index = self.client.init_index(self.index_name)
         except Exception as e:

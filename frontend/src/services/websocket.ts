@@ -1,3 +1,4 @@
+import { notifyAuthError } from "@/services/api";
 import type { RepositoryStatus } from "@/types/repository";
 
 export interface RepositoryStatusUpdate {
@@ -227,6 +228,7 @@ export class WebSocketService {
       // 1008: the server rejected the API key, so retrying can't succeed
       if (event.code === 1008) {
         console.warn("WebSocket rejected by the server: check VITE_CODESAGE_API_KEY");
+        notifyAuthError(); // same toast as an HTTP 401
         return;
       }
       if (this.hasSubscribers()) this.scheduleReconnect();

@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
+import { useQueryClient } from "@tanstack/react-query";
 import { GitHubForm, type GitHubFormData } from "@/components/forms/github-form";
 import { useToast } from "@/components/ui/toast";
 import { api } from "@/services/api";
@@ -11,6 +12,7 @@ export function HomePage() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const navigate = useNavigate();
   const { addToast } = useToast();
+  const queryClient = useQueryClient();
 
   const handleRepositorySubmit = async (data: GitHubFormData) => {
     setIsSubmitting(true);
@@ -24,6 +26,8 @@ export function HomePage() {
       if (description) createRequest.description = description;
 
       const repository = await api.createRepository(createRequest);
+      // staleTime is 5 min, so without this the dashboard would miss the new repo.
+      queryClient.invalidateQueries({ queryKey: ["repositories"] });
       addToast({
         type: "success",
         title: "Repository added",

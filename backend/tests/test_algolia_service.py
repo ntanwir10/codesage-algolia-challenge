@@ -6,6 +6,17 @@ from app.services import algolia_service as algolia_module
 from app.services.code_parser import CodeParser, ParsedCodeEntity
 
 
+def test_services_share_one_client_per_credentials(monkeypatch):
+    # The real class, not the algolia_index fake; SearchClient.create opens no connection
+    settings = algolia_module.settings
+    monkeypatch.setattr(algolia_module, "_clients", {})
+    first, second = algolia_module.AlgoliaService(), algolia_module.AlgoliaService()
+    assert first.client is not None and first.client is second.client
+
+    monkeypatch.setattr(settings, "algolia_admin_api_key", "another-test-key")
+    assert algolia_module.AlgoliaService().client is not first.client
+
+
 async def test_search_scopes_by_repository_with_a_numeric_filter(algolia_index):
     service = algolia_module.AlgoliaService()
 
