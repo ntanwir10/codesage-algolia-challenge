@@ -256,6 +256,22 @@ async def test_a_connection_counts_against_the_cap_before_its_accept_completes()
     assert manager.get_connection_count() == 0
 
 
+def test_one_client_cannot_take_every_slot(monkeypatch):
+    from fastapi import WebSocketDisconnect
+
+    monkeypatch.setattr("app.services.websocket_service.MAX_CONNECTIONS_PER_CLIENT", 1)
+    client = TestClient(app, base_url="http://localhost", client=LOCAL)
+    other = TestClient(app, base_url="http://localhost", client=("127.0.0.2", 50000))
+    with client.websocket_connect("ws://localhost/ws") as first:
+        first.receive_json()
+        with pytest.raises(WebSocketDisconnect) as excinfo, client.websocket_connect("ws://localhost/ws") as ws:
+            ws.receive_json()
+        assert excinfo.value.code == 1013
+        # Another client address still gets in
+        with other.websocket_connect("ws://localhost/ws") as ws:
+            assert ws.receive_json()["type"] == "connected"
+
+
 def test_connections_past_the_cap_are_closed_with_1013(monkeypatch):
     from fastapi import WebSocketDisconnect
 

@@ -140,6 +140,33 @@ class TestBrowserRequests:
         host = "[2001:db8::1]:8001" if "[" in entry else "codesage.example.com:8443"
         assert client.get(REPOS, headers={"Host": host}).status_code == 200
 
+    def test_a_wildcard_entry_allows_subdomains_only(self, client, api_key, monkeypatch):
+        monkeypatch.setattr(get_settings(), "allowed_hosts", "*.example.org")
+        assert client.get(REPOS, headers={"Host": "app.example.org"}).status_code == 200
+        assert client.get(REPOS, headers={"Host": "a.b.example.org:8443"}).status_code == 200
+        assert client.get(REPOS, headers={"Host": "evilexample.org"}).status_code == 403
+        assert client.get(REPOS, headers={"Host": "example.org.evil.com"}).status_code == 403
+
+    def test_with_a_key_a_request_without_host_is_served(self, client, api_key):
+        # HTTP/1.0 clients may omit Host; browsers never do, so it can't be a rebound page
+        from app.core.security import request_refusal
+
+        scope = {"type": "http", "method": "GET", "path": REPOS, "headers": [], "client": LOCAL}
+        assert request_refusal(scope) is None
+
+    def test_without_a_key_a_request_without_host_is_refused(self):
+        from app.core.security import request_refusal
+
+        scope = {"type": "http", "method": "GET", "path": REPOS, "headers": [], "client": LOCAL}
+        assert request_refusal(scope) == "Host not allowed"
+
+    def test_the_host_list_is_parsed_once_and_follows_setting_changes(self, api_key, monkeypatch):
+        settings = get_settings()
+        first = settings.allowed_hosts_list
+        assert settings.allowed_hosts_list is first  # cached, not rebuilt per request
+        monkeypatch.setattr(settings, "allowed_hosts", "other.example.com")
+        assert "other.example.com" in settings.allowed_hosts_list
+
     def test_allowed_hosts_star_serves_any_host(self, client, api_key, monkeypatch):
         monkeypatch.setattr(get_settings(), "allowed_hosts", "*")
         assert client.get(REPOS, headers={"Host": "anything.example"}).status_code == 200

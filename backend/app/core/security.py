@@ -10,7 +10,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from starlette.datastructures import Headers
 from starlette.responses import JSONResponse
 
-from app.core.config import LOOPBACK_HOSTS, get_settings, host_without_port
+from app.core.config import LOOPBACK_HOSTS, get_settings, host_is_allowed, host_without_port
 
 settings = get_settings()
 
@@ -62,9 +62,11 @@ def request_refusal(scope) -> str | None:
     host = headers.get("host", "")
     # DNS rebinding: a hostile page re-pointed at this server is same-origin but keeps its own Host.
     # With a key set it still matters: the dev bundle embeds the key, and such a page could read it
-    # /health is exempt: it reveals nothing, and load balancers often address it by IP
+    # /health is exempt: it reveals nothing, and load balancers often address it by IP. With a key, a
+    # request with no Host at all (HTTP/1.0) is not a browser's, since browsers always send one
     allowed = LOOPBACK_HOSTS if not settings.codesage_api_key else settings.allowed_hosts_list
-    if "*" not in allowed and host_without_port(host) not in allowed and scope.get("path") != "/health":
+    checked = bool(host) or not settings.codesage_api_key
+    if checked and not host_is_allowed(host_without_port(host), allowed) and scope.get("path") != "/health":
         return "Host not allowed"
     if not settings.codesage_api_key:
         # Bound to 0.0.0.0 by hand (MCP_SERVER_HOST unset), a LAN client could send Host: localhost,

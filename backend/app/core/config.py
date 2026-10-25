@@ -6,6 +6,7 @@ cached Settings object: database, Algolia, GitHub, API key, CORS, rate limits
 and the MCP server description.
 """
 
+from functools import lru_cache
 from urllib.parse import urlsplit
 
 # Load environment variables from .env file
@@ -28,6 +29,23 @@ def host_without_port(host: str) -> str:
     if host.startswith("["):  # [IPv6]:port
         return host[1 : host.find("]")] if "]" in host else ""
     return host.rpartition(":")[0] if host.count(":") == 1 else host
+
+
+def host_is_allowed(hostname: str, allowed: tuple[str, ...]) -> bool:
+    """Exact match, '*.example.com' for any subdomain of example.com, or '*' for any host"""
+    if "*" in allowed or hostname in allowed:
+        return True
+    return any(entry.startswith("*.") and hostname.endswith(entry[1:]) for entry in allowed)
+
+
+@lru_cache(maxsize=8)
+def _allowed_hosts(cors_origins: str, allowed_hosts: str) -> tuple[str, ...]:
+    # Keyed on the raw settings, so it is parsed once per value, not on every request
+    origins = [origin.strip() for origin in cors_origins.split(",") if origin.strip()]
+    hosts = [*LOOPBACK_HOSTS]
+    hosts += [urlsplit(origin).hostname or "" for origin in origins]
+    hosts += [host_without_port(h) for h in allowed_hosts.split(",") if h.strip()]
+    return tuple(h for h in dict.fromkeys(hosts) if h)
 
 
 class Settings(BaseSettings):
@@ -95,17 +113,15 @@ class Settings(BaseSettings):
         default="",
         description=(
             "Comma-separated extra hostnames the API answers to, on top of loopback and "
-            "the CORS_ORIGINS hosts; '*' allows any (and so allows DNS rebinding)"
+            "the CORS_ORIGINS hosts; '*.example.com' allows its subdomains, and '*' allows "
+            "any host (and so allows DNS rebinding)"
         ),
     )
 
     @property
-    def allowed_hosts_list(self) -> list[str]:
+    def allowed_hosts_list(self) -> tuple[str, ...]:
         """Hostnames (no port) a request's Host may name when a key is configured"""
-        hosts = [*LOOPBACK_HOSTS]
-        hosts += [urlsplit(origin).hostname or "" for origin in self.cors_origins_list]
-        hosts += [host_without_port(h) for h in self.allowed_hosts.split(",") if h.strip()]
-        return [h for h in dict.fromkeys(hosts) if h]
+        return _allowed_hosts(self.cors_origins, self.allowed_hosts)
 
     # Rate Limiting (Essential only)
     enable_rate_limiting: bool = True

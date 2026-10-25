@@ -71,7 +71,7 @@ At startup, repositories left `pending` or `processing` by a previous process ar
 
 ## Real-time updates
 
-`/ws` accepts the connection only if the key is valid (when a key is configured; otherwise it closes with code 1008). Browsers send it as a `codesage.key.<hex>` subprotocol next to `codesage`; the prod nginx sends `X-API-Key`. Cross-origin handshakes are refused. Client messages are `subscribe` and `unsubscribe` (each with a positive `repository_id`; at most 100 subscriptions per connection) and `ping`. Past 200 open connections a new one is closed with code 1013 (try again later). Server frames are `{type, data}`: `connected`, `subscribed`, `unsubscribed`, `pong`, `error`, and `repository_status` for subscribed repositories. The dashboard also polls the status endpoint while a repository is in progress.
+`/ws` accepts the connection only if the key is valid (when a key is configured; otherwise it closes with code 1008). Browsers send it as a `codesage.key.<hex>` subprotocol next to `codesage`; the prod nginx sends `X-API-Key`. Cross-origin handshakes are refused. Client messages are `subscribe` and `unsubscribe` (each with a positive `repository_id`; at most 100 subscriptions per connection) and `ping`. Past 200 open connections, or 20 from one client address, a new one is closed with code 1013 (try again later). The client counts as connected, resets its reconnect backoff and subscribes only once the `connected` frame arrives. Server frames are `{type, data}`: `connected`, `subscribed`, `unsubscribed`, `pong`, `error`, and `repository_status` for subscribed repositories. The dashboard also polls the status endpoint while a repository is in progress.
 
 ## Search
 

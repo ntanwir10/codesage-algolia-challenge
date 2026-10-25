@@ -136,7 +136,7 @@ Set these in `backend/.env` (see `.env.example`):
 | `GITHUB_TOKEN` | unset | Optional; raises GitHub rate limits |
 | `DATABASE_URL` | `sqlite:///./codesage.db` | SQLite only |
 | `CORS_ORIGINS` | localhost ports 3000, 5173, 5174 | Comma-separated; `*` is rejected. Browser writes and WebSocket connections from any other origin get 403, unless the page is served from the API's own host |
-| `ALLOWED_HOSTS` | unset | With a key set, the API answers only to loopback hosts, the `CORS_ORIGINS` hosts and these (comma-separated hostnames; a port or IPv6 brackets are ignored); any other `Host` gets 403, which blocks DNS rebinding. `/health` is exempt. `*` allows any host |
+| `ALLOWED_HOSTS` | unset | With a key set, the API answers only to loopback hosts, the `CORS_ORIGINS` hosts and these (comma-separated hostnames; a port or IPv6 brackets are ignored, and `*.example.com` allows its subdomains); any other `Host` gets 403, which blocks DNS rebinding. `/health` and requests with no `Host` at all (HTTP/1.0 clients, never browsers) are exempt. `*` allows any host |
 | `ENVIRONMENT`, `LOG_LEVEL` | `development`, `INFO` | `production` hides `/docs` |
 
 Rate limits (slowapi, per client address): 100 per minute on repository create and process and on search suggestions, 30 per minute on the MCP tool-call and resource-read endpoints.

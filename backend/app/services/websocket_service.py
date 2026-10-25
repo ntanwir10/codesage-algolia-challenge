@@ -15,6 +15,7 @@ VALID_MESSAGE_TYPES = {"subscribe", "unsubscribe", "ping"}
 SEND_TIMEOUT_SECONDS = 5  # a client that stops reading must not stall a processing run
 MAX_SUBSCRIPTIONS_PER_CONNECTION = 100  # each is a dict entry; a client can't grow it unbounded
 MAX_CONNECTIONS = 200  # each holds a socket and a task; past this, new clients are turned away
+MAX_CONNECTIONS_PER_CLIENT = 20  # one client address (a tab each) can't take every slot
 
 # Browsers can't set headers on a WebSocket, so the key rides in a subprotocol
 # (hex, to stay a valid token) rather than the URL, where access logs would keep it
@@ -30,6 +31,12 @@ def _key_from_subprotocols(protocols: list[str]) -> str | None:
             except ValueError:  # bad hex or bad UTF-8
                 return None
     return None
+
+
+def _client_address(websocket: WebSocket) -> str | None:
+    """The peer address; behind the prod nginx, uvicorn sets it from X-Forwarded-For"""
+    client = websocket.scope.get("client")
+    return client[0] if client else None
 
 
 def _now_iso() -> str:
@@ -159,6 +166,14 @@ class WebSocketManager:
         """Get the number of active connections"""
         return len(self.active_connections)
 
+    def is_full_for(self, websocket: WebSocket) -> bool:
+        """Whether accepting this socket would pass the global or its client's connection cap"""
+        if len(self.active_connections) >= MAX_CONNECTIONS:
+            return True
+        address = _client_address(websocket)
+        held = sum(_client_address(connection) == address for connection in self.active_connections)
+        return held >= MAX_CONNECTIONS_PER_CLIENT
+
 
 # Global WebSocket manager instance
 websocket_manager = WebSocketManager()
@@ -199,7 +214,9 @@ async def repository_status_websocket(websocket: WebSocket):
         await websocket.close(code=1008)
         return
 
-    if websocket_manager.get_connection_count() >= MAX_CONNECTIONS:
+    # No await between this check and connect() registering the socket, so racing handshakes can't
+    # all pass it
+    if websocket_manager.is_full_for(websocket):
         # 1013 "try again later": the client's reconnect backoff applies, unlike after 1008
         await websocket.accept(subprotocol=subprotocol)
         await websocket.close(code=1013)
