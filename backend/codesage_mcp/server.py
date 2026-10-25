@@ -7,7 +7,7 @@ Configuration comes from the environment only:
                       login for a basic-auth proxy (the prod nginx); the launcher
                       reads the password from the macOS Keychain
     CODESAGE_ALLOW_INSECURE_AUTH=1
-                      allow that login over plain http to a non-loopback host
+                      allow the key or login over plain http to a non-loopback host
 
 Tool schemas are single-sourced from ``codesage_mcp.schemas``, so ``tools/list``
 works even when the backend is down. stdout carries protocol messages only;
@@ -68,15 +68,15 @@ class Config:
 
     @property
     def insecure_auth_problem(self) -> str | None:
-        """Why a login must not be sent: over plain http it's readable on the network"""
+        """Why the key or login must not be sent: over plain http it's readable on the network"""
         parts = urlsplit(self.server_url)
-        has_login = bool(self.basic_user or parts.username)
-        if not has_login or self.allow_insecure_auth or parts.scheme == "https":
+        has_secret = bool(self.api_key or self.basic_user or parts.username)
+        if not has_secret or self.allow_insecure_auth or parts.scheme == "https":
             return None
         if parts.hostname in LOOPBACK_HOSTS:
             return None
         return (
-            f"Refusing to send the CodeSage login over plain http to {parts.hostname}; "
+            f"Refusing to send the CodeSage key or login over plain http to {parts.hostname}; "
             "use an https:// MCP_SERVER_URL, or set CODESAGE_ALLOW_INSECURE_AUTH=1 on a trusted network"
         )
 

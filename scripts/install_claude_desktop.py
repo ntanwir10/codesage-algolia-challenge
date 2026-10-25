@@ -125,7 +125,8 @@ def main(argv: list[str] | None = None) -> int:
 
     config_path = args.config or default_config_path()
     server_url = args.server_url or os.environ.get("MCP_SERVER_URL") or DEFAULT_URL
-    api_key = args.api_key or read_env_value(ENV_FILE, "CODESAGE_API_KEY") or ""
+    # Behind the basic-auth proxy nginx supplies the key, so don't copy the backend's into this config
+    api_key = args.api_key or ("" if args.basic_auth else read_env_value(ENV_FILE, "CODESAGE_API_KEY")) or ""
 
     if urlsplit(server_url).password:
         print(

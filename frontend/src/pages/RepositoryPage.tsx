@@ -285,15 +285,31 @@ export function RepositoryPage() {
           </Card>
         )}
 
-        {/* Completion Status */}
+        {/* Completion Status: amber when the run left files out (error_message says which) */}
         {repository.status === "completed" && (
-          <Card className="border-green-200 bg-green-50/50">
+          <Card
+            className={
+              repository.error_message
+                ? "border-amber-200 bg-amber-50/50"
+                : "border-green-200 bg-green-50/50"
+            }
+          >
             <CardContent className="p-4">
               <div className="flex items-center gap-3">
-                <span className="text-2xl">🎉</span>
+                <span className="text-2xl">
+                  {repository.error_message ? "⚠️" : "🎉"}
+                </span>
                 <div>
-                  <p className="font-medium text-green-700">
-                    Repository analysis complete!
+                  <p
+                    className={
+                      repository.error_message
+                        ? "font-medium text-amber-700"
+                        : "font-medium text-green-700"
+                    }
+                  >
+                    {repository.error_message
+                      ? "Repository partially indexed"
+                      : "Repository analysis complete!"}
                   </p>
                   <p className="text-sm text-green-600">
                     Your repository is ready for AI-powered search and
@@ -302,6 +318,11 @@ export function RepositoryPage() {
                       <span className="ml-1">Real-time updates enabled.</span>
                     )}
                   </p>
+                  {repository.error_message && (
+                    <p className="mt-1 text-sm text-amber-700">
+                      {repository.error_message}
+                    </p>
+                  )}
                   <Button
                     variant="outline"
                     className="mt-2"

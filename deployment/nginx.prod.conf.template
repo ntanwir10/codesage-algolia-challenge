@@ -23,6 +23,7 @@ server {
     location = /health {
         proxy_pass http://codesage_backend;
         proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $remote_addr;
     }
 
     location / {
@@ -50,13 +51,18 @@ server {
     auth_basic "CodeSage";
     auth_basic_user_file /etc/nginx/htpasswd;
 
+    # X-Forwarded-For is overwritten, not appended: the backend trusts it for per-client
+    # rate limits, so a client must not be able to choose its own address
+    # Host keeps the port ($http_host, not $host): the backend compares it with the
+    # browser's Origin, which includes the port when it isn't 443
+
     location /ws {
         proxy_pass http://codesage_backend;
         proxy_http_version 1.1;
         proxy_set_header Upgrade $http_upgrade;
         proxy_set_header Connection $connection_upgrade;
-        proxy_set_header Host $host;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header Host $http_host;
+        proxy_set_header X-Forwarded-For $remote_addr;
         proxy_set_header X-Forwarded-Proto https;
         proxy_set_header X-API-Key "${CODESAGE_API_KEY}";
         proxy_set_header Authorization "";
@@ -67,8 +73,8 @@ server {
     location /api/ {
         proxy_pass http://codesage_backend;
         proxy_http_version 1.1;
-        proxy_set_header Host $host;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header Host $http_host;
+        proxy_set_header X-Forwarded-For $remote_addr;
         proxy_set_header X-Forwarded-Proto https;
         proxy_set_header X-API-Key "${CODESAGE_API_KEY}";
         proxy_set_header Authorization "";
@@ -80,6 +86,7 @@ server {
         auth_basic off;
         proxy_pass http://codesage_backend;
         proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $remote_addr;
     }
 
     location / {

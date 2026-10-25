@@ -265,7 +265,12 @@ class CodeParser:
                     line_end=line_number,
                     content=stripped
                 ))
-            elif match := re.match(r'(?:async\s+)?def\s+(\w+)\s*\((.*?)\)(?:\s*->\s*(.+?))?:', stripped):
+            # A match ends at a ':', so cutting after the last one changes nothing but keeps
+            # the lazy groups from rescanning the line for every ')' (quadratic on hostile input)
+            elif match := re.match(
+                r'(?:async\s+)?def\s+(\w+)\s*\((.*?)\)(?:\s*->\s*(.+?))?:',
+                stripped[:stripped.rfind(':') + 1],
+            ):
                 func_name, params, return_type = match.groups()
                 entity = ParsedCodeEntity(
                     entity_type="function",
@@ -307,7 +312,8 @@ class CodeParser:
 
     # ------------------------------------------------------------------ Markdown
 
-    _HEADING = re.compile(r'^ {0,3}(#{1,6})[ \t]+(.*?)(?:[ \t]+#+)?[ \t]*$')
+    # The optional closing #s are stripped in code: a lazy regex for them is quadratic on long blank runs
+    _HEADING = re.compile(r' {0,3}(#{1,6})[ \t]+(.*)')
     _FENCE = re.compile(r'^ {0,3}(`{3,}|~{3,})')
 
     def _parse_markdown(self, content: str, file_path: str) -> list[ParsedCodeEntity]:
@@ -327,8 +333,14 @@ class CodeParser:
             if fence is not None:
                 continue
             heading = self._HEADING.match(line)
-            if heading and heading.group(2).strip('# \t'):
-                headings.append((number, len(heading.group(1)), heading.group(2).strip()))
+            if heading is None:
+                continue
+            text = heading.group(2).rstrip(' \t')
+            without_closing = text.rstrip('#')
+            if not without_closing or without_closing[-1] in ' \t':  # closing #s need a space before them
+                text = without_closing
+            if text.strip('# \t'):
+                headings.append((number, len(heading.group(1)), text.strip()))
 
         entities = []
         for index, (number, level, text) in enumerate(headings):

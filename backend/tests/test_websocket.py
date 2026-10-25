@@ -49,16 +49,16 @@ def _status(manager, repo_id=7, **kw):
 
 
 def test_connected_frame_on_connect():
-    client = TestClient(app)
-    with client.websocket_connect("/ws") as ws:
+    client = TestClient(app, base_url="http://localhost")
+    with client.websocket_connect("ws://localhost/ws") as ws:
         frame = ws.receive_json()
     assert frame["type"] == "connected"
     assert isinstance(frame["data"], dict)
 
 
 def test_subscribe_ping_unsubscribe_and_errors():
-    client = TestClient(app)
-    with client.websocket_connect("/ws") as ws:
+    client = TestClient(app, base_url="http://localhost")
+    with client.websocket_connect("ws://localhost/ws") as ws:
         ws.receive_json()  # connected
 
         ws.send_json({"type": "subscribe", "repository_id": 5})
@@ -96,8 +96,8 @@ def test_subscribe_ping_unsubscribe_and_errors():
 
 
 def test_status_delivery_over_real_websocket():
-    client = TestClient(app)
-    with client.websocket_connect("/ws") as ws:
+    client = TestClient(app, base_url="http://localhost")
+    with client.websocket_connect("ws://localhost/ws") as ws:
         ws.receive_json()
         ws.send_json({"type": "subscribe", "repository_id": 42})
         ws.receive_json()

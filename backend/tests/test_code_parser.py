@@ -1,6 +1,7 @@
 """Python entity extraction: every definition survives, with real line ranges"""
 
 import textwrap
+import time
 
 from app.services.code_parser import CodeParser
 
@@ -161,6 +162,22 @@ async def test_python_fallback_scanner_fills_body():
     entities = await parse("print 'py2'\ndef f(x):\n    return x\n")
     func = by_name(entities, "function")["f"]
     assert func.body == "def f(x):\n    return x"
+
+
+async def test_hostile_long_lines_parse_in_linear_time():
+    # The old lazy regexes took ~7s on these (quadratic, so ~1MB lines took hours); now ~0s
+    started = time.perf_counter()
+    entities = await parse("print 'py2'\ndef a(" + ") -> x" * 8000 + "\n")
+    await parse("# a" + " " * 16000 + "x\n", "markdown")
+    assert time.perf_counter() - started < 1
+    assert "a" not in by_name(entities, "function")  # no ':' so not a definition
+
+
+async def test_python_fallback_return_type_and_nested_parens():
+    entities = await parse("print 'py2'\ndef f(a=g()) -> Dict[str, int]:\n    return {}\n")
+    func = by_name(entities, "function")["f"]
+    assert func.parameters == ["a=g()"]
+    assert func.return_type == "Dict[str, int]"
 
 
 async def test_body_is_capped_in_lines():

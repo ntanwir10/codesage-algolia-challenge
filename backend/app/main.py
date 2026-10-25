@@ -22,7 +22,7 @@ from app.api.v1.router import api_router
 from app.core.config import get_settings, validate_runtime_settings
 from app.core.database import SessionLocal, engine
 from app.core.migrations import upgrade_database
-from app.core.security import limiter
+from app.core.security import BrowserRequestGuard, limiter
 from app.models import code_entity, code_file, repository  # noqa: F401  registers tables
 from app.services.algolia_service import AlgoliaService
 from app.services.repository_service import recover_interrupted_jobs
@@ -118,6 +118,8 @@ logger.info(
     rate_limiting=settings.enable_rate_limiting,
 )
 
+# Added before the request-ID middleware so that one wraps it and its 403s carry X-Request-ID
+app.add_middleware(BrowserRequestGuard)
 
 
 @app.middleware("http")

@@ -175,6 +175,7 @@ class GitHubService:
         # Set processing limits
         self.max_files = 1000  # Maximum number of files to process
         self.max_file_size = 1024 * 1024  # 1MB file size limit
+        self.skipped_files = 0  # Code files the last listing dropped over max_files
 
         if not self.token:
             logger.warning("GitHub token not found. Rate limits will be lower.")
@@ -314,12 +315,14 @@ class GitHubService:
                 continue
             selected.append((path, size))
         selected.sort()
+        self.skipped_files = 0  # describes this listing only, even on a reused instance
         if len(selected) > self.max_files:
             logger.warning(
                 "Repository has too many files, limiting to max",
                 total_files=len(selected),
                 max_files=self.max_files,
             )
+            self.skipped_files = len(selected) - self.max_files
             selected = selected[: self.max_files]
         return selected
 
