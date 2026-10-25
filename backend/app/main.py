@@ -118,6 +118,8 @@ logger.info(
     rate_limiting=settings.enable_rate_limiting,
 )
 
+# Added before the request-ID middleware so that one wraps it and its 403s carry X-Request-ID
+app.add_middleware(BrowserRequestGuard)
 
 
 @app.middleware("http")
@@ -151,7 +153,6 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
 
 
 # Add middleware
-app.add_middleware(BrowserRequestGuard)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins_list,

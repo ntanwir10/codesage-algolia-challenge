@@ -122,6 +122,73 @@ class TestBrowserRequests:
     def test_with_a_key_any_host_is_served(self, client, api_key):
         assert client.get(REPOS, headers={"Host": "codesage.example.com"}).status_code == 200
 
+    @pytest.mark.parametrize(
+        ("host", "served"),
+        [
+            ("LOCALHOST:8001", True),
+            ("[::1]:8001", True),
+            ("127.0.0.1", True),
+            ("evil.com@localhost", False),  # userinfo syntax a URL parser would accept
+            ("localhost#.evil.com", False),
+            ("[::1", False),
+            ("", False),
+        ],
+    )
+    def test_host_is_parsed_strictly_without_a_key(self, client, host, served):
+        assert (client.get(REPOS, headers={"Host": host}).status_code == 200) is served
+
+    def test_null_origin_is_refused(self, client):
+        assert client.post(REPOS, json={"url": URL}, headers={"Origin": "null"}).status_code == 403
+
+    def test_refusals_carry_a_request_id(self, client):
+        response = client.post(REPOS, json={"url": URL}, headers={"Origin": EVIL})
+        assert response.status_code == 403
+        assert response.headers["X-Request-ID"]
+
+    def test_same_origin_on_a_non_default_port(self, client, api_key):
+        # Prod nginx forwards Host with its port, so an Origin with a port matches it
+        https_client = TestClient(client.app, base_url="https://codesage.example.com:8443")
+        headers = {"Origin": "https://codesage.example.com:8443", "X-API-Key": api_key}
+        assert https_client.post(REPOS, json={"url": URL}, headers=headers).status_code == 201
+
+
+class TestBehindTheProdProxy:
+    """uvicorn --forwarded-allow-ips '*' behind nginx, which sets both forwarded headers"""
+
+    @pytest.fixture
+    def proxied(self, client, api_key):
+        from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
+
+        app = ProxyHeadersMiddleware(client.app, trusted_hosts="*")
+        return TestClient(app, base_url="http://codesage.example.com")
+
+    def forwarded(self, ip, origin):
+        # What nginx sends on: forwarded headers it sets itself, the browser's Origin, the key
+        return {"X-Forwarded-For": ip, "X-Forwarded-Proto": "https", "Origin": origin, "X-API-Key": "s3cret"}
+
+    def test_the_forwarded_scheme_decides_the_origin(self, proxied):
+        same = self.forwarded("203.0.113.1", "https://codesage.example.com")
+        assert proxied.post(REPOS, json={"url": URL}, headers=same).status_code == 201
+        plain = self.forwarded("203.0.113.1", "http://codesage.example.com")
+        assert proxied.post(REPOS, json={"url": URL}, headers=plain).status_code == 403
+
+    def test_websocket_scheme_follows_the_proxy(self, proxied):
+        headers = self.forwarded("203.0.113.1", "https://codesage.example.com")
+        with proxied.websocket_connect("ws://codesage.example.com/ws", headers=headers) as ws:
+            assert ws.receive_json()["type"] == "connected"
+
+    def test_rate_limits_are_per_client(self, proxied, monkeypatch):
+        monkeypatch.setattr(get_settings(), "rate_limit_default", "1/minute")
+        origin = "https://codesage.example.com"
+
+        def create(ip, name):
+            body = {"url": f"https://github.com/octocat/{name}"}
+            return proxied.post(REPOS, json=body, headers=self.forwarded(ip, origin)).status_code
+
+        assert create("203.0.113.1", "a") == 201
+        assert create("203.0.113.1", "b") == 429
+        assert create("203.0.113.2", "c") == 201  # another client keeps its own budget
+
 
 class TestRateLimit:
     def test_limit_returns_429(self, client, monkeypatch):

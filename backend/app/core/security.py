@@ -1,7 +1,6 @@
 """API-key authentication, browser request checks and rate limiting."""
 
 import secrets
-from urllib.parse import urlsplit
 
 from fastapi import Header, HTTPException
 from slowapi import Limiter
@@ -35,11 +34,13 @@ async def require_api_key(x_api_key: str | None = Header(None)) -> None:
 UNSAFE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
 
 
-def _hostname(host: str) -> str | None:
-    try:
-        return urlsplit(f"//{host}").hostname
-    except ValueError:
-        return None
+def _hostname(host: str) -> str:
+    """The Host header without its port. Parsed by hand: urlsplit would also accept
+    userinfo or a fragment, so 'evil.com@localhost' would read as localhost"""
+    host = host.lower()
+    if host.startswith("["):  # [IPv6]:port
+        return host[1 : host.find("]")] if "]" in host else ""
+    return host.rpartition(":")[0] if host.count(":") == 1 else host
 
 
 def request_refusal(scope) -> str | None:
