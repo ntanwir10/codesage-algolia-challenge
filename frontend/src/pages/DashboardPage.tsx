@@ -324,7 +324,7 @@ export function DashboardPage() {
                     <div className="flex items-center gap-2">
                       <span className="text-gray-500">🌿</span>
                       <span>
-                        <strong>{repo.branch ?? "default"}</strong>
+                        <strong>{repo.branch || "default"}</strong>
                       </span>
                     </div>
                   </div>

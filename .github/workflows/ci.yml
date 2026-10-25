@@ -52,4 +52,20 @@ jobs:
       - run: docker compose -f deployment/docker-compose.yml config -q
       - run: docker compose -f deployment/docker-compose.prod.yml config -q
       - run: docker build -f backend/Dockerfile.prod backend
+      # nginx -t resolves upstream hosts, so map "backend" to a dummy address
+      - name: nginx -t (dev config)
+        run: >-
+          docker run --rm --add-host backend:127.0.0.1
+          -v "$PWD/deployment/nginx.conf:/etc/nginx/nginx.conf:ro" nginx:alpine nginx -t
+      - name: nginx -t (prod template)
+        run: |
+          mkdir -p "$RUNNER_TEMP/ssl"
+          openssl req -x509 -newkey rsa:2048 -nodes -days 1 -subj /CN=ci \
+            -keyout "$RUNNER_TEMP/ssl/key.pem" -out "$RUNNER_TEMP/ssl/cert.pem"
+          echo 'ci:$apr1$ci$ci' > "$RUNNER_TEMP/htpasswd"
+          docker run --rm --add-host backend:127.0.0.1 -e CODESAGE_API_KEY=ci \
+            -e 'NGINX_ENVSUBST_FILTER=^CODESAGE_API_KEY$' \
+            -v "$PWD/deployment/nginx.prod.conf.template:/etc/nginx/templates/default.conf.template:ro" \
+            -v "$RUNNER_TEMP/htpasswd:/etc/nginx/htpasswd:ro" -v "$RUNNER_TEMP/ssl:/etc/nginx/ssl:ro" \
+            nginx:alpine sh -c '/docker-entrypoint.d/20-envsubst-on-templates.sh && nginx -t'
       - run: docker build frontend

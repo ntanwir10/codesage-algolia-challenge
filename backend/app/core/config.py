@@ -6,6 +6,9 @@ cached Settings object: database, Algolia, GitHub, API key, CORS, rate limits
 and the MCP server description.
 """
 
+from functools import lru_cache
+from urllib.parse import urlsplit
+
 # Load environment variables from .env file
 import structlog
 from dotenv import load_dotenv
@@ -15,6 +18,34 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 load_dotenv()
 
 logger = structlog.get_logger()
+
+LOOPBACK_HOSTS = ("127.0.0.1", "localhost", "::1")
+
+
+def host_without_port(host: str) -> str:
+    """A Host header (or ALLOWED_HOSTS entry) without its port. Parsed by hand: urlsplit would
+    also accept userinfo or a fragment, so 'evil.com@localhost' would read as localhost"""
+    host = host.strip().lower()
+    if host.startswith("["):  # [IPv6]:port
+        return host[1 : host.find("]")] if "]" in host else ""
+    return host.rpartition(":")[0] if host.count(":") == 1 else host
+
+
+def host_is_allowed(hostname: str, allowed: tuple[str, ...]) -> bool:
+    """Exact match, '*.example.com' for any subdomain of example.com, or '*' for any host"""
+    if "*" in allowed or hostname in allowed:
+        return True
+    return any(entry.startswith("*.") and hostname.endswith(entry[1:]) for entry in allowed)
+
+
+@lru_cache(maxsize=8)
+def _allowed_hosts(cors_origins: str, allowed_hosts: str) -> tuple[str, ...]:
+    # Keyed on the raw settings, so it is parsed once per value, not on every request
+    origins = [origin.strip() for origin in cors_origins.split(",") if origin.strip()]
+    hosts = [*LOOPBACK_HOSTS]
+    hosts += [urlsplit(origin).hostname or "" for origin in origins]
+    hosts += [host_without_port(h) for h in allowed_hosts.split(",") if h.strip()]
+    return tuple(h for h in dict.fromkeys(hosts) if h)
 
 
 class Settings(BaseSettings):
@@ -78,6 +109,20 @@ class Settings(BaseSettings):
             origin.strip() for origin in self.cors_origins.split(",") if origin.strip()
         ]
 
+    allowed_hosts: str = Field(
+        default="",
+        description=(
+            "Comma-separated extra hostnames the API answers to, on top of loopback and "
+            "the CORS_ORIGINS hosts; '*.example.com' allows its subdomains, and '*' allows "
+            "any host (and so allows DNS rebinding)"
+        ),
+    )
+
+    @property
+    def allowed_hosts_list(self) -> tuple[str, ...]:
+        """Hostnames (no port) a request's Host may name when a key is configured"""
+        return _allowed_hosts(self.cors_origins, self.allowed_hosts)
+
     # Rate Limiting (Essential only)
     enable_rate_limiting: bool = True
     rate_limit_default: str = "100/minute"
@@ -104,9 +149,6 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", case_sensitive=False, extra="ignore")
 
 
-LOOPBACK_HOSTS = ("127.0.0.1", "localhost", "::1")
-
-
 def validate_runtime_settings(settings: Settings) -> None:
     """Refuse to start with an unsafe configuration; warn about a soft one."""
     if "*" in settings.cors_origins_list:
@@ -114,6 +156,8 @@ def validate_runtime_settings(settings: Settings) -> None:
             "CORS_ORIGINS must not contain '*' because credentials are allowed; "
             "list the allowed origins explicitly"
         )
+    if settings.codesage_api_key and "*" in settings.allowed_hosts_list:
+        logger.warning("ALLOWED_HOSTS contains '*'; any Host is served, so DNS rebinding is not blocked")
     loopback = settings.mcp_server_host in LOOPBACK_HOSTS
     if not settings.codesage_api_key:
         if not loopback:

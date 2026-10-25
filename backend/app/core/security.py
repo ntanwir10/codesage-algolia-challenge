@@ -10,7 +10,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from starlette.datastructures import Headers
 from starlette.responses import JSONResponse
 
-from app.core.config import LOOPBACK_HOSTS, get_settings
+from app.core.config import LOOPBACK_HOSTS, get_settings, host_is_allowed, host_without_port
 
 settings = get_settings()
 
@@ -44,15 +44,6 @@ def failure_message(error: Exception) -> str:
 UNSAFE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
 
 
-def _hostname(host: str) -> str:
-    """The Host header without its port. Parsed by hand: urlsplit would also accept
-    userinfo or a fragment, so 'evil.com@localhost' would read as localhost"""
-    host = host.lower()
-    if host.startswith("["):  # [IPv6]:port
-        return host[1 : host.find("]")] if "]" in host else ""
-    return host.rpartition(":")[0] if host.count(":") == 1 else host
-
-
 def _is_loopback_peer(client) -> bool:
     try:
         return ipaddress.ip_address(client[0]).is_loopback
@@ -69,10 +60,15 @@ def request_refusal(scope) -> str | None:
     settings = get_settings()
     headers = Headers(scope=scope)
     host = headers.get("host", "")
+    # DNS rebinding: a hostile page re-pointed at this server is same-origin but keeps its own Host.
+    # With a key set it still matters: the dev bundle embeds the key, and such a page could read it
+    # /health is exempt: it reveals nothing, and load balancers often address it by IP. With a key, a
+    # request with no Host at all (HTTP/1.0) is not a browser's, since browsers always send one
+    allowed = LOOPBACK_HOSTS if not settings.codesage_api_key else settings.allowed_hosts_list
+    checked = bool(host) or not settings.codesage_api_key
+    if checked and not host_is_allowed(host_without_port(host), allowed) and scope.get("path") != "/health":
+        return "Host not allowed"
     if not settings.codesage_api_key:
-        # DNS rebinding: a hostile page re-pointed at 127.0.0.1 is same-origin but keeps its own Host
-        if _hostname(host) not in LOOPBACK_HOSTS:
-            return "Host not allowed"
         # Bound to 0.0.0.0 by hand (MCP_SERVER_HOST unset), a LAN client could send Host: localhost,
         # but not a loopback address
         if not _is_loopback_peer(scope.get("client")):

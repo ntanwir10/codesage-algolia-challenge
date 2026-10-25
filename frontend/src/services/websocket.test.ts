@@ -39,6 +39,11 @@ class FakeWebSocket {
     this.readyState = 1;
     this.onopen?.();
   }
+  /** Open, then the server's "connected" frame, as the real server always sends */
+  welcome() {
+    this.open();
+    this.receive({ type: "connected", data: {} });
+  }
   receive(msg: unknown) {
     this.onmessage?.({ data: JSON.stringify(msg) });
   }
@@ -75,12 +80,14 @@ describe("WebSocketService", () => {
     expect(FakeWebSocket.instances).toHaveLength(0);
   });
 
-  it("sends subscribe for every subscribed repo on open", () => {
+  it("sends subscribe for every subscribed repo once the server welcomes it", () => {
     service.onRepositoryUpdate(1, () => {});
     service.onRepositoryUpdate(2, () => {});
     const ws = last();
     expect(ws.sent).toEqual([]); // not open yet
     ws.open();
+    expect(ws.sent).toEqual([]); // open, but a full server may still turn it away
+    ws.receive({ type: "connected", data: {} });
     expect(ws.sent).toEqual([
       { type: "subscribe", repository_id: 1 },
       { type: "subscribe", repository_id: 2 },
@@ -89,7 +96,7 @@ describe("WebSocketService", () => {
 
   it("sends subscribe when a new listener is added to an open socket", () => {
     service.onRepositoryUpdate(1, () => {});
-    last().open();
+    last().welcome();
     service.onRepositoryUpdate(9, () => {});
     expect(last().sent.at(-1)).toEqual({ type: "subscribe", repository_id: 9 });
   });
@@ -115,7 +122,7 @@ describe("WebSocketService", () => {
   it("sends unsubscribe when the last listener goes and closes when idle", () => {
     const off1 = service.onRepositoryUpdate(1, () => {});
     const off2 = service.onRepositoryUpdate(1, () => {});
-    last().open();
+    last().welcome();
     off1();
     expect(last().sent.some((m) => m.type === "unsubscribe")).toBe(false);
     off2();
@@ -131,7 +138,7 @@ describe("WebSocketService", () => {
 
   it("sends a heartbeat ping every 25s", () => {
     service.onRepositoryUpdate(1, () => {});
-    last().open();
+    last().welcome();
     vi.advanceTimersByTime(25000);
     expect(last().sent.at(-1)).toEqual({ type: "ping" });
   });
@@ -139,7 +146,7 @@ describe("WebSocketService", () => {
   it("reconnects when a ping gets no reply (half-open connection)", () => {
     service.onRepositoryUpdate(1, () => {});
     const first = last();
-    first.open();
+    first.welcome();
     vi.advanceTimersByTime(25000); // ping
     first.receive({ type: "pong" });
     vi.advanceTimersByTime(25000); // answered: ping again, no reconnect
@@ -156,13 +163,46 @@ describe("WebSocketService", () => {
 
   it("reconnects with capped backoff and resubscribes", () => {
     service.onRepositoryUpdate(4, () => {});
-    last().open();
+    last().welcome();
     last().drop();
     expect(FakeWebSocket.instances).toHaveLength(1);
     vi.advanceTimersByTime(1000); // first retry <= 1s
     expect(FakeWebSocket.instances).toHaveLength(2);
-    last().open();
+    last().welcome();
     expect(last().sent).toContainEqual({ type: "subscribe", repository_id: 4 });
+  });
+
+  it("reports connected only after the server's welcome, not on open", () => {
+    const statuses: string[] = [];
+    service.onConnectionStatusChange((status) => statuses.push(status));
+    service.onRepositoryUpdate(4, () => {});
+    last().open();
+    expect(service.getStatus()).toBe("connecting");
+    last().drop(1013); // a full server: accepted, then turned away
+    expect(statuses).not.toContain("connected");
+    vi.advanceTimersByTime(1000);
+    last().welcome();
+    expect(service.getStatus()).toBe("connected");
+    expect(statuses.at(-1)).toBe("connected");
+  });
+
+  it("keeps backing off when a full server accepts and then closes with 1013", () => {
+    vi.spyOn(Math, "random").mockReturnValue(1); // no jitter: delays are exactly 1s, 2s, 4s
+    service.onRepositoryUpdate(4, () => {});
+    for (const delay of [1000, 2000, 4000]) {
+      last().open();
+      last().drop(1013);
+      vi.advanceTimersByTime(delay - 1);
+      const before = FakeWebSocket.instances.length;
+      vi.advanceTimersByTime(1);
+      expect(FakeWebSocket.instances).toHaveLength(before + 1);
+    }
+    // A real welcome resets it: the next drop retries after 1s again
+    last().open();
+    last().receive({ type: "connected" });
+    last().drop();
+    vi.advanceTimersByTime(1000);
+    expect(FakeWebSocket.instances).toHaveLength(5);
   });
 
   it("stops reconnecting when the server rejects the API key", () => {

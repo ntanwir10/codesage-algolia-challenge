@@ -48,7 +48,7 @@ Indexing runs as a background job inside the backend. Search goes to Algolia; re
 
 ```mermaid
 flowchart TB
-    request["HTTP request or WebSocket"] --> guard["Request guard<br/>origin check, local-only without a key"]
+    request["HTTP request or WebSocket"] --> guard["Request guard<br/>origin and host checks"]
     guard --> repos["/repositories<br/>create, reprocess, delete"]
     guard --> mcp["/ai/mcp<br/>tool calls, resources"]
     guard --> ws["/ws<br/>live status"]
@@ -105,7 +105,7 @@ flowchart TD
     index -. "nothing indexed,<br/>or Algolia rejects it" .-> failed
 ```
 
-Progress is pushed to the dashboard after every batch. A file that fails to parse is still stored, without entities.
+Progress is pushed to the dashboard after every batch. A file that fails to parse is still stored, without entities. A repository too large for one GitHub tree call is also listed through the contents API, up to 300 directories; anything it never reaches counts as left out.
 
 ### Repository status
 
@@ -279,6 +279,7 @@ curl -X POST http://127.0.0.1:8001/api/v1/repositories/ \
 - **Create.** The response is `201`, and a background job starts. A duplicate URL gets `409`.
 - **Status.** Poll `GET /api/v1/repositories/{id}/status`. For push updates, connect to `/ws`, send `{"type": "subscribe", "repository_id": N}` and read `{type, data}` frames.
 - **Reprocess.** `POST /api/v1/repositories/{id}/process?force_reprocess=true` re-runs indexing and returns `202`. It returns `409` while a job is running.
+- **Edit.** `PUT /api/v1/repositories/{id}` returns `409` if it would change `branch`, `language` or `framework` while a job or a delete holds the repository; other fields can change at any time. An empty `branch` means the default branch.
 - **Restarts.** A server restart marks interrupted runs `failed`; reprocess them.
 
 ## Security
@@ -290,6 +291,7 @@ curl -X POST http://127.0.0.1:8001/api/v1/repositories/ \
 
   Send it as an `X-API-Key` header. Browsers send it on the WebSocket as a `codesage.key.<hex>` subprotocol, so it never appears in a URL or an access log. Other reads (repositories, status, stats, tool listings, `/health`) are public.
 - **Running without a key** is allowed only on loopback. The backend refuses to start on a non-loopback `MCP_SERVER_HOST` without one. Even then, it serves only local clients that address it as `localhost`, `127.0.0.1` or `[::1]`, which blocks DNS rebinding and LAN access.
+- **Hosts, when a key is set.** The API answers only to loopback hosts, the `CORS_ORIGINS` hosts and those listed in `ALLOWED_HOSTS`. Any other `Host` gets `403`, which blocks DNS rebinding even though the dev bundle embeds the key.
 - **Cross-site requests.** Browser writes and WebSocket connections from an origin that is neither in `CORS_ORIGINS` nor the API's own origin are refused with `403`.
 - **The key in the bundle.** `VITE_*` variables end up in the JavaScript bundle, so outside the prod stack anyone who can load the dashboard can read the key. Use that setup locally, for one user. The prod stack keeps the key in nginx behind basic auth instead.
 - **The MCP bridge** refuses to send the key or a login over plain `http://` to a non-loopback host.
@@ -307,6 +309,7 @@ curl -X POST http://127.0.0.1:8001/api/v1/repositories/ \
 | `GITHUB_TOKEN` | unset | Raises GitHub rate limits |
 | `DATABASE_URL` | `sqlite:///./codesage.db` | SQLite only |
 | `CORS_ORIGINS` | localhost ports 3000, 5173, 5174 | Comma-separated list of origins; `*` is rejected. Also decides which browser origins may write |
+| `ALLOWED_HOSTS` | unset | With a key set, extra hostnames the API answers to, besides loopback and the `CORS_ORIGINS` hosts. Comma-separated; `*.example.com` allows subdomains, `*` allows any host |
 | `ENVIRONMENT`, `LOG_LEVEL` | `development`, `INFO` | `production` hides `/docs` |
 
 Rate limits are per client address: 100 per minute for repository create and process and for search suggestions, and 30 per minute for MCP tool calls and resource reads.
@@ -318,7 +321,7 @@ Rate limits are per client address: 100 per minute for repository create and pro
 | Dev | `export CODESAGE_API_KEY=...` then `make up` | nginx on http://localhost and the backend on :8001, both bound to 127.0.0.1 |
 | Prod | `make prod-build && make prod-up` | HTTPS on 443 behind basic auth, with nginx adding the API key. Port 80 answers `/health` and redirects everything else |
 
-Prod needs a certificate in `deployment/ssl/` and a login in `deployment/htpasswd`. See [deployment/DOCKER.md](deployment/DOCKER.md) for setup, and for why each stack uses its own Algolia index.
+Prod needs a certificate in `deployment/ssl/`, a login in `deployment/htpasswd`, and your domain in `CORS_ORIGINS`. If the site is also reached under another name or by IP, export those hostnames in `ALLOWED_HOSTS`, or they get `403`. See [deployment/DOCKER.md](deployment/DOCKER.md) for setup, and for why each stack uses its own Algolia index.
 
 ## Development
 
@@ -330,7 +333,7 @@ cd frontend && npm run lint
 cd frontend && npm run build      # type-check and production build
 ```
 
-CI ([.github/workflows/ci.yml](.github/workflows/ci.yml)) runs on pushes to `master` and on every pull request. It runs the backend lint and tests, the frontend lint, build and tests, validates both Compose files and builds both Docker images.
+CI ([.github/workflows/ci.yml](.github/workflows/ci.yml)) runs on pushes to `master` and on every pull request. It runs the backend lint and tests, the frontend lint, build and tests, validates both Compose files and both nginx configs (`nginx -t`), and builds both Docker images.
 
 ```
 backend/app/            FastAPI app: api/ (routes), core/ (config, auth, database), models/, schemas/, services/
@@ -349,5 +352,5 @@ mcp_launcher.sh         what Claude Desktop launches
 - **One worker.** Run exactly one: job state, the two-run limit and WebSocket subscriptions live in the server process.
 - **SQLite only.** Migrations run at startup, and a database from before Alembic is stamped first.
 - **Synchronous Algolia client.** Its calls run in worker threads.
-- **Tests and CI.** Frontend tests are unit tests only. CI builds the Docker images but never runs them.
+- **Tests and CI.** Frontend tests are unit tests only. CI builds the Docker images but never runs them; the prod stack was last run by hand.
 - **Search scope.** Searching across all repositories includes ones that are being reprocessed.

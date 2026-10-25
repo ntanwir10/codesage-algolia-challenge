@@ -186,6 +186,7 @@ class FakeGitHub:
         self.error = None
         self.calls = []  # (repo_url, branch) per fetch
         self.skipped_files = 0  # what the real service reports dropping over max_files
+        self.listing_truncated = False  # what it reports when the contents walk hit its cap
 
 
 @pytest.fixture
@@ -201,6 +202,7 @@ def github(monkeypatch):
             if fake.error:
                 raise fake.error
             self.skipped_files = fake.skipped_files
+            self.listing_truncated = fake.listing_truncated
             return list(fake.files)
 
     monkeypatch.setattr(github_module, "GitHubService", FakeGitHubService)

@@ -48,7 +48,7 @@ make clean         # stop and remove volumes (deletes the database)
 
 ## Production compose
 
-`make prod-build` and `make prod-up` use `deployment/docker-compose.prod.yml` and `backend/Dockerfile.prod` (no bind mount, no reload, `--workers 1`, `ENVIRONMENT=production`, so `/docs` is disabled). `CORS_ORIGINS` is a comma-separated list (`https://app.example.com,https://other.example.com`); the compose file ships the placeholder `https://yourdomain.com`, so replace it with your domain. The nginx container is named `codesage_nginx_prod` so it cannot clash with the dev stack. This stack is untested.
+`make prod-build` and `make prod-up` use `deployment/docker-compose.prod.yml` and `backend/Dockerfile.prod` (no bind mount, no reload, `--workers 1`, `ENVIRONMENT=production`, so `/docs` is disabled). `CORS_ORIGINS` is a comma-separated list (`https://app.example.com,https://other.example.com`); the compose file ships the placeholder `https://yourdomain.com`, so replace it with your domain. The nginx container is named `codesage_nginx_prod` so it cannot clash with the dev stack. The backend answers only to loopback and the `CORS_ORIGINS` hosts; if the site is also reached under another name or by IP, list those hostnames in `ALLOWED_HOSTS` (exported before `up`), or they get 403. CI checks both nginx configs with `nginx -t`; the full stack has been run by hand with a self-signed certificate, not in CI.
 
 Prod keeps the API key out of the browser. The frontend is built without `VITE_CODESAGE_API_KEY`; instead nginx (`deployment/nginx.prod.conf.template`) asks every visitor for a password with HTTP basic auth and adds `X-API-Key` to each `/api` and `/ws` request itself. `/health` stays open. Before `make prod-up`:
 
