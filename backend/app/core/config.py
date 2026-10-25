@@ -21,6 +21,15 @@ logger = structlog.get_logger()
 LOOPBACK_HOSTS = ("127.0.0.1", "localhost", "::1")
 
 
+def host_without_port(host: str) -> str:
+    """A Host header (or ALLOWED_HOSTS entry) without its port. Parsed by hand: urlsplit would
+    also accept userinfo or a fragment, so 'evil.com@localhost' would read as localhost"""
+    host = host.strip().lower()
+    if host.startswith("["):  # [IPv6]:port
+        return host[1 : host.find("]")] if "]" in host else ""
+    return host.rpartition(":")[0] if host.count(":") == 1 else host
+
+
 class Settings(BaseSettings):
     # Core FastAPI Settings
     environment: str = "development"
@@ -95,7 +104,7 @@ class Settings(BaseSettings):
         """Hostnames (no port) a request's Host may name when a key is configured"""
         hosts = [*LOOPBACK_HOSTS]
         hosts += [urlsplit(origin).hostname or "" for origin in self.cors_origins_list]
-        hosts += [h.strip().lower() for h in self.allowed_hosts.split(",") if h.strip()]
+        hosts += [host_without_port(h) for h in self.allowed_hosts.split(",") if h.strip()]
         return [h for h in dict.fromkeys(hosts) if h]
 
     # Rate Limiting (Essential only)
@@ -131,7 +140,7 @@ def validate_runtime_settings(settings: Settings) -> None:
             "CORS_ORIGINS must not contain '*' because credentials are allowed; "
             "list the allowed origins explicitly"
         )
-    if "*" in settings.allowed_hosts_list:
+    if settings.codesage_api_key and "*" in settings.allowed_hosts_list:
         logger.warning("ALLOWED_HOSTS contains '*'; any Host is served, so DNS rebinding is not blocked")
     loopback = settings.mcp_server_host in LOOPBACK_HOSTS
     if not settings.codesage_api_key:

@@ -134,6 +134,12 @@ class TestBrowserRequests:
         monkeypatch.setattr(get_settings(), "cors_origins", "https://app.example.org:8443")
         assert client.get(REPOS, headers={"Host": "app.example.org:8443"}).status_code == 200
 
+    @pytest.mark.parametrize("entry", ["codesage.example.com:8443", "[2001:db8::1]", " Codesage.Example.com "])
+    def test_allowed_hosts_entries_match_without_their_port(self, client, api_key, monkeypatch, entry):
+        monkeypatch.setattr(get_settings(), "allowed_hosts", entry)
+        host = "[2001:db8::1]:8001" if "[" in entry else "codesage.example.com:8443"
+        assert client.get(REPOS, headers={"Host": host}).status_code == 200
+
     def test_allowed_hosts_star_serves_any_host(self, client, api_key, monkeypatch):
         monkeypatch.setattr(get_settings(), "allowed_hosts", "*")
         assert client.get(REPOS, headers={"Host": "anything.example"}).status_code == 200
@@ -265,6 +271,10 @@ class TestUrlValidation:
         body = response.json()
         assert body["url"] == URL
         assert body["name"] == "octocat/hello"
+
+    def test_a_null_branch_falls_back_to_the_url_branch(self, client):
+        response = client.post(REPOS, json={"url": f"{URL}/tree/dev", "branch": None})
+        assert response.json()["branch"] == "dev"
 
     def test_an_explicit_empty_branch_beats_the_url_branch(self, client):
         response = client.post(REPOS, json={"url": f"{URL}/tree/dev", "branch": ""})
@@ -413,6 +423,14 @@ class TestRuntimeSettings:
             validate_runtime_settings(
                 Settings(mcp_server_host="0.0.0.0", codesage_api_key=None)
             )
+
+    @pytest.mark.parametrize(("key", "warned"), [("k", True), (None, False)])
+    def test_allowed_hosts_star_warns_only_when_it_applies(self, monkeypatch, key, warned):
+        # Without a key ALLOWED_HOSTS is ignored, and the loopback-only Host check still holds
+        messages = []
+        monkeypatch.setattr("app.core.config.logger.warning", lambda message, **_: messages.append(message))
+        validate_runtime_settings(Settings(allowed_hosts="*", codesage_api_key=key))
+        assert any("ALLOWED_HOSTS" in m for m in messages) is warned
 
     def test_public_host_with_key_is_allowed(self):
         validate_runtime_settings(Settings(mcp_server_host="0.0.0.0", codesage_api_key="k"))

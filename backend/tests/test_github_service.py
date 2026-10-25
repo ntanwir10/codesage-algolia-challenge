@@ -275,6 +275,38 @@ async def test_truncated_tree_falls_back_to_contents_walk_on_the_branch(github_a
     assert not any("node_modules" in r or "dist" in r for r in requests)
 
 
+async def test_a_capped_walk_keeps_the_truncated_trees_entries(github_api, monkeypatch):
+    # The truncated tree already lists deep/z.py; a walk stopped at its cap must not lose it
+    monkeypatch.setattr(gh, "MAX_WALK_REQUESTS", 1)
+    github_api["trees"]["dev"] = {"tree": [blob("deep/z.py", 5)], "truncated": True}
+    github_api["listings"] = {
+        "": [{"type": "file", "path": "app.py", "size": 5}, {"type": "dir", "path": "deep"}],
+    }
+    github_api["raw"] = {"dev:app.py": b"x = 1\n", "dev:deep/z.py": b"z = 1\n"}
+
+    files = await service_for(github_api).get_repository_files(REPO_URL, "dev")
+
+    assert sorted(f.path for f in files) == ["app.py", "deep/z.py"]
+
+
+async def test_a_capped_walk_lists_top_level_directories_first(github_api, monkeypatch):
+    # Depth-first, a deep a/ tree would use up the cap before z/ was listed
+    monkeypatch.setattr(gh, "MAX_WALK_REQUESTS", 3)
+    github_api["trees"]["dev"] = {"tree": [], "truncated": True}
+    github_api["listings"] = {
+        "": [{"type": "dir", "path": "a"}, {"type": "dir", "path": "z"}],
+        "a": [{"type": "dir", "path": "a/b"}],
+        "a/b": [{"type": "file", "path": "a/b/deep.py", "size": 5}],
+        "z": [{"type": "file", "path": "z/top.py", "size": 5}],
+    }
+    github_api["raw"] = {"dev:z/top.py": b"t = 1\n"}
+
+    files = await service_for(github_api).get_repository_files(REPO_URL, "dev")
+
+    assert [f.path for f in files] == ["z/top.py"]
+    assert "/repos/octo/demo/contents/a/b?ref=dev" not in github_api["requests"]
+
+
 async def test_contents_walk_stops_at_its_request_cap(github_api, monkeypatch):
     monkeypatch.setattr(gh, "MAX_WALK_REQUESTS", 2)
     github_api["trees"]["dev"] = {"tree": [], "truncated": True}
