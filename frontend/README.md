@@ -36,7 +36,7 @@ Warning: Vite inlines `VITE_*` values into the bundle, so the API key is visible
 
 ## Live updates
 
-The app subscribes to `/ws` for repository status frames (`{type, data}`) and also polls the status endpoint while a repository is `pending` or `processing`. If the server rejects the key, the WebSocket client stops retrying and logs a hint to check `VITE_CODESAGE_API_KEY`.
+The app subscribes to `/ws` for repository status frames (`{type, data}`) and also polls the status endpoint while a repository is `pending` or `processing`. The client counts as connected, and sends its subscriptions, only once the server's `connected` frame arrives. If the server rejects the key (close code 1008), the WebSocket client stops retrying and logs a hint to check `VITE_CODESAGE_API_KEY`. Any other close, including 1013 from a full server, is retried with exponential backoff (capped at 30 s), which resets only after a `connected` frame.
 
 ## Layout
 

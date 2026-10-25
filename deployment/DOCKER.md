@@ -1,6 +1,6 @@
 # Docker deployment
 
-Status: CI validates both Compose files and builds both images on every push, but never starts the containers. Expect to fix small problems at runtime.
+Status: CI validates both Compose files, builds both images and runs `nginx -t` on both nginx configs on every push, but never starts the containers. The prod stack (HTTPS, basic auth, the cross-site and Host checks) has been run by hand with a self-signed certificate.
 
 ## What runs
 
@@ -27,7 +27,7 @@ make up      # docker compose -f deployment/docker-compose.yml up -d
 - The backend reads `backend/.env` (`env_file`).
 - The container binds `0.0.0.0`, so `CODESAGE_API_KEY` is mandatory: the backend refuses to start without it.
 - Export `CODESAGE_API_KEY` in your shell before building. Compose passes it to the frontend build as `VITE_CODESAGE_API_KEY`, and Vite embeds it in the JavaScript bundle. It must match the value in `backend/.env`. This is acceptable for local, single-user use only, which is why the dev file binds to 127.0.0.1. The prod stack does not embed the key (see below).
-- Open http://localhost for the app. The dev file publishes nginx (port 80) and the backend (http://localhost:8001, API docs at `/docs`) on 127.0.0.1 only, because the bundle embeds the API key. The prod file publishes ports 80 and 443: port 80 answers only `/health` and redirects everything else, and 443 serves the app behind basic auth.
+- Open http://localhost (or http://127.0.0.1) for the app. The dev nginx drops requests addressed to any other name, so a DNS-rebinding page can't load the bundle and read the key. The dev file publishes nginx (port 80) and the backend (http://localhost:8001, API docs at `/docs`) on 127.0.0.1 only, because the bundle embeds the API key. The prod file publishes ports 80 and 443: port 80 answers only `/health` and redirects everything else, and 443 serves the app behind basic auth.
 - The SQLite database lives in the `backend_data` volume at `/app/data` (`DATABASE_URL=sqlite:///./data/codesage.db`). Migrations run automatically at startup.
 - Dev: port 443 is not published and TLS is not configured. Prod serves HTTPS on 443 (see below).
 
@@ -68,4 +68,6 @@ Use a real certificate (for example from Let's Encrypt) for anything public. Por
 
 - Backend exits immediately: check `make logs-backend`. A missing `CODESAGE_API_KEY` is the usual cause.
 - Dashboard shows 401 errors or the WebSocket is rejected: the key baked into the frontend build differs from the backend's. Re-export `CODESAGE_API_KEY` and rebuild with `make build`.
+- `403 {"detail": "Host not allowed"}`: the request named a host the backend doesn't answer to. Add it to `CORS_ORIGINS` (if browsers use it) or `ALLOWED_HOSTS`; `*.example.com` covers subdomains.
+- WebSocket closes with 1013: the server holds 200 connections, or 20 from that client address. The dashboard retries with backoff.
 - Repository ends in `failed`: read `error_message` (for example missing Algolia credentials, or a GitHub rate limit; set `GITHUB_TOKEN`).

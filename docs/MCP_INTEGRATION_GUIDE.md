@@ -50,7 +50,7 @@ Copy `claude_desktop_config.example.json` into your Claude Desktop config and fi
 }
 ```
 
-The bridge reads `MCP_SERVER_URL` (default `http://127.0.0.1:8001`), `CODESAGE_API_KEY` (sent as `X-API-Key`), `CODESAGE_BASIC_AUTH_USER` and `CODESAGE_BASIC_AUTH_PASSWORD` (a login for the prod nginx; the launcher reads the password from the Keychain), and `CODESAGE_ALLOW_INSECURE_AUTH`. It refuses to send the key or login over plain `http://` to a non-loopback host unless `CODESAGE_ALLOW_INSECURE_AUTH=1`. Set `CODESAGE_MCP_LOG_LEVEL` to change its log level (default `INFO`).
+The bridge reads `MCP_SERVER_URL` (default `http://127.0.0.1:8001`), `CODESAGE_API_KEY` (sent as `X-API-Key`), `CODESAGE_BASIC_AUTH_USER` and `CODESAGE_BASIC_AUTH_PASSWORD` (a login for the prod nginx; the launcher reads the password from the Keychain), and `CODESAGE_ALLOW_INSECURE_AUTH`. It refuses to send the key or login over plain `http://` to a non-loopback host unless `CODESAGE_ALLOW_INSECURE_AUTH=1`. When the backend has a key, the host in `MCP_SERVER_URL` must be loopback, a `CORS_ORIGINS` host or listed in `ALLOWED_HOSTS`. Set `CODESAGE_MCP_LOG_LEVEL` to change its log level (default `INFO`).
 
 ## Tools
 
@@ -142,6 +142,7 @@ The response is `{"tool", "result", "is_error", "error"}`. A tool failure (for e
 - "CodeSage backend not reachable at ...": the backend is not running or `MCP_SERVER_URL` is wrong. Start it with `make start-backend`. While it is down, `tools/list` still works because the schemas are bundled with the bridge; only tool calls fail.
 - "rejected the API key (401)": `CODESAGE_API_KEY` in the Claude Desktop config differs from `backend/.env`. Re-run `make install-claude`.
 - "429": the rate limit was hit; retry shortly.
+- "403" with "Host not allowed": `MCP_SERVER_URL` names a host the backend doesn't answer to (for example an IP address). Add it to `ALLOWED_HOSTS` in the backend's environment, or use a listed name.
 - Tools are listed but searches return nothing: no repository has finished indexing. Check `GET /api/v1/repositories/` for status and `error_message`.
 - Launcher says `.venv/bin/python not found`: create the virtualenv as described in the README.
 

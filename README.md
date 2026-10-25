@@ -74,10 +74,10 @@ curl -X POST http://127.0.0.1:8001/api/v1/repositories/ \
   -d '{"url": "https://github.com/owner/repo"}'
 ```
 
-The response is `201` with the repository record, and a background job starts (one job per repository at a time).
+The response is `201` with the repository record, and a background job starts (one job per repository at a time). A URL that is already registered (also as `.git`, or with a `/tree/<branch>` suffix) returns `409`. A `/tree/<branch>` URL selects that branch unless the body sets `branch`; an empty `branch` means the default branch.
 
-- Status moves `pending`, `processing`, then `completed` or `failed`. On failure, `error_message` says why. A `completed` run that left files out (they could not be stored or parsed, or were over the limits) says so in `error_message`, as `Partially indexed: ...`.
-- Poll `GET /api/v1/repositories/{id}/status`, or connect to `/ws`, send `{"type":"subscribe","repository_id":N}`, and read `{type, data}` frames.
+- Status moves `pending`, `processing`, then `completed` or `failed`. On failure, `error_message` says why. A `completed` run that left files out (they could not be stored or parsed, were over the limits, or sat in directories a very large repository's listing never reached) says so in `error_message`, as `Partially indexed: ...`.
+- Poll `GET /api/v1/repositories/{id}/status`, or connect to `/ws`, wait for the `connected` frame, send `{"type":"subscribe","repository_id":N}`, and read `{type, data}` frames. A full server (200 connections, or 20 from one address) accepts and then closes with code 1013; retry with backoff.
 - `POST /api/v1/repositories/{id}/process?force_reprocess=true` re-runs processing. It returns `202`, or `409` if a job is already running (or the repository is completed and `force_reprocess` is not set).
 - `PUT /api/v1/repositories/{id}` returns `409` if it would change `branch`, `language` or `framework` while a job or a delete holds the repository; other fields can change at any time. An empty `branch` is stored as null (the default branch).
 - A server restart marks interrupted runs as `failed`; reprocess them.
@@ -109,7 +109,7 @@ export CODESAGE_API_KEY=...   # becomes the frontend build argument; must match 
 make up                       # docker compose -f deployment/docker-compose.yml up -d
 ```
 
-This starts the backend and nginx, which serves the frontend on http://localhost and proxies `/api`, `/ws` and `/health`. CI checks both Compose files and builds both images on every push, but never starts the containers. See [deployment/DOCKER.md](deployment/DOCKER.md).
+This starts the backend and nginx, which serves the frontend on http://localhost and proxies `/api`, `/ws` and `/health`. CI checks both Compose files, builds both images and runs `nginx -t` on both nginx configs on every push, but never starts the containers. See [deployment/DOCKER.md](deployment/DOCKER.md).
 
 ## Testing
 
@@ -121,7 +121,7 @@ cd frontend && npm run lint
 cd frontend && npm run build      # type-check and production build
 ```
 
-CI (`.github/workflows/ci.yml`) runs ruff and pytest for the backend, lint, build and tests for the frontend, and validates the Compose files and builds both Docker images. Frontend tests are unit tests only; there are no end-to-end tests.
+CI (`.github/workflows/ci.yml`) runs ruff and pytest for the backend, lint, build and tests for the frontend, and validates the Compose files, builds both Docker images and runs `nginx -t` on the dev config and the rendered prod template. Frontend tests are unit tests only; there are no end-to-end tests.
 
 ## Configuration
 
@@ -161,7 +161,7 @@ docs/                   architecture and MCP guide
 - Job state and WebSocket subscriptions live in the server process, so run exactly one worker.
 - SQLite only. Alembic migrations run automatically at startup; a database from before Alembic is stamped at `baseline` first.
 - Frontend tests are unit tests only.
-- The Docker images are built in CI but never run there.
+- The Docker images are built in CI but never run there; the prod stack was last run by hand.
 - Outside the prod Docker stack, the dashboard API key is embedded in the JavaScript bundle (local, single-user use only). The prod stack keeps it in nginx behind basic auth.
 
 See [docs/architecture.md](docs/architecture.md) for how the pieces fit together.
