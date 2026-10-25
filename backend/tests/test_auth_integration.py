@@ -25,6 +25,18 @@ def test_tool_call_requires_the_api_key(client, api_key):
     assert response.json()["is_error"] is False
 
 
+def test_search_suggestions_require_the_key_and_are_rate_limited(client, api_key, monkeypatch):
+    url = "/api/v1/ai/search/suggestions"
+    assert client.get(url, params={"query": "abc"}).status_code == 401
+
+    monkeypatch.setattr(get_settings(), "rate_limit_default", "2/minute")
+    statuses = [
+        client.get(url, params={"query": "abc"}, headers={"X-API-Key": api_key}).status_code
+        for _ in range(3)
+    ]
+    assert statuses == [200, 200, 429]
+
+
 def test_tool_call_is_rate_limited(client, monkeypatch):
     monkeypatch.setattr(get_settings(), "rate_limit_ai", "2/minute")
     body = {"tool_name": "list_repositories", "arguments": {}}
@@ -34,16 +46,30 @@ def test_tool_call_is_rate_limited(client, monkeypatch):
     assert statuses == [200, 200, 429]
 
 
+def key_protocols(key: str) -> list[str]:
+    return ["codesage", "codesage.key." + key.encode().hex()]
+
+
 def test_websocket_rejects_a_missing_or_wrong_key(api_key):
     client = TestClient(app, base_url="http://localhost")
-    for url in ("/ws", "/ws?api_key=wrong"):
-        with pytest.raises(WebSocketDisconnect) as excinfo, client.websocket_connect(url) as ws:
+    attempts = [
+        ("/ws", None),
+        ("/ws", key_protocols("wrong")),
+        ("/ws", ["codesage", "codesage.key.not-hex"]),
+        (f"/ws?api_key={api_key}", None),  # keys in URLs end up in access logs, so they're ignored
+    ]
+    for url, protocols in attempts:
+        with pytest.raises(WebSocketDisconnect) as excinfo, client.websocket_connect(
+            url, subprotocols=protocols
+        ) as ws:
             ws.receive_json()
         assert excinfo.value.code == 1008
 
 
-def test_websocket_accepts_the_key_as_a_query_parameter(api_key):
-    with TestClient(app, base_url="http://localhost").websocket_connect(f"/ws?api_key={api_key}") as ws:
+def test_websocket_accepts_the_key_in_a_subprotocol(api_key):
+    client = TestClient(app, base_url="http://localhost")
+    with client.websocket_connect("ws://localhost/ws", subprotocols=key_protocols(api_key)) as ws:
+        assert ws.accepted_subprotocol == "codesage"
         assert ws.receive_json()["type"] == "connected"
 
 

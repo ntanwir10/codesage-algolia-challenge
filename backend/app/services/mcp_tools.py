@@ -346,18 +346,19 @@ async def find_patterns(db: Session, args: schemas.FindPatternsArgs) -> dict:
         except regex.error as exc:
             raise ToolError(f"Invalid regular expression: {exc}") from exc
 
-    files = (
-        db.query(CodeFile.file_path, CodeFile.content)
-        .filter(CodeFile.repository_id == repository.id)
-        .order_by(CodeFile.file_path)
-        .all()
-    )
-    if args.path_glob:
-        files = [row for row in files if fnmatch.fnmatchcase(row[0], args.path_glob)]
+    def load_and_scan():
+        # Loads every file's content, so it runs off the event loop along with the scan
+        files = (
+            db.query(CodeFile.file_path, CodeFile.content)
+            .filter(CodeFile.repository_id == repository.id)
+            .order_by(CodeFile.file_path)
+            .all()
+        )
+        if args.path_glob:
+            files = [row for row in files if fnmatch.fnmatchcase(row[0], args.path_glob)]
+        return _scan([tuple(row) for row in files], args.pattern, args.regex, args.max_results)
 
-    matches, truncated, skipped = await asyncio.to_thread(
-        _scan, [tuple(row) for row in files], args.pattern, args.regex, args.max_results
-    )
+    matches, truncated, skipped = await asyncio.to_thread(load_and_scan)
     result = {
         "repository": repository.name,
         "pattern": args.pattern,

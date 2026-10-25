@@ -14,6 +14,7 @@ from datetime import UTC, datetime
 
 import structlog
 from sqlalchemy import func
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.core.database import SessionLocal
@@ -34,6 +35,10 @@ NON_PROGRAMMING_LANGUAGES = {"text", "markdown", "json", "yaml", "xml", "css", "
 # Background jobs keyed by repository id. Module level, so a job outlives the
 # request that started it and a repository is never processed twice at once.
 _jobs: dict[int, asyncio.Task] = {}
+
+# Each run holds up to GitHubService.max_total_bytes of files in memory; cap how many run at once
+MAX_CONCURRENT_RUNS = 2
+_run_slots = asyncio.Semaphore(MAX_CONCURRENT_RUNS)
 
 
 class IngestionError(Exception):
@@ -82,6 +87,28 @@ async def _run_job(repository_id: int, force_reprocess: bool):
             error=str(e),
             error_type=type(e).__name__,
         )
+        _fail_if_still_processing(repository_id)
+
+
+def _fail_if_still_processing(repository_id: int) -> None:
+    """After a crash, don't leave the row 'processing' with no job behind it until a restart"""
+    try:
+        with SessionLocal() as db:
+            repository = db.get(Repository, repository_id)
+            if repository is not None and repository.status == "processing":
+                repository.status = "failed"
+                repository.error_message = "Processing stopped unexpectedly; reprocess the repository"
+                db.commit()
+    except Exception as e:
+        logger.error("Could not mark the crashed job failed", repository_id=repository_id, error=str(e))
+
+
+def _failure_message(error: Exception) -> str:
+    """What a failed run records and broadcasts; the full error goes to the log only"""
+    # A SQLAlchemy error's text carries the SQL and its parameters, which include file contents
+    if isinstance(error, SQLAlchemyError):
+        return "Database error while storing the repository"
+    return f"{type(error).__name__}: {error}"[:500]
 
 
 def recover_interrupted_jobs(db: Session) -> int:
@@ -147,13 +174,14 @@ class RepositoryService:
         await self._broadcast_repository_status(repository)
 
         try:
-            async with monitor_repository_processing(repository.id):
+            # A run already shows "processing" while it waits here for a free slot
+            async with _run_slots, monitor_repository_processing(repository.id):
                 await self.process_repository_files(repository)
         except Exception as e:
             # Discard any half-written work so recording the failure can't fail too
             self.db.rollback()
             repository.status = "failed"
-            repository.error_message = f"{type(e).__name__}: {e}"
+            repository.error_message = _failure_message(e)
             self.db.commit()
             logger.error(
                 "Repository processing failed",
@@ -162,7 +190,7 @@ class RepositoryService:
                 error_type=type(e).__name__,
             )
             await self._broadcast_repository_status(
-                repository, error=str(e), message="Processing failed"
+                repository, error=repository.error_message, message="Processing failed"
             )
             return repository
 
@@ -299,7 +327,8 @@ class RepositoryService:
             problems.append(f"{failed_files} of {len(files)} files could not be stored")
         if github.skipped_files:
             problems.append(
-                f"{github.skipped_files} files over the {github.max_files}-file limit were skipped"
+                f"{github.skipped_files} files over the {github.max_files}-file or "
+                f"{github.max_total_bytes // 2**20} MB limit were skipped"
             )
         if problems:
             repository.error_message = "Partially indexed: " + "; ".join(problems)
@@ -423,7 +452,10 @@ class RepositoryService:
         # Hold the job slot so no run can start while the Algolia delete is awaited
         _jobs[repository.id] = asyncio.current_task()
         try:
-            if not await AlgoliaService().delete_repository_index(repository.id, wait=True):
+            # Bulk-deletes the rows off the event loop, so the ORM cascade below finds none to load
+            try:
+                await self._clear_repository_data(repository.id, AlgoliaService())
+            except IngestionError:
                 return False
 
             self.db.delete(repository)

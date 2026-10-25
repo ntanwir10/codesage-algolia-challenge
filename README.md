@@ -57,8 +57,8 @@ Put the output in `backend/.env` as `CODESAGE_API_KEY=...`. For the dashboard, s
 
 The key is required unless the server is bound to a loopback address: the backend refuses to start with a non-loopback `MCP_SERVER_HOST` and no key. When a key is set, it must be sent as:
 
-- the `X-API-Key` header on write endpoints (create, update, delete, process), on `/api/v1/performance/*`, and on `POST /api/v1/ai/mcp/tools/call`
-- the `?api_key=` query parameter on the `/ws` WebSocket
+- the `X-API-Key` header on write endpoints (create, update, delete, process), on `/api/v1/performance/*`, on `GET /api/v1/ai/search/suggestions` and on `POST /api/v1/ai/mcp/tools/call`
+- on the `/ws` WebSocket, the `X-API-Key` header or, from browsers, a `codesage.key.<hex of the key>` subprotocol offered alongside `codesage` (never the URL, which access logs record)
 
 Read endpoints (listing and fetching repositories, status, stats, tool and resource listings, `/health`) do not require the key.
 

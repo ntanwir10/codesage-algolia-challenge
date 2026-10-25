@@ -76,9 +76,11 @@ export function RepositoryPage() {
       await api.deleteRepository(repository.id);
 
       addToast({ type: "success", title: "Repository deleted" });
-      queryClient.removeQueries({ queryKey: ["repository", repositoryId] });
-      queryClient.invalidateQueries({ queryKey: ["repositories"] });
+      // Leave first: removing queries this page still observes would refetch them (404 flash)
       navigate("/dashboard");
+      queryClient.removeQueries({ queryKey: ["repository", repositoryId] });
+      queryClient.removeQueries({ queryKey: ["repository-status", repositoryId] });
+      queryClient.invalidateQueries({ queryKey: ["repositories"] });
     } catch (error) {
       const { message, status: httpStatus } = describeError(error);
       setDeleteDialog({ isOpen: false, isDeleting: false });
@@ -364,7 +366,12 @@ export function RepositoryPage() {
         )}
 
         {/* AI Search Interface */}
-        <SearchInterface repositoryId={repositoryId} canSearch={!!canSearch} />
+        {/* Keyed so results and in-flight searches never carry over to another repository */}
+        <SearchInterface
+          key={repositoryId}
+          repositoryId={repositoryId}
+          canSearch={!!canSearch}
+        />
 
         {/* Quick Actions */}
         <div className="flex flex-wrap gap-4">

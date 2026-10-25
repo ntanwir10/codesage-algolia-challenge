@@ -32,24 +32,29 @@ const IDLE_CLOSE_MS = 1000;
 
 /**
  * Builds the WebSocket URL: VITE_WS_URL / VITE_WEBSOCKET_URL if set, else
- * same-origin `/ws` (ws: or wss: following the page protocol). The API key is
- * appended as `?api_key=`; like the HTTP header, it ships in the bundle.
+ * same-origin `/ws` (ws: or wss: following the page protocol).
  */
 export function buildWebSocketUrl(): string {
   const explicit =
     import.meta.env.VITE_WS_URL || import.meta.env.VITE_WEBSOCKET_URL;
-  let url: string;
-  if (explicit) {
-    url = explicit;
-  } else {
-    const scheme = window.location.protocol === "https:" ? "wss:" : "ws:";
-    url = `${scheme}//${window.location.host}/ws`;
-  }
+  if (explicit) return explicit;
+  const scheme = window.location.protocol === "https:" ? "wss:" : "ws:";
+  return `${scheme}//${window.location.host}/ws`;
+}
+
+/**
+ * Subprotocols offered on connect. Browsers can't set headers on a WebSocket,
+ * so the API key (hex-encoded to stay a valid token) rides in one instead of
+ * the URL, where access logs would record it. Like the HTTP header, it ships
+ * in the bundle.
+ */
+export function buildWebSocketProtocols(): string[] {
   const apiKey = import.meta.env.VITE_CODESAGE_API_KEY;
-  if (apiKey) {
-    url += `${url.includes("?") ? "&" : "?"}api_key=${encodeURIComponent(apiKey)}`;
-  }
-  return url;
+  if (!apiKey) return ["codesage"];
+  const hex = Array.from(new TextEncoder().encode(apiKey), (b) =>
+    b.toString(16).padStart(2, "0")
+  ).join("");
+  return ["codesage", `codesage.key.${hex}`];
 }
 
 export class WebSocketService {
@@ -58,6 +63,7 @@ export class WebSocketService {
   private reconnectAttempts = 0;
   private reconnectTimeout: ReturnType<typeof setTimeout> | null = null;
   private heartbeatInterval: ReturnType<typeof setInterval> | null = null;
+  private awaitingPong = false;
   private idleTimeout: ReturnType<typeof setTimeout> | null = null;
   private repoListeners = new Map<number, Set<StatusUpdateCallback>>();
   private globalListeners = new Set<StatusUpdateCallback>();
@@ -172,7 +178,7 @@ export class WebSocketService {
 
     let socket: WebSocket;
     try {
-      socket = new WebSocket(buildWebSocketUrl());
+      socket = new WebSocket(buildWebSocketUrl(), buildWebSocketProtocols());
     } catch (error) {
       console.error("Failed to create WebSocket:", error);
       this.isConnecting = false;
@@ -195,6 +201,7 @@ export class WebSocketService {
 
     socket.onmessage = (event) => {
       if (this.ws !== socket) return;
+      this.awaitingPong = false; // any frame proves the connection is alive
       try {
         this.handleMessage(JSON.parse(String(event.data)) as WebSocketMessage);
       } catch (error) {
@@ -281,10 +288,19 @@ export class WebSocketService {
 
   private startHeartbeat(): void {
     this.stopHeartbeat();
-    this.heartbeatInterval = setInterval(
-      () => this.send({ type: "ping" }),
-      HEARTBEAT_MS
-    );
+    this.awaitingPong = false;
+    this.heartbeatInterval = setInterval(() => {
+      // Nothing since the last ping: the connection is half-open (laptop
+      // sleep, NAT drop) and would never fire onclose, so start over
+      if (this.awaitingPong) {
+        this.teardownSocket(4000, "heartbeat timeout");
+        this.notifyConnection("disconnected");
+        if (this.hasSubscribers()) this.scheduleReconnect();
+        return;
+      }
+      this.awaitingPong = true;
+      this.send({ type: "ping" });
+    }, HEARTBEAT_MS);
   }
 
   private stopHeartbeat(): void {

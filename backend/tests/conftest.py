@@ -192,6 +192,7 @@ def github(monkeypatch):
 
     class FakeGitHubService:
         max_files = 1000
+        max_total_bytes = 100 * 1024 * 1024
 
         async def get_repository_files(self, repo_url, branch=None):
             fake.calls.append((repo_url, branch))

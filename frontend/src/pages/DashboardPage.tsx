@@ -327,7 +327,9 @@ export function DashboardPage() {
                   </div>
 
                   {/* Enhanced Processing Progress */}
-                  {repo.status === "processing" && repo.processed_files > 0 && (
+                  {repo.status === "processing" &&
+                    repo.processed_files > 0 &&
+                    repo.total_files > 0 && (
                     <div className="mt-4">
                       <AnimatedProgress
                         value={(repo.processed_files / repo.total_files) * 100}

@@ -242,6 +242,23 @@ class TestUrlValidation:
         assert response.json()["status"] == "pending"
         assert response.json()["name"] == "renamed"
 
+    @pytest.mark.parametrize(
+        "body", [{"name": None}, {"name": "  "}, {"branch": "../../x"}, {"branch": "a/../b"}]
+    )
+    def test_put_rejects_a_null_name_or_bad_branch(self, client, body):
+        created = client.post(REPOS, json={"url": URL}).json()
+        assert client.put(f"{REPOS}{created['id']}", json=body).status_code == 422
+
+    def test_put_accepts_a_branch_or_the_default(self, client):
+        created = client.post(REPOS, json={"url": URL}).json()
+        for branch in ("feature/x", "", None):
+            response = client.put(f"{REPOS}{created['id']}", json={"branch": branch})
+            assert response.status_code == 200
+            assert response.json()["branch"] == branch
+
+    def test_explicit_branch_is_validated_on_create(self, client):
+        assert client.post(REPOS, json={"url": URL, "branch": "../main"}).status_code == 422
+
 
 class TestErrors:
     def test_unhandled_error_hides_internals(self, db_session):

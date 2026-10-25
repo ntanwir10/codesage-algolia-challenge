@@ -25,8 +25,15 @@ class MCPToolCallRequest(BaseModel):
     arguments: dict[str, Any] = Field(default_factory=dict, description="Arguments for the tool")
 
 
-@router.get("/search/suggestions", summary="Get Search Suggestions")
+# Searches every repository, like the search_code tool, so it takes the same key
+@router.get(
+    "/search/suggestions",
+    summary="Get Search Suggestions",
+    dependencies=[Depends(require_api_key)],
+)
+@limiter.limit(lambda: settings.rate_limit_default)
 async def get_search_suggestions(
+    request: Request,  # slowapi needs the request under this name
     query: str = Query(..., description="Query string to get suggestions for"),
     limit: int = Query(default=10, ge=1, le=20, description="Maximum number of suggestions"),
     repository_id: int | None = Query(None, description="Optional repository ID filter"),

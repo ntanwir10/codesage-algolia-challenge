@@ -172,6 +172,25 @@ async def test_unsubscribe_stops_delivery():
     assert manager.repository_connections == {}
 
 
+async def test_a_client_that_stops_reading_is_dropped_not_waited_on(monkeypatch):
+    monkeypatch.setattr("app.services.websocket_service.SEND_TIMEOUT_SECONDS", 0.01)
+
+    class StuckWebSocket(FakeWebSocket):
+        async def send_text(self, text: str):
+            await asyncio.Event().wait()  # the send buffer never drains
+
+    manager = WebSocketManager()
+    stuck, alive = StuckWebSocket(), FakeWebSocket()
+    manager.active_connections.update({stuck, alive})
+    await manager.subscribe_to_repository(stuck, 7)
+    await manager.subscribe_to_repository(alive, 7)
+
+    await asyncio.wait_for(_status(manager), 1)
+
+    assert stuck not in manager.active_connections
+    assert len(alive.sent) == 1
+
+
 async def test_dead_socket_closed_and_removed_on_repository_broadcast():
     manager = WebSocketManager()
     dead, alive = FakeWebSocket(fail_send=True, fail_close=True), FakeWebSocket()

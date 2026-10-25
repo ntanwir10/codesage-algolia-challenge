@@ -76,6 +76,64 @@ async def test_background_job_processes_with_its_own_session(
     assert len(algolia_index.records) == 2
 
 
+async def test_runs_beyond_the_limit_wait_for_a_free_slot(db_session, job_sessions, monkeypatch):
+    monkeypatch.setattr(repository_service, "_run_slots", asyncio.Semaphore(1))
+    started, release = [], asyncio.Event()
+
+    async def blocking_files(self, repository):
+        started.append(repository.id)
+        await release.wait()
+
+    monkeypatch.setattr(RepositoryService, "process_repository_files", blocking_files)
+    a = make_repository(db_session, status="pending", url="https://github.com/octo/a")
+    b = make_repository(db_session, status="pending", url="https://github.com/octo/b")
+
+    first, second = start_processing(a.id), start_processing(b.id)
+    await asyncio.sleep(0.05)
+    assert started == [a.id]
+    db_session.refresh(b)
+    assert b.status == "processing"  # queued runs already show as processing
+
+    release.set()
+    await asyncio.gather(first, second)
+    assert started == [a.id, b.id]
+
+
+async def test_a_crashed_job_does_not_stay_processing(db_session, job_sessions, monkeypatch):
+    repo = make_repository(db_session, status="pending")
+
+    async def crash(self, repository, force_reprocess=False):
+        # e.g. "database is locked" while recording the failure itself
+        repository.status = "processing"
+        self.db.commit()
+        raise RuntimeError("database is locked")
+
+    monkeypatch.setattr(RepositoryService, "process_repository", crash)
+    await start_processing(repo.id)
+
+    db_session.refresh(repo)
+    assert repo.status == "failed"
+    assert "reprocess" in repo.error_message
+
+
+async def test_database_errors_do_not_leak_sql_or_file_contents(
+    db_session, github, algolia_index, monkeypatch
+):
+    from sqlalchemy.exc import OperationalError
+
+    async def broken_clear(self, repository_id, algolia_service):
+        raise OperationalError("INSERT INTO code_files VALUES (?)", ("SECRET FILE BODY",), Exception())
+
+    monkeypatch.setattr(RepositoryService, "_clear_repository_data", broken_clear)
+    repo = make_repository(db_session, status="pending")
+    github.files = [github_file("a.py", MODULE)]
+
+    await RepositoryService(db_session).process_repository(repo)
+
+    assert repo.status == "failed"
+    assert repo.error_message == "Database error while storing the repository"
+
+
 def test_restart_fails_repositories_left_mid_run(db_session):
     pending = make_repository(db_session, name="a", url="https://github.com/o/a", status="pending")
     running = make_repository(db_session, name="b", url="https://github.com/o/b", status="processing")
@@ -142,7 +200,7 @@ async def test_files_over_the_limit_are_reported(db_session, github, algolia_ind
     await RepositoryService(db_session).process_repository(repo)
 
     assert repo.status == "completed"
-    assert repo.error_message == "Partially indexed: 5 files over the 1000-file limit were skipped"
+    assert repo.error_message == "Partially indexed: 5 files over the 1000-file or 100 MB limit were skipped"
 
 
 async def test_record_content_carries_the_entity_body(db_session, github, algolia_index):

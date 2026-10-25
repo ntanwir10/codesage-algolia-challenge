@@ -1,5 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { WebSocketService, buildWebSocketUrl } from "./websocket";
+import {
+  WebSocketService,
+  buildWebSocketProtocols,
+  buildWebSocketUrl,
+} from "./websocket";
 
 class FakeWebSocket {
   static instances: FakeWebSocket[] = [];
@@ -16,8 +20,10 @@ class FakeWebSocket {
   onclose: ((e: { code: number }) => void) | null = null;
 
   url: string;
-  constructor(url: string) {
+  protocols?: string[];
+  constructor(url: string, protocols?: string[]) {
     this.url = url;
+    this.protocols = protocols;
     FakeWebSocket.instances.push(this);
   }
   send(data: string) {
@@ -129,6 +135,21 @@ describe("WebSocketService", () => {
     expect(last().sent.at(-1)).toEqual({ type: "ping" });
   });
 
+  it("reconnects when a ping gets no reply (half-open connection)", () => {
+    service.onRepositoryUpdate(1, () => {});
+    const first = last();
+    first.open();
+    vi.advanceTimersByTime(25000); // ping
+    first.receive({ type: "pong" });
+    vi.advanceTimersByTime(25000); // answered: ping again, no reconnect
+    expect(first.closed).toBeNull();
+
+    vi.advanceTimersByTime(25000); // unanswered
+    expect(first.closed).toEqual({ code: 4000 });
+    vi.advanceTimersByTime(1000);
+    expect(FakeWebSocket.instances).toHaveLength(2);
+  });
+
   it("reconnects with capped backoff and resubscribes", () => {
     service.onRepositoryUpdate(4, () => {});
     last().open();
@@ -149,23 +170,27 @@ describe("WebSocketService", () => {
     expect(FakeWebSocket.instances).toHaveLength(1);
   });
 
-  it("builds a wss: URL on https pages, with the api_key", () => {
+  it("builds a wss: URL on https pages, never with the key in it", () => {
     vi.stubEnv("VITE_CODESAGE_API_KEY", "k e y");
     vi.stubGlobal("location", {
       protocol: "https:",
       host: "codesage.example.com",
     });
-    expect(buildWebSocketUrl()).toBe(
-      "wss://codesage.example.com/ws?api_key=k%20e%20y"
-    );
+    expect(buildWebSocketUrl()).toBe("wss://codesage.example.com/ws");
     vi.stubGlobal("location", { protocol: "http:", host: "localhost:5173" });
-    vi.stubEnv("VITE_CODESAGE_API_KEY", "");
     expect(buildWebSocketUrl()).toBe("ws://localhost:5173/ws");
   });
 
   it("prefers VITE_WS_URL when set", () => {
     vi.stubEnv("VITE_WS_URL", "wss://ws.example.com/ws");
-    vi.stubEnv("VITE_CODESAGE_API_KEY", "abc");
-    expect(buildWebSocketUrl()).toBe("wss://ws.example.com/ws?api_key=abc");
+    expect(buildWebSocketUrl()).toBe("wss://ws.example.com/ws");
+  });
+
+  it("sends the key hex-encoded in a subprotocol", () => {
+    expect(buildWebSocketProtocols()).toEqual(["codesage"]);
+    vi.stubEnv("VITE_CODESAGE_API_KEY", "k e");
+    expect(buildWebSocketProtocols()).toEqual(["codesage", "codesage.key.6b2065"]);
+    service.onRepositoryUpdate(1, () => {});
+    expect(last().protocols).toEqual(["codesage", "codesage.key.6b2065"]);
   });
 });

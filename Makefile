@@ -151,11 +151,11 @@ db-reset:
 
 db-migrate:
 	@echo "🔄 Running database migrations..."
-	cd backend && alembic upgrade head
+	cd backend && ../.venv/bin/python -m alembic upgrade head
 
 db-migration:
 	@read -p "Enter migration message: " message; \
-	cd backend && alembic revision --autogenerate -m "$$message"
+	cd backend && ../.venv/bin/python -m alembic revision --autogenerate -m "$$message"
 
 # Cleanup
 clean:

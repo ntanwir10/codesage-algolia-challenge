@@ -187,8 +187,8 @@ def main(argv: list[str] | None = None) -> int:
         )
     if config_path.exists():
         backup = config_path.with_name(f"{config_path.name}.bak-{time.strftime('%Y%m%d-%H%M%S')}")
-        backup.write_bytes(config_path.read_bytes())
-        os.chmod(backup, 0o600)
+        # write_atomic creates it at mode 600, so the key it holds is never world-readable
+        write_atomic(backup, config_path.read_text(encoding="utf-8"))
         print(f"backup: {backup}")
     write_atomic(config_path, json.dumps(merged, indent=2) + "\n")
     print(f"updated {config_path}: mcpServers.{args.name} -> {LAUNCHER}")

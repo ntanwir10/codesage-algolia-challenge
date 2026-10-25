@@ -12,7 +12,7 @@ Browser                                        Claude Desktop
 | (Vite dev :5173  |                       |  -> python -m codesage_mcp|
 |  or nginx :80)   |                       |  (official `mcp` SDK)    |
 +--------+---------+                       +------------+-------------+
-         |  X-API-Key / ?api_key=                       | HTTP, X-API-Key
+         |  X-API-Key / WS subprotocol                  | HTTP, X-API-Key
          v                                              v
 +------------------------------------------------------------------+
 | FastAPI backend (one process, 127.0.0.1:8001)                    |
@@ -71,7 +71,7 @@ At startup, repositories left `pending` or `processing` by a previous process ar
 
 ## Real-time updates
 
-`/ws` accepts the connection only if `?api_key=` is valid (when a key is configured; otherwise it closes with code 1008). Client messages are `subscribe` and `unsubscribe` (each with a positive `repository_id`) and `ping`. Server frames are `{type, data}`: `connected`, `subscribed`, `unsubscribed`, `pong`, `error`, and `repository_status` for subscribed repositories. The dashboard also polls the status endpoint while a repository is in progress.
+`/ws` accepts the connection only if the key is valid (when a key is configured; otherwise it closes with code 1008). Browsers send it as a `codesage.key.<hex>` subprotocol next to `codesage`; the prod nginx sends `X-API-Key`. Cross-origin handshakes are refused. Client messages are `subscribe` and `unsubscribe` (each with a positive `repository_id`) and `ping`. Server frames are `{type, data}`: `connected`, `subscribed`, `unsubscribed`, `pong`, `error`, and `repository_status` for subscribed repositories. The dashboard also polls the status endpoint while a repository is in progress.
 
 ## Search
 
