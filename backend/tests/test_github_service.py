@@ -275,6 +275,24 @@ async def test_truncated_tree_falls_back_to_contents_walk_on_the_branch(github_a
     assert not any("node_modules" in r or "dist" in r for r in requests)
 
 
+async def test_contents_walk_stops_at_its_request_cap(github_api, monkeypatch):
+    monkeypatch.setattr(gh, "MAX_WALK_REQUESTS", 2)
+    github_api["trees"]["dev"] = {"tree": [], "truncated": True}
+    github_api["listings"] = {
+        "": [{"type": "file", "path": "app.py", "size": 5}, {"type": "dir", "path": "a"}, {"type": "dir", "path": "b"}],
+        "a": [{"type": "file", "path": "a/x.py", "size": 5}],
+        "b": [{"type": "file", "path": "b/y.py", "size": 5}],
+    }
+    github_api["raw"] = {"dev:app.py": b"x = 1\n", "dev:a/x.py": b"y = 2\n"}
+    service = service_for(github_api)
+
+    files = await service.get_repository_files(REPO_URL, "dev")
+
+    assert [f.path for f in files] == ["a/x.py", "app.py"]
+    assert service.listing_truncated
+    assert "/repos/octo/demo/contents/b?ref=dev" not in github_api["requests"]
+
+
 async def test_downloads_run_concurrently_within_the_limit(github_api):
     paths = [f"f{i}.py" for i in range(12)]
     github_api["trees"]["main"] = [blob(p, 5) for p in paths]

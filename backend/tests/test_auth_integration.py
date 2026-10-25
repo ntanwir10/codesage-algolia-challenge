@@ -77,10 +77,10 @@ def test_websocket_accepts_the_key_in_a_subprotocol(api_key):
 
 def test_websocket_accepts_the_key_as_a_header(api_key):
     # The prod nginx proxy injects the key as a header; browsers never hold it
-    with TestClient(app, base_url="http://localhost", client=LOCAL).websocket_connect("/ws", headers={"X-API-Key": api_key}) as ws:
+    with TestClient(app, base_url="http://localhost", client=LOCAL).websocket_connect("ws://localhost/ws", headers={"X-API-Key": api_key}) as ws:
         assert ws.receive_json()["type"] == "connected"
     with pytest.raises(WebSocketDisconnect) as excinfo, TestClient(app, base_url="http://localhost", client=LOCAL).websocket_connect(
-        "/ws", headers={"X-API-Key": "wrong"}
+        "ws://localhost/ws", headers={"X-API-Key": "wrong"}
     ) as ws:
         ws.receive_json()
     assert excinfo.value.code == 1008

@@ -69,10 +69,13 @@ def request_refusal(scope) -> str | None:
     settings = get_settings()
     headers = Headers(scope=scope)
     host = headers.get("host", "")
+    # DNS rebinding: a hostile page re-pointed at this server is same-origin but keeps its own Host.
+    # With a key set it still matters: the dev bundle embeds the key, and such a page could read it
+    # /health is exempt: it reveals nothing, and load balancers often address it by IP
+    allowed = LOOPBACK_HOSTS if not settings.codesage_api_key else settings.allowed_hosts_list
+    if "*" not in allowed and _hostname(host) not in allowed and scope.get("path") != "/health":
+        return "Host not allowed"
     if not settings.codesage_api_key:
-        # DNS rebinding: a hostile page re-pointed at 127.0.0.1 is same-origin but keeps its own Host
-        if _hostname(host) not in LOOPBACK_HOSTS:
-            return "Host not allowed"
         # Bound to 0.0.0.0 by hand (MCP_SERVER_HOST unset), a LAN client could send Host: localhost,
         # but not a loopback address
         if not _is_loopback_peer(scope.get("client")):

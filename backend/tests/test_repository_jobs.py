@@ -288,6 +288,17 @@ async def test_files_over_the_limit_are_reported(db_session, github, algolia_ind
     assert repo.error_message == "Partially indexed: 5 files over the 1000-file or 100 MB limit were skipped"
 
 
+async def test_a_truncated_listing_is_reported(db_session, github, algolia_index):
+    repo = make_repository(db_session, status="pending")
+    github.files = [github_file("a.py", MODULE)]
+    github.listing_truncated = True
+
+    await RepositoryService(db_session).process_repository(repo)
+
+    assert repo.status == "completed"
+    assert "too large to list in full" in repo.error_message
+
+
 async def test_record_content_carries_the_entity_body(db_session, github, algolia_index):
     repo = make_repository(db_session, status="pending")
     github.files = [github_file("a.py", MODULE)]

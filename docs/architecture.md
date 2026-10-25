@@ -60,18 +60,18 @@ Triggered by `POST /api/v1/repositories/` (201) or `POST /api/v1/repositories/{i
 
 1. Mark the repository `processing` and broadcast the status.
 2. Check Algolia credentials; fail with a clear `error_message` if missing.
-3. Fetch the file list from the GitHub git trees endpoint for the repository's branch (default branch if none) and download the selected files. Denied directories (`node_modules`, `dist`, `build`, `vendor`, and similar), minified files and lockfiles are dropped, as are files of 1 MB or more; at most 1000 files and 100 MB in total are kept. At most two runs index at once; a queued run already shows `processing`.
+3. Fetch the file list from the GitHub git trees endpoint for the repository's branch (default branch if none) and download the selected files. Denied directories (`node_modules`, `dist`, `build`, `vendor`, and similar), minified files and lockfiles are dropped, as are files of 1 MB or more; at most 1000 files and 100 MB in total are kept. A tree too large for one trees call is listed through the contents API instead, at most 300 directories. At most two runs index at once; a queued run already shows `processing`.
 4. Only after a successful fetch, clear the repository's previous Algolia records, files and entities, so a transient GitHub error does not wipe a working index.
 5. Parse each file: `ast` for Python, tree-sitter for JavaScript, TypeScript, Java, Go, Rust, C, C++, C#, PHP and Ruby, a heading scanner for Markdown. CSS, HTML, JSON, YAML and XML yield no entities.
 6. Store files and entities in SQLite, 200 files per commit, broadcasting progress after each batch.
 7. Index the entity documents in Algolia in batches of 1000. Fail the run if nothing was indexed.
-8. Set the primary language and a best-effort framework, mark the repository `completed`. If files were left out (not stored, not parsed, or over the limits), `error_message` says so as `Partially indexed: ...`. Any exception ends in `failed` with `error_message`; database errors are recorded as a generic message, since their text carries SQL and file contents.
+8. Set the primary language and a best-effort framework, mark the repository `completed`. If files were left out (not stored, not parsed, over the limits, or in directories the 300-directory listing never reached), `error_message` says so as `Partially indexed: ...`. Any exception ends in `failed` with `error_message`; database errors are recorded as a generic message, since their text carries SQL and file contents.
 
 At startup, repositories left `pending` or `processing` by a previous process are marked `failed`.
 
 ## Real-time updates
 
-`/ws` accepts the connection only if the key is valid (when a key is configured; otherwise it closes with code 1008). Browsers send it as a `codesage.key.<hex>` subprotocol next to `codesage`; the prod nginx sends `X-API-Key`. Cross-origin handshakes are refused. Client messages are `subscribe` and `unsubscribe` (each with a positive `repository_id`; at most 100 subscriptions per connection) and `ping`. Server frames are `{type, data}`: `connected`, `subscribed`, `unsubscribed`, `pong`, `error`, and `repository_status` for subscribed repositories. The dashboard also polls the status endpoint while a repository is in progress.
+`/ws` accepts the connection only if the key is valid (when a key is configured; otherwise it closes with code 1008). Browsers send it as a `codesage.key.<hex>` subprotocol next to `codesage`; the prod nginx sends `X-API-Key`. Cross-origin handshakes are refused. Client messages are `subscribe` and `unsubscribe` (each with a positive `repository_id`; at most 100 subscriptions per connection) and `ping`. Past 200 open connections a new one is closed with code 1013 (try again later). Server frames are `{type, data}`: `connected`, `subscribed`, `unsubscribed`, `pong`, `error`, and `repository_status` for subscribed repositories. The dashboard also polls the status endpoint while a repository is in progress.
 
 ## Search
 
@@ -81,7 +81,7 @@ Indexed fields are searched in this order: entity name, description, content, pa
 
 - Binds to `127.0.0.1` by default. A non-loopback `MCP_SERVER_HOST` requires `CODESAGE_API_KEY`, or the app will not start.
 - The key is checked with a constant-time comparison. It guards writes, `/api/v1/performance/*`, `GET /api/v1/ai/search/suggestions`, `GET /api/v1/ai/mcp/resources/read`, `POST /api/v1/ai/mcp/tools/call` and `/ws`. Other GETs are public.
-- `BrowserRequestGuard` (`app/core/security.py`) refuses browser writes and WebSocket handshakes whose `Origin` is neither in `CORS_ORIGINS` nor the API's own scheme and host, because prod nginx adds the key to any request carrying the browser's login. With no key configured it also serves only loopback clients addressed as `localhost`, `127.0.0.1` or `[::1]`, which blocks DNS rebinding and LAN access to a server bound to `0.0.0.0` by hand.
+- `BrowserRequestGuard` (`app/core/security.py`) refuses browser writes and WebSocket handshakes whose `Origin` is neither in `CORS_ORIGINS` nor the API's own scheme and host, because prod nginx adds the key to any request carrying the browser's login. With no key configured it also serves only loopback clients addressed as `localhost`, `127.0.0.1` or `[::1]`, which blocks DNS rebinding and LAN access to a server bound to `0.0.0.0` by hand. With a key it serves only `Host` values that are loopback, a `CORS_ORIGINS` host or listed in `ALLOWED_HOSTS`, because the dev stack's bundle embeds the key and a rebound page could read it; the dev nginx also drops requests for any Host but `localhost` and `127.0.0.1`.
 - CORS origins are an explicit list; `*` is rejected.
 - Rate limiting uses slowapi, keyed by client address.
 - Unhandled errors return a generic 500 with a request ID (`X-Request-ID`); details stay in the logs.
@@ -92,4 +92,4 @@ Indexed fields are searched in this order: entity name, description, content, pa
 - The Algolia v3 client is synchronous and runs in worker threads.
 - One worker only: job state, the two-run limit and WebSocket subscriptions are in process.
 - SQLite only.
-- Frontend tests are unit tests only; Docker images are untested.
+- Frontend tests are unit tests only. CI builds the Docker images; the prod stack (nginx, basic auth, the browser checks) was last run by hand, not in CI.

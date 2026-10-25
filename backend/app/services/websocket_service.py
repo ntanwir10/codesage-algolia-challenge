@@ -14,6 +14,7 @@ logger = structlog.get_logger()
 VALID_MESSAGE_TYPES = {"subscribe", "unsubscribe", "ping"}
 SEND_TIMEOUT_SECONDS = 5  # a client that stops reading must not stall a processing run
 MAX_SUBSCRIPTIONS_PER_CONNECTION = 100  # each is a dict entry; a client can't grow it unbounded
+MAX_CONNECTIONS = 200  # each holds a socket and a task; past this, new clients are turned away
 
 # Browsers can't set headers on a WebSocket, so the key rides in a subprotocol
 # (hex, to stay a valid token) rather than the URL, where access logs would keep it
@@ -191,6 +192,12 @@ async def repository_status_websocket(websocket: WebSocket):
         # 1008 tells the client that retrying can't help
         await websocket.accept(subprotocol=subprotocol)
         await websocket.close(code=1008)
+        return
+
+    if websocket_manager.get_connection_count() >= MAX_CONNECTIONS:
+        # 1013 "try again later": the client's reconnect backoff applies, unlike after 1008
+        await websocket.accept(subprotocol=subprotocol)
+        await websocket.close(code=1013)
         return
 
     await websocket_manager.connect(websocket, subprotocol)

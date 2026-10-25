@@ -28,6 +28,7 @@ def _isolate(monkeypatch):
 @pytest.fixture
 def api_key(monkeypatch):
     monkeypatch.setattr(get_settings(), "codesage_api_key", "s3cret")
+    monkeypatch.setattr(get_settings(), "allowed_hosts", "codesage.example.com")
     return "s3cret"
 
 
@@ -121,8 +122,24 @@ class TestBrowserRequests:
         assert client.get(REPOS, headers={"Host": "127.0.0.1:8001"}).status_code == 200
         assert client.get(REPOS, headers={"Host": "[::1]:8001"}).status_code == 200
 
-    def test_with_a_key_any_host_is_served(self, client, api_key):
+    def test_with_a_key_only_allowed_hosts_are_served(self, client, api_key, monkeypatch):
+        # DNS rebinding still matters with a key: the dev bundle embeds it, so a rebound page can read it
         assert client.get(REPOS, headers={"Host": "codesage.example.com"}).status_code == 200
+        assert client.get(REPOS, headers={"Host": "127.0.0.1:8001"}).status_code == 200
+        rebound = {"Host": "evil.example", "Origin": "http://evil.example", "X-API-Key": api_key}
+        response = client.post(REPOS, json={"url": URL}, headers=rebound)
+        assert response.status_code == 403
+        assert response.json()["detail"] == "Host not allowed"
+        # CORS_ORIGINS hosts count, without their scheme or port
+        monkeypatch.setattr(get_settings(), "cors_origins", "https://app.example.org:8443")
+        assert client.get(REPOS, headers={"Host": "app.example.org:8443"}).status_code == 200
+
+    def test_allowed_hosts_star_serves_any_host(self, client, api_key, monkeypatch):
+        monkeypatch.setattr(get_settings(), "allowed_hosts", "*")
+        assert client.get(REPOS, headers={"Host": "anything.example"}).status_code == 200
+
+    def test_health_is_served_on_any_host(self, client, api_key):
+        assert client.get("/health", headers={"Host": "10.0.0.5"}).status_code == 200
 
     @pytest.mark.parametrize(
         ("host", "served"),
@@ -261,6 +278,43 @@ class TestUrlValidation:
     def test_duplicate_url_is_409(self, client):
         assert client.post(REPOS, json={"url": URL}).status_code == 201
         assert client.post(REPOS, json={"url": URL + ".git"}).status_code == 409
+
+    def test_a_duplicate_that_slips_past_the_check_is_409(self, client, monkeypatch):
+        # Two creates racing: both pass the lookup, the second insert hits the unique index
+        assert client.post(REPOS, json={"url": URL}).status_code == 201
+        from sqlalchemy.orm import Query
+
+        monkeypatch.setattr(Query, "first", lambda self: None)
+        response = client.post(REPOS, json={"url": URL})
+        assert response.status_code == 409
+        assert "already exists" in response.json()["detail"]
+
+    def test_the_branch_cannot_change_while_a_job_holds_the_repository(self, client, monkeypatch):
+        created = client.post(REPOS, json={"url": URL}).json()
+        monkeypatch.setattr("app.api.v1.endpoints.repositories.is_processing", lambda _id: True)
+        url = f"{REPOS}{created['id']}"
+        assert client.put(url, json={"branch": "dev"}).status_code == 409
+        # Other fields, or the same branch, are fine
+        assert client.put(url, json={"name": "renamed", "branch": None}).status_code == 200
+
+    def test_a_bad_body_is_not_logged_as_a_database_error(self, monkeypatch):
+        # FastAPI raises a body's 422 through get_db (the client fixture overrides it, so drive it here)
+        from fastapi.exceptions import RequestValidationError
+
+        from app.core import database
+
+        logged = []
+
+        class Logger:
+            def error(self, *args, **kwargs):
+                logged.append(args)
+
+        monkeypatch.setattr(database, "logger", Logger())
+        session = database.get_db()
+        next(session)
+        with pytest.raises(RequestValidationError):
+            session.throw(RequestValidationError([{"loc": ("body", "url"), "input": "secret body"}]))
+        assert logged == []
 
     def test_limit_must_be_positive(self, client):
         assert client.get(REPOS, params={"limit": 0}).status_code == 422

@@ -239,6 +239,21 @@ def test_subscribing_past_the_cap_returns_an_error_frame(monkeypatch):
         assert "subscriptions" in frame["data"]["message"]
 
 
+def test_connections_past_the_cap_are_closed_with_1013(monkeypatch):
+    from fastapi import WebSocketDisconnect
+
+    monkeypatch.setattr("app.services.websocket_service.MAX_CONNECTIONS", 1)
+    client = TestClient(app, base_url="http://localhost", client=LOCAL)
+    with client.websocket_connect("ws://localhost/ws") as first:
+        first.receive_json()  # connected
+        with pytest.raises(WebSocketDisconnect) as excinfo, client.websocket_connect("ws://localhost/ws") as ws:
+            ws.receive_json()
+        assert excinfo.value.code == 1013
+    # The first one has gone, so there is room again
+    with client.websocket_connect("ws://localhost/ws") as ws:
+        assert ws.receive_json()["type"] == "connected"
+
+
 async def test_deleting_a_repository_forgets_its_subscribers(db_session, algolia_index):
     from app.models.repository import Repository
     from app.services.repository_service import RepositoryService

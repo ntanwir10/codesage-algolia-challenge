@@ -1,4 +1,5 @@
 import structlog
+from fastapi.exceptions import RequestValidationError
 from sqlalchemy import create_engine, event
 from sqlalchemy.orm import declarative_base, sessionmaker
 from starlette.exceptions import HTTPException
@@ -44,8 +45,9 @@ def get_db():
     db = SessionLocal()
     try:
         yield db
-    except HTTPException:
-        # A deliberate 4xx (FastAPI's or slowapi's 429), not a database problem
+    except (HTTPException, RequestValidationError):
+        # A deliberate 4xx (FastAPI's, slowapi's 429 or a 422 for a bad body), not a database
+        # problem; a 422's text also carries the request body, which doesn't belong in the log
         db.rollback()
         raise
     except Exception as e:

@@ -6,6 +6,8 @@ cached Settings object: database, Algolia, GitHub, API key, CORS, rate limits
 and the MCP server description.
 """
 
+from urllib.parse import urlsplit
+
 # Load environment variables from .env file
 import structlog
 from dotenv import load_dotenv
@@ -15,6 +17,8 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 load_dotenv()
 
 logger = structlog.get_logger()
+
+LOOPBACK_HOSTS = ("127.0.0.1", "localhost", "::1")
 
 
 class Settings(BaseSettings):
@@ -78,6 +82,22 @@ class Settings(BaseSettings):
             origin.strip() for origin in self.cors_origins.split(",") if origin.strip()
         ]
 
+    allowed_hosts: str = Field(
+        default="",
+        description=(
+            "Comma-separated extra hostnames the API answers to, on top of loopback and "
+            "the CORS_ORIGINS hosts; '*' allows any (and so allows DNS rebinding)"
+        ),
+    )
+
+    @property
+    def allowed_hosts_list(self) -> list[str]:
+        """Hostnames (no port) a request's Host may name when a key is configured"""
+        hosts = [*LOOPBACK_HOSTS]
+        hosts += [urlsplit(origin).hostname or "" for origin in self.cors_origins_list]
+        hosts += [h.strip().lower() for h in self.allowed_hosts.split(",") if h.strip()]
+        return [h for h in dict.fromkeys(hosts) if h]
+
     # Rate Limiting (Essential only)
     enable_rate_limiting: bool = True
     rate_limit_default: str = "100/minute"
@@ -104,9 +124,6 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", case_sensitive=False, extra="ignore")
 
 
-LOOPBACK_HOSTS = ("127.0.0.1", "localhost", "::1")
-
-
 def validate_runtime_settings(settings: Settings) -> None:
     """Refuse to start with an unsafe configuration; warn about a soft one."""
     if "*" in settings.cors_origins_list:
@@ -114,6 +131,8 @@ def validate_runtime_settings(settings: Settings) -> None:
             "CORS_ORIGINS must not contain '*' because credentials are allowed; "
             "list the allowed origins explicitly"
         )
+    if "*" in settings.allowed_hosts_list:
+        logger.warning("ALLOWED_HOSTS contains '*'; any Host is served, so DNS rebinding is not blocked")
     loopback = settings.mcp_server_host in LOOPBACK_HOSTS
     if not settings.codesage_api_key:
         if not loopback:
