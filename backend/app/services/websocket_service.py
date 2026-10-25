@@ -51,8 +51,13 @@ class WebSocketManager:
 
     async def connect(self, websocket: WebSocket, subprotocol: str | None = None):
         """Accept a new WebSocket connection"""
-        await websocket.accept(subprotocol=subprotocol)
+        # Counted before the await, so handshakes racing the MAX_CONNECTIONS check can't all pass it
         self.active_connections.add(websocket)
+        try:
+            await websocket.accept(subprotocol=subprotocol)
+        except BaseException:
+            self.active_connections.discard(websocket)
+            raise
         logger.info(
             "WebSocket connection established",
             total_connections=len(self.active_connections),

@@ -266,6 +266,10 @@ class TestUrlValidation:
         assert body["url"] == URL
         assert body["name"] == "octocat/hello"
 
+    def test_an_explicit_empty_branch_beats_the_url_branch(self, client):
+        response = client.post(REPOS, json={"url": f"{URL}/tree/dev", "branch": ""})
+        assert response.json()["branch"] is None
+
     def test_branch_is_taken_from_the_url(self, client):
         response = client.post(REPOS, json={"url": f"{URL}/tree/dev"})
         assert response.json()["branch"] == "dev"

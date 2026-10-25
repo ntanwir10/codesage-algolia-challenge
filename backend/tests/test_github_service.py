@@ -292,6 +292,11 @@ async def test_contents_walk_stops_at_its_request_cap(github_api, monkeypatch):
     assert service.listing_truncated
     assert "/repos/octo/demo/contents/b?ref=dev" not in github_api["requests"]
 
+    # The same service listing a complete tree next reports it as complete
+    github_api["trees"]["dev"] = {"tree": [blob("app.py", 5)], "truncated": False}
+    await service.get_repository_files(REPO_URL, "dev")
+    assert not service.listing_truncated
+
 
 async def test_downloads_run_concurrently_within_the_limit(github_api):
     paths = [f"f{i}.py" for i in range(12)]

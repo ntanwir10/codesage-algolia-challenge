@@ -296,6 +296,7 @@ class GitHubService:
                         )
                 logger.info("Fetching repository files", owner=owner, repo=repo, branch=branch)
 
+                self._walk_requests, self.listing_truncated = 0, False
                 entries = await self._list_entries(session, owner, repo, branch)
                 candidates = self._select_candidates(entries)
                 files = await self._download_all(session, owner, repo, branch, candidates)
@@ -368,7 +369,6 @@ class GitHubService:
         if tree.get("truncated"):
             logger.warning("Git tree truncated, walking contents API", owner=owner, repo=repo)
             entries: list[tuple[str, int]] = []
-            self._walk_requests, self.listing_truncated = 0, False
             await self._walk_contents(session, owner, repo, branch, "", entries)
             return entries
         return [

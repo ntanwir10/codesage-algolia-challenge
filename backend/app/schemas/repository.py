@@ -32,8 +32,11 @@ class RepositoryCreate(RepositoryBase):
         if self.branch and not is_valid_branch(self.branch):
             raise ValueError("Invalid branch name")
         self.url = f"https://github.com/{owner}/{repo}"
-        # Empty means the default branch; store it as null, like an update does
-        self.branch = self.branch or url_branch or None
+        # An explicit empty branch means the default one, even with a /tree/<branch> URL;
+        # only an omitted branch falls back to the URL's. Stored as null, like an update does
+        if "branch" not in self.model_fields_set:
+            self.branch = url_branch
+        self.branch = self.branch or None
         if not self.name.strip():
             self.name = f"{owner}/{repo}"
         return self

@@ -239,6 +239,23 @@ def test_subscribing_past_the_cap_returns_an_error_frame(monkeypatch):
         assert "subscriptions" in frame["data"]["message"]
 
 
+async def test_a_connection_counts_against_the_cap_before_its_accept_completes():
+    # The cap check and this registration have no await between them, so racing handshakes
+    # can't all see room; a failed accept gives the slot back
+    manager = WebSocketManager()
+    seen = []
+
+    class Slow(FakeWebSocket):
+        async def accept(self, subprotocol=None):
+            seen.append(manager.get_connection_count())
+            raise RuntimeError("client went away")
+
+    with pytest.raises(RuntimeError):
+        await manager.connect(Slow())
+    assert seen == [1]
+    assert manager.get_connection_count() == 0
+
+
 def test_connections_past_the_cap_are_closed_with_1013(monkeypatch):
     from fastapi import WebSocketDisconnect
 
