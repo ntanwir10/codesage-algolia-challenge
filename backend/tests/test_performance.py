@@ -90,7 +90,7 @@ async def test_failed_operation_recorded_and_cleaned_up():
     ],
 )
 def test_endpoints_return_200_quickly(path):
-    client = TestClient(app)
+    client = TestClient(app, base_url="http://localhost")
     start = time.perf_counter()
     response = client.get(path)
     assert response.status_code == 200, response.text
@@ -98,7 +98,7 @@ def test_endpoints_return_200_quickly(path):
 
 
 def test_reset_and_operation_endpoints():
-    client = TestClient(app)
+    client = TestClient(app, base_url="http://localhost")
     assert client.post("/api/v1/performance/reset").status_code == 200
     assert client.get("/api/v1/performance/operations/nope").status_code == 404
 
@@ -113,5 +113,5 @@ def test_health_computes_system_metrics_once(monkeypatch):
         return original()
 
     monkeypatch.setattr(performance_monitor, "get_system_metrics", counting)
-    TestClient(app).get("/api/v1/performance/health-check")
+    TestClient(app, base_url="http://localhost").get("/api/v1/performance/health-check")
     assert calls == 1

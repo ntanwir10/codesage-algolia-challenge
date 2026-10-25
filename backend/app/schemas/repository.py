@@ -54,7 +54,9 @@ class RepositoryResponse(RepositoryBase):
 
     id: int
     status: RepositoryStatus = Field(..., description="Processing status")
-    error_message: str | None = Field(None, description="Why the last run failed")
+    error_message: str | None = Field(
+        None, description="Why the last run failed, or what a completed run left out"
+    )
     total_files: int = Field(default=0, description="Total number of files")
     processed_files: int = Field(default=0, description="Number of processed files")
     total_lines: int = Field(default=0, description="Total lines of code")

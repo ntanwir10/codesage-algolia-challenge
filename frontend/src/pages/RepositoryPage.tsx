@@ -302,6 +302,11 @@ export function RepositoryPage() {
                       <span className="ml-1">Real-time updates enabled.</span>
                     )}
                   </p>
+                  {repository.error_message && (
+                    <p className="mt-1 text-sm text-amber-700">
+                      {repository.error_message}
+                    </p>
+                  )}
                   <Button
                     variant="outline"
                     className="mt-2"

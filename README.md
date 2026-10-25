@@ -128,13 +128,13 @@ Set these in `backend/.env` (see `.env.example`):
 
 | Variable | Default | Notes |
 | --- | --- | --- |
-| `CODESAGE_API_KEY` | unset | Required unless bound to loopback |
+| `CODESAGE_API_KEY` | unset | Required unless bound to loopback; with no key, only requests addressed to `localhost`, `127.0.0.1` or `[::1]` are served |
 | `MCP_SERVER_HOST`, `MCP_SERVER_PORT` | `127.0.0.1`, `8001` | A non-loopback host requires the key |
 | `ALGOLIA_APP_ID`, `ALGOLIA_ADMIN_API_KEY` | unset | Required for indexing |
 | `ALGOLIA_INDEX_NAME` | `codesage_code_entities` | One index per database. Compose overrides it: `codesage_code_entities_docker` (dev) and `codesage_code_entities_prod` (prod) |
 | `GITHUB_TOKEN` | unset | Optional; raises GitHub rate limits |
 | `DATABASE_URL` | `sqlite:///./codesage.db` | SQLite only |
-| `CORS_ORIGINS` | localhost ports 3000, 5173, 5174 | Comma-separated; `*` is rejected |
+| `CORS_ORIGINS` | localhost ports 3000, 5173, 5174 | Comma-separated; `*` is rejected. Browser writes and WebSocket connections from any other origin get 403, unless the page is served from the API's own host |
 | `ENVIRONMENT`, `LOG_LEVEL` | `development`, `INFO` | `production` hides `/docs` |
 
 Rate limits (slowapi, per client address): 100 per minute on repository create and process, 30 per minute on the MCP tool-call endpoint.

@@ -48,4 +48,6 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
 
 # Single worker: WebSocket, rate-limit and job state are in-process and SQLite is
 # single-writer. Do not raise --workers without moving that state out of process.
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8001", "--workers", "1"]
+# Forwarded headers are trusted from any peer because only nginx can reach this port
+# (no published ports) and it overwrites X-Forwarded-For; rate limits key on that client IP.
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8001", "--workers", "1", "--forwarded-allow-ips", "*"]

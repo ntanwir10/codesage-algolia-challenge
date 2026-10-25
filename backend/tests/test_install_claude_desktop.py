@@ -89,6 +89,18 @@ def test_refuses_a_password_in_the_url(tmp_path, capsys):
     assert not cfg.exists()
 
 
+def test_basic_auth_does_not_copy_the_backend_key(tmp_path, monkeypatch):
+    # nginx supplies the key behind the basic-auth proxy; the config must not carry it
+    env_file = tmp_path / ".env"
+    env_file.write_text("CODESAGE_API_KEY=backend-secret\n")
+    monkeypatch.setattr(installer, "ENV_FILE", env_file)
+    monkeypatch.setattr(installer.shutil, "which", lambda name: "/usr/bin/security")
+    monkeypatch.setattr(installer.subprocess, "run", lambda cmd: type("R", (), {"returncode": 0})())
+    cfg = tmp_path / "c.json"
+    assert installer.main(["--config", str(cfg), "--server-url", "https://x", "--basic-auth", "ann"]) == 0
+    assert "backend-secret" not in cfg.read_text()
+
+
 def test_basic_auth_stores_password_in_keychain_and_only_user_in_config(tmp_path, monkeypatch):
     calls = []
     monkeypatch.setattr(installer.shutil, "which", lambda name: "/usr/bin/security")

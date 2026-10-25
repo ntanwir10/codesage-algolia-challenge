@@ -22,7 +22,7 @@ from app.api.v1.router import api_router
 from app.core.config import get_settings, validate_runtime_settings
 from app.core.database import SessionLocal, engine
 from app.core.migrations import upgrade_database
-from app.core.security import limiter
+from app.core.security import BrowserRequestGuard, limiter
 from app.models import code_entity, code_file, repository  # noqa: F401  registers tables
 from app.services.algolia_service import AlgoliaService
 from app.services.repository_service import recover_interrupted_jobs
@@ -151,6 +151,7 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
 
 
 # Add middleware
+app.add_middleware(BrowserRequestGuard)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins_list,

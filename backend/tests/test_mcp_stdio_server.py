@@ -41,7 +41,7 @@ def make_client(
     backend: Backend, api_key: str | None = None, mode: str = "auto", config: Config | None = None
 ) -> Client:
     server = build_server(
-        config or Config(server_url="http://backend.test", api_key=api_key), backend.factory
+        config or Config(server_url="https://backend.test", api_key=api_key), backend.factory
     )
     return Client(server, mode=mode)
 
@@ -130,7 +130,7 @@ async def test_unreachable_backend_retries_once_and_reports():
     async with make_client(Backend(down)) as client:
         result = await client.call_tool("list_repositories", {})
     assert result.is_error
-    assert "CodeSage backend not reachable at http://backend.test" in result.content[0].text
+    assert "CodeSage backend not reachable at https://backend.test" in result.content[0].text
     assert "make start-backend" in result.content[0].text
     assert len(calls) == 2
 
@@ -262,3 +262,15 @@ async def test_login_is_never_sent_over_plain_http_to_another_host(url, allow, r
     assert (backend.requests == []) is refused
     if refused:
         assert "CODESAGE_ALLOW_INSECURE_AUTH" in result.content[0].text
+
+
+@pytest.mark.parametrize(
+    ("url", "refused"),
+    [("http://codesage.example", True), ("https://codesage.example", False), ("http://localhost:8001", False)],
+)
+async def test_api_key_is_never_sent_over_plain_http_to_another_host(url, refused):
+    backend = Backend()
+    async with make_client(backend, config=Config(server_url=url, api_key="k-123")) as client:
+        result = await client.call_tool("list_repositories", {})
+    assert result.is_error is refused
+    assert (backend.requests == []) is refused

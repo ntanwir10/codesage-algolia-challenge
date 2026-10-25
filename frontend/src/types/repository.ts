@@ -14,6 +14,8 @@ export interface Repository {
   language?: string | null;
   framework?: string | null;
   status: RepositoryStatus;
+  /** Why the last run failed, or what a completed run left out. */
+  error_message?: string | null;
   total_files: number;
   processed_files: number;
   total_lines: number;

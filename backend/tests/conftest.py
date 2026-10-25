@@ -16,6 +16,7 @@ os.environ["ALGOLIA_ADMIN_API_KEY"] = "test-key"
 os.environ["CODESAGE_API_KEY"] = ""  # empty: no key required; tests that need one set it
 os.environ["ENABLE_RATE_LIMITING"] = "true"
 os.environ["MCP_SERVER_HOST"] = "127.0.0.1"
+os.environ["CORS_ORIGINS"] = "http://localhost:3000,http://localhost:5173"
 
 import pytest
 from algoliasearch.exceptions import AlgoliaException
@@ -86,7 +87,7 @@ def client(db_session):
 
     app.dependency_overrides[get_db] = override_get_db
     try:
-        yield TestClient(app)
+        yield TestClient(app, base_url="http://localhost")
     finally:
         app.dependency_overrides.clear()
 
@@ -182,6 +183,7 @@ class FakeGitHub:
         self.files = []
         self.error = None
         self.calls = []  # (repo_url, branch) per fetch
+        self.skipped_files = 0  # what the real service reports dropping over max_files
 
 
 @pytest.fixture
@@ -189,10 +191,13 @@ def github(monkeypatch):
     fake = FakeGitHub()
 
     class FakeGitHubService:
+        max_files = 1000
+
         async def get_repository_files(self, repo_url, branch=None):
             fake.calls.append((repo_url, branch))
             if fake.error:
                 raise fake.error
+            self.skipped_files = fake.skipped_files
             return list(fake.files)
 
     monkeypatch.setattr(github_module, "GitHubService", FakeGitHubService)

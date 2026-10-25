@@ -108,7 +108,41 @@ async def test_records_are_indexed_in_batches(db_session, github, algolia_index,
     await RepositoryService(db_session).process_repository(repo)
 
     assert repo.status == "completed"
+    assert repo.error_message is None
     assert algolia_index.save_batch_sizes == [2, 2, 2]
+
+
+async def test_a_failed_batch_completes_but_says_what_is_missing(
+    db_session, github, algolia_index, monkeypatch
+):
+    monkeypatch.setattr(repository_service, "DB_BATCH_SIZE", 1)
+    real_commit = db_session.commit
+
+    def commit():
+        if any(getattr(o, "file_path", None) == "b.py" for o in db_session.new):
+            raise RuntimeError("database is locked")
+        real_commit()
+
+    monkeypatch.setattr(db_session, "commit", commit)
+    repo = make_repository(db_session, status="pending")
+    github.files = [github_file("a.py", MODULE), github_file("b.py", MODULE)]
+
+    await RepositoryService(db_session).process_repository(repo)
+
+    assert repo.status == "completed"
+    assert repo.error_message == "Partially indexed: 1 of 2 files could not be stored"
+    assert {r["file_path"] for r in algolia_index.records.values()} == {"a.py"}
+
+
+async def test_files_over_the_limit_are_reported(db_session, github, algolia_index):
+    repo = make_repository(db_session, status="pending")
+    github.files = [github_file("a.py", MODULE)]
+    github.skipped_files = 5
+
+    await RepositoryService(db_session).process_repository(repo)
+
+    assert repo.status == "completed"
+    assert repo.error_message == "Partially indexed: 5 files over the 1000-file limit were skipped"
 
 
 async def test_record_content_carries_the_entity_body(db_session, github, algolia_index):
@@ -170,6 +204,29 @@ async def test_delete_keeps_the_row_when_algolia_cannot_delete(db_session, algol
 
     assert await RepositoryService(db_session).delete_repository(repo) is False
     assert db_session.get(Repository, repo.id) is not None
+
+
+async def test_no_run_can_start_while_a_delete_is_in_flight(db_session, monkeypatch):
+    repo = make_repository(db_session, status="completed")
+    entered, release = asyncio.Event(), asyncio.Event()
+
+    async def slow_delete(self, repository_id, wait=False):
+        entered.set()
+        await release.wait()
+        return True
+
+    monkeypatch.setattr(algolia_module.AlgoliaService, "delete_repository_index", slow_delete)
+    deleting = asyncio.create_task(RepositoryService(db_session).delete_repository(repo))
+    await entered.wait()
+
+    with pytest.raises(RepositoryBusyError):
+        start_processing(repo.id, force_reprocess=True)
+    with pytest.raises(RepositoryBusyError):
+        await RepositoryService(db_session).delete_repository(repo)
+
+    release.set()
+    assert await deleting is True
+    assert not repository_service.is_processing(repo.id)
 
 
 class TestEndpoints:

@@ -176,7 +176,7 @@ class RepositoryService:
             processed_files=repository.processed_files,
         )
         await self._broadcast_repository_status(
-            repository, message="Processing completed successfully"
+            repository, message=repository.error_message or "Processing completed successfully"
         )
         return repository
 
@@ -196,9 +196,8 @@ class RepositoryService:
 
         # 1. GitHub: list and download the repository's code files.
         # No branch means the repository's default branch.
-        files = await GitHubService().get_repository_files(
-            repository.url, repository.branch or None
-        )
+        github = GitHubService()
+        files = await github.get_repository_files(repository.url, repository.branch or None)
         logger.info("GitHub files retrieved", repository_id=repository.id, file_count=len(files))
         if not files:
             raise IngestionError("No supported code files found in repository")
@@ -293,6 +292,17 @@ class RepositoryService:
         if programming:
             repository.language = Counter(programming).most_common(1)[0][0]
         repository.framework = self._detect_framework(files)
+
+        # The run still completes, but a partial index must say what it left out
+        problems = []
+        if failed_files:
+            problems.append(f"{failed_files} of {len(files)} files could not be stored")
+        if github.skipped_files:
+            problems.append(
+                f"{github.skipped_files} files over the {github.max_files}-file limit were skipped"
+            )
+        if problems:
+            repository.error_message = "Partially indexed: " + "; ".join(problems)
 
         logger.info(
             "Repository indexed",
@@ -410,9 +420,14 @@ class RepositoryService:
         if is_processing(repository.id):
             raise RepositoryBusyError(f"Repository {repository.id} is being processed")
 
-        if not await AlgoliaService().delete_repository_index(repository.id, wait=True):
-            return False
+        # Hold the job slot so no run can start while the Algolia delete is awaited
+        _jobs[repository.id] = asyncio.current_task()
+        try:
+            if not await AlgoliaService().delete_repository_index(repository.id, wait=True):
+                return False
 
-        self.db.delete(repository)
-        self.db.commit()
-        return True
+            self.db.delete(repository)
+            self.db.commit()
+            return True
+        finally:
+            del _jobs[repository.id]
