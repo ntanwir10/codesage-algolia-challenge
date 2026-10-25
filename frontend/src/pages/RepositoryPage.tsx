@@ -76,10 +76,9 @@ export function RepositoryPage() {
       await api.deleteRepository(repository.id);
 
       addToast({ type: "success", title: "Repository deleted" });
-      // Leave first: removing queries this page still observes would refetch them (404 flash)
+      // Don't remove this page's queries: its observers would refetch the deleted repository
+      // (404s) before navigating unmounts them. Once unmounted they're inactive and expire.
       navigate("/dashboard");
-      queryClient.removeQueries({ queryKey: ["repository", repositoryId] });
-      queryClient.removeQueries({ queryKey: ["repository-status", repositoryId] });
       queryClient.invalidateQueries({ queryKey: ["repositories"] });
     } catch (error) {
       const { message, status: httpStatus } = describeError(error);
