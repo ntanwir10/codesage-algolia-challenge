@@ -5,6 +5,10 @@ on:
     branches: [master]
   pull_request:
 
+# Read-only token: no job writes to the repository
+permissions:
+  contents: read
+
 jobs:
   backend:
     runs-on: ubuntu-latest

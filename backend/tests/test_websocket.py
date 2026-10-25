@@ -8,6 +8,8 @@ from fastapi.testclient import TestClient
 from app.main import app
 from app.services.websocket_service import WebSocketManager, websocket_manager
 
+LOCAL = ("127.0.0.1", 50000)  # TestClient's default peer, "testclient", is not a loopback address
+
 
 class FakeWebSocket:
     def __init__(self, fail_send: bool = False, fail_close: bool = False):
@@ -49,7 +51,7 @@ def _status(manager, repo_id=7, **kw):
 
 
 def test_connected_frame_on_connect():
-    client = TestClient(app, base_url="http://localhost")
+    client = TestClient(app, base_url="http://localhost", client=LOCAL)
     with client.websocket_connect("ws://localhost/ws") as ws:
         frame = ws.receive_json()
     assert frame["type"] == "connected"
@@ -57,7 +59,7 @@ def test_connected_frame_on_connect():
 
 
 def test_subscribe_ping_unsubscribe_and_errors():
-    client = TestClient(app, base_url="http://localhost")
+    client = TestClient(app, base_url="http://localhost", client=LOCAL)
     with client.websocket_connect("ws://localhost/ws") as ws:
         ws.receive_json()  # connected
 
@@ -96,7 +98,7 @@ def test_subscribe_ping_unsubscribe_and_errors():
 
 
 def test_status_delivery_over_real_websocket():
-    client = TestClient(app, base_url="http://localhost")
+    client = TestClient(app, base_url="http://localhost", client=LOCAL)
     with client.websocket_connect("ws://localhost/ws") as ws:
         ws.receive_json()
         ws.send_json({"type": "subscribe", "repository_id": 42})
@@ -170,6 +172,84 @@ async def test_unsubscribe_stops_delivery():
     await _status(manager)
     assert ws.sent == []
     assert manager.repository_connections == {}
+
+
+async def test_a_client_that_stops_reading_is_dropped_not_waited_on(monkeypatch):
+    monkeypatch.setattr("app.services.websocket_service.SEND_TIMEOUT_SECONDS", 0.01)
+
+    class StuckWebSocket(FakeWebSocket):
+        async def send_text(self, text: str):
+            await asyncio.Event().wait()  # the send buffer never drains
+
+    manager = WebSocketManager()
+    stuck, alive = StuckWebSocket(), FakeWebSocket()
+    manager.active_connections.update({stuck, alive})
+    await manager.subscribe_to_repository(stuck, 7)
+    await manager.subscribe_to_repository(alive, 7)
+
+    await asyncio.wait_for(_status(manager), 1)
+
+    assert stuck not in manager.active_connections
+    assert len(alive.sent) == 1
+
+
+async def test_stalled_clients_cost_one_timeout_not_one_each(monkeypatch):
+    monkeypatch.setattr("app.services.websocket_service.SEND_TIMEOUT_SECONDS", 0.2)
+
+    class StuckWebSocket(FakeWebSocket):
+        async def send_text(self, text: str):
+            await asyncio.Event().wait()
+
+        async def close(self):
+            await asyncio.Event().wait()  # closing hangs too
+
+    manager = WebSocketManager()
+    stuck = [StuckWebSocket() for _ in range(5)]
+    for ws in stuck:
+        await manager.subscribe_to_repository(ws, 7)
+
+    started = asyncio.get_running_loop().time()
+    await _status(manager)
+    # Sequential sends would take 5 x (send + close) timeouts = 2s
+    assert asyncio.get_running_loop().time() - started < 0.8
+    assert 7 not in manager.repository_connections
+
+
+async def test_subscriptions_per_connection_are_capped(monkeypatch):
+    monkeypatch.setattr("app.services.websocket_service.MAX_SUBSCRIPTIONS_PER_CONNECTION", 2)
+    manager = WebSocketManager()
+    ws = FakeWebSocket()
+    assert await manager.subscribe_to_repository(ws, 1)
+    assert await manager.subscribe_to_repository(ws, 2)
+    assert await manager.subscribe_to_repository(ws, 2)  # already held, still fine
+    assert not await manager.subscribe_to_repository(ws, 3)
+    assert 3 not in manager.repository_connections
+
+
+def test_subscribing_past_the_cap_returns_an_error_frame(monkeypatch):
+    monkeypatch.setattr("app.services.websocket_service.MAX_SUBSCRIPTIONS_PER_CONNECTION", 1)
+    client = TestClient(app, base_url="http://localhost", client=LOCAL)
+    with client.websocket_connect("ws://localhost/ws") as ws:
+        ws.receive_json()  # connected
+        ws.send_json({"type": "subscribe", "repository_id": 1})
+        assert ws.receive_json()["type"] == "subscribed"
+        ws.send_json({"type": "subscribe", "repository_id": 2})
+        frame = ws.receive_json()
+        assert frame["type"] == "error"
+        assert "subscriptions" in frame["data"]["message"]
+
+
+async def test_deleting_a_repository_forgets_its_subscribers(db_session, algolia_index):
+    from app.models.repository import Repository
+    from app.services.repository_service import RepositoryService
+
+    repo = Repository(name="o/r", url="https://github.com/o/r", status="completed")
+    db_session.add(repo)
+    db_session.commit()
+    await websocket_manager.subscribe_to_repository(FakeWebSocket(), repo.id)
+
+    assert await RepositoryService(db_session).delete_repository(repo)
+    assert repo.id not in websocket_manager.repository_connections
 
 
 async def test_dead_socket_closed_and_removed_on_repository_broadcast():

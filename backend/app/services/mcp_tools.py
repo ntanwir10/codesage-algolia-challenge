@@ -33,12 +33,18 @@ MAX_FILE_LINES = 400
 SNIPPET_CHARS = 600
 MATCH_TEXT_CHARS = 300
 DESCRIPTION_CHARS = 300
+SIGNATURE_CHARS = 300
+FILE_CHARS = 100_000  # get_file: 400 lines of minified code could otherwise be megabytes
 REGEX_FILE_BYTES = 1_000_000
 REGEX_FILE_TIMEOUT = 1.0
+REGEX_CALL_TIMEOUT = 10.0  # the per-file budget alone allows files x 1s per call
+MAX_SKIPPED_LISTED = 50
+MAX_RESOURCE_FILES = 5000
+MAX_ID_DIGITS = 19  # int64
 GITHUB_PREFIX = "https://github.com/"
 
 REPOSITORIES_URI = "codesage://repositories"
-_FILES_URI = re.compile(r"codesage://repositories/([0-9]+)/files")
+_FILES_URI = re.compile(r"codesage://repositories/([0-9]{1,19})/files")
 
 
 class ToolError(Exception):
@@ -67,9 +73,11 @@ def resolve_repository(db: Session, ref: str) -> Repository:
     repositories = db.query(Repository).order_by(Repository.id).all()
 
     if ref.isascii() and ref.isdigit():
-        for repository in repositories:
-            if repository.id == int(ref):
-                return repository
+        # A 5000-digit ref would make int() raise; no real id is that long
+        if len(ref) <= MAX_ID_DIGITS:
+            for repository in repositories:
+                if repository.id == int(ref):
+                    return repository
     else:
         wanted = ref.lower()
         matches = [
@@ -150,8 +158,9 @@ async def search_code(db: Session, args: schemas.SearchCodeArgs) -> dict:
             page=args.page,
         )
     except Exception as exc:
+        # The client's text can name the Algolia host or app id; it stays in the log
         logger.warning("MCP search failed", error=str(exc))
-        raise ToolError(f"Search is unavailable: {exc}") from exc
+        raise ToolError("Search is unavailable; try again later") from exc
 
     hits = response.get("hits", [])
     known = {repository.id: repository} if repository else {}
@@ -168,9 +177,9 @@ async def search_code(db: Session, args: schemas.SearchCodeArgs) -> dict:
             "line_start": hit.get("line_start"),
             "line_end": hit.get("line_end"),
             "language": hit.get("language"),
-            "signature": hit.get("signature"),
+            "signature": (hit.get("signature") or "")[:SIGNATURE_CHARS] or None,
             "snippet": (hit.get("content") or "")[:SNIPPET_CHARS],
-            "description": hit.get("description"),
+            "description": (hit.get("description") or "")[:DESCRIPTION_CHARS] or None,
             "url": _permalink(known.get(hit.get("repository_id")), hit),
         }
         for hit in hits
@@ -224,8 +233,8 @@ async def get_file(db: Session, args: schemas.GetFileArgs) -> dict:
         "total_lines": total,
         "start_line": start,
         "end_line": end,
-        "truncated": end < min(requested_end, total),
-        "content": content,
+        "truncated": end < min(requested_end, total) or len(content) > FILE_CHARS,
+        "content": content[:FILE_CHARS],
     }
 
 
@@ -261,7 +270,7 @@ async def list_definitions(db: Session, args: schemas.ListDefinitionsArgs) -> di
                 "file_path": file_path,
                 "line_start": entity.start_line,
                 "line_end": entity.end_line,
-                "signature": entity.signature,
+                "signature": (entity.signature or "")[:SIGNATURE_CHARS] or None,
                 "description": (entity.docstring or "")[:DESCRIPTION_CHARS] or None,
             }
             for entity, file_path in rows
@@ -310,12 +319,17 @@ def _scan(
     matches: list[dict] = []
     skipped: list[str] = []
 
-    for file_path, content in files:
+    call_deadline = time.monotonic() + REGEX_CALL_TIMEOUT
+    for index, (file_path, content) in enumerate(files):
         if compiled is not None:
+            if time.monotonic() >= call_deadline:
+                # The call's own budget is spent: report the rest unscanned, results incomplete
+                skipped.extend(path for path, _ in files[index:])
+                return matches, True, skipped
             if len(content) > REGEX_FILE_BYTES:
                 skipped.append(file_path)
                 continue
-            deadline = time.monotonic() + REGEX_FILE_TIMEOUT
+            deadline = min(time.monotonic() + REGEX_FILE_TIMEOUT, call_deadline)
         for number, line in enumerate(content.splitlines(), 1):
             if compiled is None:
                 hit = line.find(pattern) != -1
@@ -346,18 +360,19 @@ async def find_patterns(db: Session, args: schemas.FindPatternsArgs) -> dict:
         except regex.error as exc:
             raise ToolError(f"Invalid regular expression: {exc}") from exc
 
-    files = (
-        db.query(CodeFile.file_path, CodeFile.content)
-        .filter(CodeFile.repository_id == repository.id)
-        .order_by(CodeFile.file_path)
-        .all()
-    )
-    if args.path_glob:
-        files = [row for row in files if fnmatch.fnmatchcase(row[0], args.path_glob)]
+    def load_and_scan():
+        # Loads every file's content, so it runs off the event loop along with the scan
+        files = (
+            db.query(CodeFile.file_path, CodeFile.content)
+            .filter(CodeFile.repository_id == repository.id)
+            .order_by(CodeFile.file_path)
+            .all()
+        )
+        if args.path_glob:
+            files = [row for row in files if fnmatch.fnmatchcase(row[0], args.path_glob)]
+        return _scan([tuple(row) for row in files], args.pattern, args.regex, args.max_results)
 
-    matches, truncated, skipped = await asyncio.to_thread(
-        _scan, [tuple(row) for row in files], args.pattern, args.regex, args.max_results
-    )
+    matches, truncated, skipped = await asyncio.to_thread(load_and_scan)
     result = {
         "repository": repository.name,
         "pattern": args.pattern,
@@ -367,7 +382,8 @@ async def find_patterns(db: Session, args: schemas.FindPatternsArgs) -> dict:
         "matches": matches,
     }
     if skipped:
-        result["skipped_files"] = skipped
+        result["skipped_files"] = skipped[:MAX_SKIPPED_LISTED]
+        result["skipped_count"] = len(skipped)
     return result
 
 
@@ -412,17 +428,23 @@ async def read_resource(db: Session, uri: str) -> dict:
         match = _FILES_URI.fullmatch(uri)
         if match is None:
             raise ToolError(f"Unknown resource '{uri}'")
-        repository = db.get(Repository, int(match.group(1)))
+        repository_id = int(match.group(1))
+        # Past int64 the database raises instead of finding nothing
+        repository = db.get(Repository, repository_id) if repository_id < 2**63 else None
         if repository is None:
             raise ToolError(f"Repository {match.group(1)} not found")
+        files = db.query(CodeFile).filter(CodeFile.repository_id == repository.id)
+        total = files.count()
         rows = (
-            db.query(CodeFile.file_path, CodeFile.language, CodeFile.line_count)
-            .filter(CodeFile.repository_id == repository.id)
+            files.with_entities(CodeFile.file_path, CodeFile.language, CodeFile.line_count)
             .order_by(CodeFile.file_path)
+            .limit(MAX_RESOURCE_FILES)
             .all()
         )
         content = {
             "repository": repository.name,
+            "total_files": total,
+            "truncated": total > len(rows),
             "files": [
                 {"file_path": path, "language": language, "line_count": lines}
                 for path, language, lines in rows

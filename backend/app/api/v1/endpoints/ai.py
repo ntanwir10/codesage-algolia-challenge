@@ -25,8 +25,15 @@ class MCPToolCallRequest(BaseModel):
     arguments: dict[str, Any] = Field(default_factory=dict, description="Arguments for the tool")
 
 
-@router.get("/search/suggestions", summary="Get Search Suggestions")
+# Searches every repository, like the search_code tool, so it takes the same key
+@router.get(
+    "/search/suggestions",
+    summary="Get Search Suggestions",
+    dependencies=[Depends(require_api_key)],
+)
+@limiter.limit(lambda: settings.rate_limit_default)
 async def get_search_suggestions(
+    request: Request,  # slowapi needs the request under this name
     query: str = Query(..., description="Query string to get suggestions for"),
     limit: int = Query(default=10, ge=1, le=20, description="Maximum number of suggestions"),
     repository_id: int | None = Query(None, description="Optional repository ID filter"),
@@ -104,8 +111,15 @@ async def list_mcp_resources():
     return {"resources": resources, "count": len(resources)}
 
 
-@router.get("/mcp/resources/read", summary="Read MCP Resource")
+# Lists a repository's file paths, which no public GET shows, so it takes the key like the tools
+@router.get(
+    "/mcp/resources/read",
+    summary="Read MCP Resource",
+    dependencies=[Depends(require_api_key)],
+)
+@limiter.limit(lambda: settings.rate_limit_ai)
 async def read_mcp_resource(
+    request: Request,  # slowapi needs the request under this name
     uri: str = Query(..., description="Resource URI"),
     db: Session = Depends(get_db),
 ):

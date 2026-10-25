@@ -8,7 +8,9 @@ repository, and always ends in `completed` or `failed` with a reason.
 """
 
 import asyncio
+import contextlib
 import json
+import weakref
 from collections import Counter
 from datetime import UTC, datetime
 
@@ -17,6 +19,7 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.core.database import SessionLocal
+from app.core.security import failure_message
 from app.models.code_entity import CodeEntity
 from app.models.code_file import CodeFile
 from app.models.repository import Repository
@@ -34,6 +37,20 @@ NON_PROGRAMMING_LANGUAGES = {"text", "markdown", "json", "yaml", "xml", "css", "
 # Background jobs keyed by repository id. Module level, so a job outlives the
 # request that started it and a repository is never processed twice at once.
 _jobs: dict[int, asyncio.Task] = {}
+
+# Each run holds up to GitHubService.max_total_bytes of files in memory; cap how many run at once
+MAX_CONCURRENT_RUNS = 2
+_run_slots: "weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, asyncio.Semaphore]" = (
+    weakref.WeakKeyDictionary()
+)
+
+
+def _run_slot() -> asyncio.Semaphore:
+    """This event loop's semaphore: one shared across loops raises once both have waited on it"""
+    loop = asyncio.get_running_loop()
+    if loop not in _run_slots:
+        _run_slots[loop] = asyncio.Semaphore(MAX_CONCURRENT_RUNS)
+    return _run_slots[loop]
 
 
 class IngestionError(Exception):
@@ -82,6 +99,32 @@ async def _run_job(repository_id: int, force_reprocess: bool):
             error=str(e),
             error_type=type(e).__name__,
         )
+        _fail_if_still_processing(repository_id)
+
+
+def _fail_if_still_processing(repository_id: int) -> None:
+    """After a crash, don't leave the row 'processing' with no job behind it until a restart"""
+    try:
+        with SessionLocal() as db:
+            repository = db.get(Repository, repository_id)
+            if repository is not None and repository.status == "processing":
+                repository.status = "failed"
+                repository.error_message = "Processing stopped unexpectedly; reprocess the repository"
+                db.commit()
+    except Exception as e:
+        logger.error("Could not mark the crashed job failed", repository_id=repository_id, error=str(e))
+
+
+async def _to_thread_to_completion(fn):
+    """asyncio.to_thread that, if the caller is cancelled, still waits for the thread, so
+    the caller's finally (freeing the job slot) can't run while the thread uses its session"""
+    future = asyncio.ensure_future(asyncio.to_thread(fn))
+    try:
+        return await asyncio.shield(future)
+    except asyncio.CancelledError:
+        with contextlib.suppress(Exception):
+            await future
+        raise
 
 
 def recover_interrupted_jobs(db: Session) -> int:
@@ -142,27 +185,29 @@ class RepositoryService:
             return repository
 
         repository.status = "processing"
+        repository.processed_files = 0  # the previous run's count would show as progress
         repository.error_message = None
         self.db.commit()
         await self._broadcast_repository_status(repository)
 
         try:
-            async with monitor_repository_processing(repository.id):
+            # A run already shows "processing" while it waits here for a free slot
+            async with _run_slot(), monitor_repository_processing(repository.id):
                 await self.process_repository_files(repository)
         except Exception as e:
             # Discard any half-written work so recording the failure can't fail too
             self.db.rollback()
             repository.status = "failed"
-            repository.error_message = f"{type(e).__name__}: {e}"
+            repository.error_message = failure_message(e)
             self.db.commit()
             logger.error(
                 "Repository processing failed",
                 repository_id=repository.id,
-                error=str(e),
+                error=repository.error_message,
                 error_type=type(e).__name__,
             )
             await self._broadcast_repository_status(
-                repository, error=str(e), message="Processing failed"
+                repository, error=repository.error_message, message="Processing failed"
             )
             return repository
 
@@ -213,14 +258,25 @@ class RepositoryService:
         documents = []
         processed_files = 0
         failed_files = 0
+        unparsed_files = 0
 
         for start in range(0, len(files), DB_BATCH_SIZE):
             batch = files[start : start + DB_BATCH_SIZE]
             batch_documents = []
             for file in batch:
-                entities = await code_parser.extract_entities(
-                    file.path, file.content, file.language
-                )
+                try:
+                    entities = await code_parser.extract_entities(
+                        file.path, file.content, file.language
+                    )
+                except Exception as e:
+                    # Still stored, just without entities; the run reports it
+                    entities = []
+                    unparsed_files += 1
+                    logger.error(
+                        "Failed to parse code file",
+                        file_path=file.path,
+                        error=failure_message(e),
+                    )
                 code_file = CodeFile(
                     repository_id=repository.id,
                     file_path=file.path,
@@ -263,7 +319,7 @@ class RepositoryService:
                     "Failed to store file batch",
                     repository_id=repository.id,
                     first_file=batch[0].path,
-                    error=str(e),
+                    error=failure_message(e),
                 )
                 continue
 
@@ -297,9 +353,12 @@ class RepositoryService:
         problems = []
         if failed_files:
             problems.append(f"{failed_files} of {len(files)} files could not be stored")
+        if unparsed_files:
+            problems.append(f"{unparsed_files} files could not be parsed")
         if github.skipped_files:
             problems.append(
-                f"{github.skipped_files} files over the {github.max_files}-file limit were skipped"
+                f"{github.skipped_files} files over the {github.max_files}-file or "
+                f"{github.max_total_bytes // 2**20} MB limit were skipped"
             )
         if problems:
             repository.error_message = "Partially indexed: " + "; ".join(problems)
@@ -407,7 +466,7 @@ class RepositoryService:
             self.db.commit()
 
         # Large repositories have thousands of rows to delete; keep it off the event loop
-        await asyncio.to_thread(clear_rows)
+        await _to_thread_to_completion(clear_rows)
 
     async def delete_repository(self, repository: Repository) -> bool:
         """Delete a repository and its Algolia records.
@@ -423,11 +482,17 @@ class RepositoryService:
         # Hold the job slot so no run can start while the Algolia delete is awaited
         _jobs[repository.id] = asyncio.current_task()
         try:
-            if not await AlgoliaService().delete_repository_index(repository.id, wait=True):
+            # Bulk-deletes the rows off the event loop, so the ORM cascade below finds none to load
+            try:
+                await self._clear_repository_data(repository.id, AlgoliaService())
+            except IngestionError:
                 return False
 
             self.db.delete(repository)
             self.db.commit()
+            from app.services.websocket_service import websocket_manager
+
+            websocket_manager.forget_repository(repository.id)
             return True
         finally:
             del _jobs[repository.id]

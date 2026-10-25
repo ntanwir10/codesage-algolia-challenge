@@ -49,10 +49,22 @@ services:
       - NGINX_ENVSUBST_FILTER=^CODESAGE_API_KEY$$
     volumes:
       - ./nginx.prod.conf.template:/etc/nginx/templates/default.conf.template:ro
+      # create_host_path: false makes a missing file fail at start instead of
+      # silently becoming an empty directory that nginx then can't read
       # Create with: docker run --rm httpd:alpine htpasswd -nbB <user> <password> > deployment/htpasswd
-      - ./htpasswd:/etc/nginx/htpasswd:ro
+      - type: bind
+        source: ./htpasswd
+        target: /etc/nginx/htpasswd
+        read_only: true
+        bind:
+          create_host_path: false
       # cert.pem and key.pem; see DOCKER.md for a self-signed pair
-      - ./ssl:/etc/nginx/ssl:ro
+      - type: bind
+        source: ./ssl
+        target: /etc/nginx/ssl
+        read_only: true
+        bind:
+          create_host_path: false
     depends_on:
       backend:
         condition: service_healthy

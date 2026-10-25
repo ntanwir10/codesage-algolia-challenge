@@ -1,10 +1,12 @@
 """API-key authentication, browser request checks and rate limiting."""
 
+import ipaddress
 import secrets
 
 from fastapi import Header, HTTPException
 from slowapi import Limiter
 from slowapi.util import get_remote_address
+from sqlalchemy.exc import SQLAlchemyError
 from starlette.datastructures import Headers
 from starlette.responses import JSONResponse
 
@@ -31,6 +33,14 @@ async def require_api_key(x_api_key: str | None = Header(None)) -> None:
         raise HTTPException(status_code=401, detail="Invalid or missing API key")
 
 
+def failure_message(error: Exception) -> str:
+    """What a failed run records and broadcasts; the full error goes to the log only"""
+    # A SQLAlchemy error's text carries the SQL and its parameters, which include file contents
+    if isinstance(error, SQLAlchemyError):
+        return "Database error while storing the repository"
+    return f"{type(error).__name__}: {error}"[:500]
+
+
 UNSAFE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
 
 
@@ -43,6 +53,13 @@ def _hostname(host: str) -> str:
     return host.rpartition(":")[0] if host.count(":") == 1 else host
 
 
+def _is_loopback_peer(client) -> bool:
+    try:
+        return ipaddress.ip_address(client[0]).is_loopback
+    except (TypeError, IndexError, ValueError):  # no peer (unix socket) or not an IP
+        return False
+
+
 def request_refusal(scope) -> str | None:
     """Why a request a browser may have been tricked into sending must be refused.
 
@@ -52,9 +69,14 @@ def request_refusal(scope) -> str | None:
     settings = get_settings()
     headers = Headers(scope=scope)
     host = headers.get("host", "")
-    # DNS rebinding: a hostile page re-pointed at 127.0.0.1 is same-origin but keeps its own Host
-    if not settings.codesage_api_key and _hostname(host) not in LOOPBACK_HOSTS:
-        return "Host not allowed"
+    if not settings.codesage_api_key:
+        # DNS rebinding: a hostile page re-pointed at 127.0.0.1 is same-origin but keeps its own Host
+        if _hostname(host) not in LOOPBACK_HOSTS:
+            return "Host not allowed"
+        # Bound to 0.0.0.0 by hand (MCP_SERVER_HOST unset), a LAN client could send Host: localhost,
+        # but not a loopback address
+        if not _is_loopback_peer(scope.get("client")):
+            return "Only local clients are served without an API key"
     if scope["type"] == "http" and scope["method"] not in UNSAFE_METHODS:
         return None
     # Browsers always send Origin on cross-site writes and WebSocket handshakes; other clients may not

@@ -87,6 +87,11 @@ def is_denied_path(path: str) -> bool:
     return any(fnmatch.fnmatchcase(name, pat) for pat in DENIED_FILE_PATTERNS)
 
 
+def is_valid_branch(branch: str) -> bool:
+    """False for names that could step outside the repository in an API path"""
+    return bool(branch) and ".." not in branch.split("/") and "\x00" not in branch
+
+
 def parse_github_url(url: str) -> tuple[str, str, str | None]:
     """Parse a GitHub URL into (owner, repo, branch_or_None).
 
@@ -129,9 +134,10 @@ def parse_github_url(url: str) -> tuple[str, str, str | None]:
 
     if repo.endswith(".git"):
         repo = repo[: -len(".git")]
-    if not _NAME_RE.match(owner) or not repo or not _NAME_RE.match(repo) or repo in (".", ".."):
+    # "." and ".." as owner would turn api.github.com/users/<owner> into api.github.com/user
+    if not _NAME_RE.match(owner) or owner in (".", "..") or not repo or not _NAME_RE.match(repo) or repo in (".", ".."):
         raise ValueError(f"Invalid GitHub URL (bad owner or repository name): {url}")
-    if branch is not None and (not branch or ".." in branch.split("/") or "\x00" in branch):
+    if branch is not None and not is_valid_branch(branch):
         raise ValueError(f"Invalid GitHub URL (bad branch): {url}")
     return owner, repo, branch
 
@@ -175,7 +181,8 @@ class GitHubService:
         # Set processing limits
         self.max_files = 1000  # Maximum number of files to process
         self.max_file_size = 1024 * 1024  # 1MB file size limit
-        self.skipped_files = 0  # Code files the last listing dropped over max_files
+        self.max_total_bytes = 100 * 1024 * 1024  # a run holds every file in memory at once
+        self.skipped_files = 0  # Code files the last listing dropped over max_files / max_total_bytes
 
         if not self.token:
             logger.warning("GitHub token not found. Rate limits will be lower.")
@@ -315,16 +322,22 @@ class GitHubService:
                 continue
             selected.append((path, size))
         selected.sort()
-        self.skipped_files = 0  # describes this listing only, even on a reused instance
-        if len(selected) > self.max_files:
+        kept, total_bytes = 0, 0
+        for _, size in selected:
+            if kept == self.max_files or total_bytes + size > self.max_total_bytes:
+                break
+            kept += 1
+            total_bytes += size
+        self.skipped_files = len(selected) - kept
+        if self.skipped_files:
             logger.warning(
-                "Repository has too many files, limiting to max",
+                "Repository is over the file or size limit, indexing the first files only",
                 total_files=len(selected),
+                kept_files=kept,
                 max_files=self.max_files,
+                max_total_bytes=self.max_total_bytes,
             )
-            self.skipped_files = len(selected) - self.max_files
-            selected = selected[: self.max_files]
-        return selected
+        return selected[:kept]
 
     async def _list_entries(
         self, session: aiohttp.ClientSession, owner: str, repo: str, branch: str

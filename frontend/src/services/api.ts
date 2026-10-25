@@ -36,7 +36,8 @@ export function onApiAuthError(listener: AuthErrorListener): () => void {
 }
 
 let lastAuthNotice = 0;
-function notifyAuthError(): void {
+/** Also called by the WebSocket service when /ws closes with 1008. */
+export function notifyAuthError(): void {
   const now = Date.now();
   if (now - lastAuthNotice < 5000) return;
   lastAuthNotice = now;

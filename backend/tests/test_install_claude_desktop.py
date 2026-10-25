@@ -45,6 +45,16 @@ def test_writes_backup_and_mode_600(tmp_path):
     backups = list(tmp_path.glob("c.json.bak-*"))
     assert len(backups) == 1 and json.loads(backups[0].read_text()) == {"a": 1}
     assert stat.S_IMODE(cfg.stat().st_mode) == 0o600
+    assert stat.S_IMODE(backups[0].stat().st_mode) == 0o600
+
+
+def test_backup_is_a_byte_for_byte_copy(tmp_path):
+    cfg = tmp_path / "c.json"
+    original = b'{\r\n  "a": "caf\xc3\xa9"\r\n}\r\n'  # CRLF line endings, non-ASCII
+    cfg.write_bytes(original)
+    assert run(cfg) == 0
+    (backup,) = tmp_path.glob("c.json.bak-*")
+    assert backup.read_bytes() == original
     assert not list(tmp_path.glob("*.tmp"))
 
 

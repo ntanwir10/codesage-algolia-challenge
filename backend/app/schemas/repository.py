@@ -1,9 +1,9 @@
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from app.services.github_service import parse_github_url
+from app.services.github_service import is_valid_branch, parse_github_url
 
 RepositoryStatus = Literal["pending", "processing", "completed", "failed"]
 
@@ -29,6 +29,8 @@ class RepositoryCreate(RepositoryBase):
     @model_validator(mode="after")
     def normalise(self) -> "RepositoryCreate":
         owner, repo, url_branch = parse_github_url(self.url)
+        if self.branch and not is_valid_branch(self.branch):
+            raise ValueError("Invalid branch name")
         self.url = f"https://github.com/{owner}/{repo}"
         if url_branch and not self.branch:
             self.branch = url_branch
@@ -45,6 +47,21 @@ class RepositoryUpdate(BaseModel):
     branch: str | None = None
     language: str | None = None
     framework: str | None = None
+
+    @field_validator("name")
+    @classmethod
+    def name_is_not_blank(cls, name: str | None) -> str:
+        # The column is NOT NULL; omit the field to leave the name alone
+        if name is None or not name.strip():
+            raise ValueError("name cannot be empty")
+        return name
+
+    @field_validator("branch")
+    @classmethod
+    def branch_is_valid(cls, branch: str | None) -> str | None:
+        if branch and not is_valid_branch(branch):
+            raise ValueError("Invalid branch name")
+        return branch
 
 
 class RepositoryResponse(RepositoryBase):

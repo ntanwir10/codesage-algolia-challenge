@@ -26,7 +26,7 @@ In development, `vite.config.ts` proxies `/api`, `/ws` and `/health` to `127.0.0
 
 | Variable | Purpose |
 | --- | --- |
-| `VITE_CODESAGE_API_KEY` | Sent as `X-API-Key` on requests and as `?api_key=` on the WebSocket. Must equal `CODESAGE_API_KEY` in `backend/.env`. |
+| `VITE_CODESAGE_API_KEY` | Sent as `X-API-Key` on requests and in a WebSocket subprotocol (never in the URL). Must equal `CODESAGE_API_KEY` in `backend/.env`. |
 | `VITE_API_BASE_URL` | Overrides the API base URL (default `/api/v1`) |
 | `VITE_WS_URL` (or `VITE_WEBSOCKET_URL`) | Overrides the WebSocket URL (default: same origin, `ws:` or `wss:` following the page) |
 

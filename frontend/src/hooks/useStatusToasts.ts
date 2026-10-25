@@ -44,7 +44,7 @@ export function useGlobalToasts(): void {
           type: "error",
           title: "API key rejected",
           description:
-            "The server returned 401. Set VITE_CODESAGE_API_KEY to the key the backend expects, then rebuild or restart the frontend.",
+            "The server rejected the key (HTTP 401 or WebSocket close 1008). Set VITE_CODESAGE_API_KEY to the key the backend expects, then rebuild or restart the frontend.",
           duration: 10000,
         })
       ),

@@ -1,3 +1,4 @@
+import asyncio
 import contextlib
 import json
 from datetime import UTC, datetime
@@ -11,6 +12,23 @@ from app.core.security import api_key_is_valid
 logger = structlog.get_logger()
 
 VALID_MESSAGE_TYPES = {"subscribe", "unsubscribe", "ping"}
+SEND_TIMEOUT_SECONDS = 5  # a client that stops reading must not stall a processing run
+MAX_SUBSCRIPTIONS_PER_CONNECTION = 100  # each is a dict entry; a client can't grow it unbounded
+
+# Browsers can't set headers on a WebSocket, so the key rides in a subprotocol
+# (hex, to stay a valid token) rather than the URL, where access logs would keep it
+SUBPROTOCOL = "codesage"
+KEY_SUBPROTOCOL_PREFIX = "codesage.key."
+
+
+def _key_from_subprotocols(protocols: list[str]) -> str | None:
+    for protocol in protocols:
+        if protocol.startswith(KEY_SUBPROTOCOL_PREFIX):
+            try:
+                return bytes.fromhex(protocol.removeprefix(KEY_SUBPROTOCOL_PREFIX)).decode()
+            except ValueError:  # bad hex or bad UTF-8
+                return None
+    return None
 
 
 def _now_iso() -> str:
@@ -30,9 +48,9 @@ class WebSocketManager:
         # Store connections by repository ID for targeted updates
         self.repository_connections: dict[int, set[WebSocket]] = {}
 
-    async def connect(self, websocket: WebSocket):
+    async def connect(self, websocket: WebSocket, subprotocol: str | None = None):
         """Accept a new WebSocket connection"""
-        await websocket.accept()
+        await websocket.accept(subprotocol=subprotocol)
         self.active_connections.add(websocket)
         logger.info(
             "WebSocket connection established",
@@ -58,12 +76,22 @@ class WebSocketManager:
         """Disconnect a failed socket and close it, ignoring close errors"""
         await self.disconnect(websocket)
         with contextlib.suppress(Exception):
-            await websocket.close()
+            await asyncio.wait_for(websocket.close(), SEND_TIMEOUT_SECONDS)
 
-    async def subscribe_to_repository(self, websocket: WebSocket, repository_id: int):
-        """Subscribe a WebSocket to updates for a specific repository"""
+    async def subscribe_to_repository(self, websocket: WebSocket, repository_id: int) -> bool:
+        """Subscribe a WebSocket to updates for a specific repository; False when it has too many"""
+        subscribers = self.repository_connections.get(repository_id, set())
+        if websocket not in subscribers:
+            held = sum(websocket in connections for connections in self.repository_connections.values())
+            if held >= MAX_SUBSCRIPTIONS_PER_CONNECTION:
+                return False
         self.repository_connections.setdefault(repository_id, set()).add(websocket)
         logger.info("WebSocket subscribed to repository", repository_id=repository_id)
+        return True
+
+    def forget_repository(self, repository_id: int) -> None:
+        """Drop a deleted repository's subscribers; nothing will be broadcast for it again"""
+        self.repository_connections.pop(repository_id, None)
 
     async def unsubscribe_from_repository(
         self, websocket: WebSocket, repository_id: int
@@ -78,13 +106,16 @@ class WebSocketManager:
 
     async def _send_to(self, connections: set[WebSocket], message: dict):
         payload = json.dumps(message)
-        # Iterate a snapshot: sends await, and the live sets can change meanwhile
-        for connection in list(connections):
+
+        async def send(connection: WebSocket):
             try:
-                await connection.send_text(payload)
+                await asyncio.wait_for(connection.send_text(payload), SEND_TIMEOUT_SECONDS)
             except Exception as e:
                 logger.warning("Failed to send message to WebSocket", error=str(e))
                 await self._drop_dead(connection)
+
+        # All at once over a snapshot: N stalled clients cost one timeout, not N
+        await asyncio.gather(*(send(connection) for connection in list(connections)))
 
     async def broadcast_to_repository(self, repository_id: int, message: dict):
         """Broadcast a message to all clients subscribed to a specific repository"""
@@ -151,14 +182,18 @@ async def _send_json(websocket: WebSocket, frame: dict):
 
 async def repository_status_websocket(websocket: WebSocket):
     """WebSocket endpoint for repository status updates"""
-    # Browsers can't set headers on a WebSocket, so the key comes as a query parameter
-    # Browsers can only send the query parameter; the prod nginx proxy sends the header
-    key = websocket.query_params.get("api_key") or websocket.headers.get("x-api-key")
+    # Browsers send the key in a subprotocol; the prod nginx proxy sends the header
+    offered = websocket.scope.get("subprotocols", [])
+    key = _key_from_subprotocols(offered) or websocket.headers.get("x-api-key")
+    subprotocol = SUBPROTOCOL if SUBPROTOCOL in offered else None
     if not api_key_is_valid(key):
+        # Accept first: a close before accept reaches browsers as 1006, and only
+        # 1008 tells the client that retrying can't help
+        await websocket.accept(subprotocol=subprotocol)
         await websocket.close(code=1008)
         return
 
-    await websocket_manager.connect(websocket)
+    await websocket_manager.connect(websocket, subprotocol)
 
     try:
         await _send_json(
@@ -184,9 +219,14 @@ async def repository_status_websocket(websocket: WebSocket):
                 await _send_json(websocket, {"type": "pong"})
             elif msg_type == "subscribe":
                 repository_id = message["repository_id"]
-                await websocket_manager.subscribe_to_repository(
-                    websocket, repository_id
-                )
+                if not await websocket_manager.subscribe_to_repository(websocket, repository_id):
+                    await _send_json(
+                        websocket,
+                        _error_frame(
+                            f"At most {MAX_SUBSCRIPTIONS_PER_CONNECTION} subscriptions per connection"
+                        ),
+                    )
+                    continue
                 await _send_json(
                     websocket,
                     {"type": "subscribed", "data": {"repository_id": repository_id}},

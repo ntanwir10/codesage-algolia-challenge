@@ -16,7 +16,7 @@ Built for the [Algolia MCP Server Challenge](https://dev.to/challenges/algolia-2
 - JavaScript, TypeScript, Java, Go, Rust, C, C++, C#, PHP and Ruby are parsed with tree-sitter.
 - Markdown headings become `doc_section` entities.
 - CSS, HTML, JSON, YAML and XML files are stored but produce no entities.
-- `dist/`, `build/`, `vendor/`, `node_modules/`, minified files and lockfiles are skipped. At most 1000 files of under 1 MB each are fetched per repository.
+- `dist/`, `build/`, `vendor/`, `node_modules/`, minified files and lockfiles are skipped. At most 1000 files of under 1 MB each, and 100 MB in total, are fetched per repository. At most two repositories index at once; others wait, already showing `processing`.
 
 ## Requirements
 
@@ -57,8 +57,8 @@ Put the output in `backend/.env` as `CODESAGE_API_KEY=...`. For the dashboard, s
 
 The key is required unless the server is bound to a loopback address: the backend refuses to start with a non-loopback `MCP_SERVER_HOST` and no key. When a key is set, it must be sent as:
 
-- the `X-API-Key` header on write endpoints (create, update, delete, process), on `/api/v1/performance/*`, and on `POST /api/v1/ai/mcp/tools/call`
-- the `?api_key=` query parameter on the `/ws` WebSocket
+- the `X-API-Key` header on write endpoints (create, update, delete, process), on `/api/v1/performance/*`, on `GET /api/v1/ai/search/suggestions`, on `GET /api/v1/ai/mcp/resources/read` and on `POST /api/v1/ai/mcp/tools/call`
+- on the `/ws` WebSocket, the `X-API-Key` header or, from browsers, a `codesage.key.<hex of the key>` subprotocol offered alongside `codesage` (never the URL, which access logs record)
 
 Read endpoints (listing and fetching repositories, status, stats, tool and resource listings, `/health`) do not require the key.
 
@@ -76,7 +76,7 @@ curl -X POST http://127.0.0.1:8001/api/v1/repositories/ \
 
 The response is `201` with the repository record, and a background job starts (one job per repository at a time).
 
-- Status moves `pending`, `processing`, then `completed` or `failed`. On failure, `error_message` says why.
+- Status moves `pending`, `processing`, then `completed` or `failed`. On failure, `error_message` says why. A `completed` run that left files out (they could not be stored or parsed, or were over the limits) says so in `error_message`, as `Partially indexed: ...`.
 - Poll `GET /api/v1/repositories/{id}/status`, or connect to `/ws`, send `{"type":"subscribe","repository_id":N}`, and read `{type, data}` frames.
 - `POST /api/v1/repositories/{id}/process?force_reprocess=true` re-runs processing. It returns `202`, or `409` if a job is already running (or the repository is completed and `force_reprocess` is not set).
 - A server restart marks interrupted runs as `failed`; reprocess them.
@@ -128,7 +128,7 @@ Set these in `backend/.env` (see `.env.example`):
 
 | Variable | Default | Notes |
 | --- | --- | --- |
-| `CODESAGE_API_KEY` | unset | Required unless bound to loopback; with no key, only requests addressed to `localhost`, `127.0.0.1` or `[::1]` are served |
+| `CODESAGE_API_KEY` | unset | Required unless bound to loopback; with no key, only loopback clients sending requests addressed to `localhost`, `127.0.0.1` or `[::1]` are served |
 | `MCP_SERVER_HOST`, `MCP_SERVER_PORT` | `127.0.0.1`, `8001` | A non-loopback host requires the key |
 | `ALGOLIA_APP_ID`, `ALGOLIA_ADMIN_API_KEY` | unset | Required for indexing |
 | `ALGOLIA_INDEX_NAME` | `codesage_code_entities` | One index per database. Compose overrides it: `codesage_code_entities_docker` (dev) and `codesage_code_entities_prod` (prod) |
@@ -137,7 +137,7 @@ Set these in `backend/.env` (see `.env.example`):
 | `CORS_ORIGINS` | localhost ports 3000, 5173, 5174 | Comma-separated; `*` is rejected. Browser writes and WebSocket connections from any other origin get 403, unless the page is served from the API's own host |
 | `ENVIRONMENT`, `LOG_LEVEL` | `development`, `INFO` | `production` hides `/docs` |
 
-Rate limits (slowapi, per client address): 100 per minute on repository create and process, 30 per minute on the MCP tool-call endpoint.
+Rate limits (slowapi, per client address): 100 per minute on repository create and process and on search suggestions, 30 per minute on the MCP tool-call and resource-read endpoints.
 
 ## Project layout
 

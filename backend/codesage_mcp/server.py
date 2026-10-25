@@ -21,7 +21,7 @@ import sys
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
-from urllib.parse import urlsplit
+from urllib.parse import urlsplit, urlunsplit
 
 import httpx2 as httpx
 import mcp_types as types
@@ -40,6 +40,7 @@ API_PREFIX = "/api/v1/ai"
 REQUEST_TIMEOUT = 30.0
 SERVER_NAME = "codesage"
 SERVER_VERSION = "1.0.0"
+UNEXPECTED_RESPONSE = "CodeSage backend returned an unexpected response; check MCP_SERVER_URL"
 
 
 @dataclass(frozen=True)
@@ -81,6 +82,14 @@ class Config:
         )
 
     @property
+    def display_url(self) -> str:
+        """server_url without a user:password@, for messages and logs (Claude Desktop keeps stderr)"""
+        parts = urlsplit(self.server_url)
+        if parts.username is None and parts.password is None:
+            return self.server_url
+        return urlunsplit(parts._replace(netloc=parts.netloc.rpartition("@")[2]))
+
+    @property
     def base_url(self) -> str:
         return self.server_url + API_PREFIX
 
@@ -110,7 +119,18 @@ class CodeSageBridge:
         self._client_factory = client_factory
 
     def not_reachable_message(self) -> str:
-        return f"CodeSage backend not reachable at {self.config.server_url}; start it with `make start-backend`"
+        return f"CodeSage backend not reachable at {self.config.display_url}; start it with `make start-backend`"
+
+    @staticmethod
+    def _json_object(response: httpx.Response) -> dict[str, Any]:
+        """The body as a JSON object; a proxy or a wrong URL can answer 200 with anything"""
+        try:
+            body = response.json()
+        except ValueError:
+            body = None
+        if not isinstance(body, dict):
+            raise MCPError(types.INTERNAL_ERROR, UNEXPECTED_RESPONSE)
+        return body
 
     async def _request(self, method: str, path: str, **kwargs: Any) -> httpx.Response:
         """One request with a single retry on connection failure."""
@@ -185,9 +205,9 @@ class CodeSageBridge:
         if response.status_code != 200:
             return self._http_error(response, name)
         try:
-            body = response.json()
-        except ValueError:
-            return self._error("CodeSage backend returned a non-JSON response")
+            body = self._json_object(response)
+        except MCPError:
+            return self._error(UNEXPECTED_RESPONSE)
         if body.get("is_error"):
             return self._error(str(body.get("error") or "Tool failed"))
         text = json.dumps(body.get("result"), indent=2, default=str)
@@ -195,20 +215,23 @@ class CodeSageBridge:
 
     async def list_resources(self) -> types.ListResourcesResult:
         response = await self._resource_request("/mcp/resources")
-        resources = [
-            types.Resource(
-                uri=r["uri"],
-                name=r.get("name") or r["uri"],
-                description=r.get("description"),
-                mime_type=r.get("mimeType"),
-            )
-            for r in response.json().get("resources", [])
-        ]
+        try:
+            resources = [
+                types.Resource(
+                    uri=r["uri"],
+                    name=r.get("name") or r["uri"],
+                    description=r.get("description"),
+                    mime_type=r.get("mimeType"),
+                )
+                for r in self._json_object(response).get("resources", [])
+            ]
+        except (KeyError, TypeError, AttributeError, ValueError) as exc:
+            raise MCPError(types.INTERNAL_ERROR, UNEXPECTED_RESPONSE) from exc
         return types.ListResourcesResult(resources=resources)
 
     async def read_resource(self, uri: str) -> types.ReadResourceResult:
         response = await self._resource_request("/mcp/resources/read", params={"uri": uri})
-        body = response.json()
+        body = self._json_object(response)
         content = body.get("content", "")
         if not isinstance(content, str):
             content = json.dumps(content, indent=2, default=str)
@@ -297,7 +320,7 @@ async def run_stdio() -> None:
     config = Config.from_env()
     logger.info(
         "CodeSage MCP bridge starting; backend=%s api_key=%s",
-        config.server_url,
+        config.display_url,
         bool(config.api_key),
     )
     server = build_server(config)

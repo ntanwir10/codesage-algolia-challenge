@@ -38,7 +38,6 @@ export function RepositoryPage() {
   const {
     data: repository,
     isLoading: isRepoLoading,
-    error: repoError,
   } = useQuery({
     queryKey: ["repository", repositoryId],
     queryFn: () => api.getRepository(repositoryId),
@@ -76,9 +75,10 @@ export function RepositoryPage() {
       await api.deleteRepository(repository.id);
 
       addToast({ type: "success", title: "Repository deleted" });
-      queryClient.removeQueries({ queryKey: ["repository", repositoryId] });
-      queryClient.invalidateQueries({ queryKey: ["repositories"] });
+      // Don't remove this page's queries: its observers would refetch the deleted repository
+      // (404s) before navigating unmounts them. Once unmounted they're inactive and expire.
       navigate("/dashboard");
+      queryClient.invalidateQueries({ queryKey: ["repositories"] });
     } catch (error) {
       const { message, status: httpStatus } = describeError(error);
       setDeleteDialog({ isOpen: false, isDeleting: false });
@@ -147,7 +147,8 @@ export function RepositoryPage() {
     );
   }
 
-  if (repoError || !repository) {
+  // A failed background poll keeps the old data; only show the error with none.
+  if (!repository) {
     return (
       <div className="container mx-auto px-4 py-8">
         <div className="max-w-6xl mx-auto">
@@ -349,6 +350,11 @@ export function RepositoryPage() {
                     There was an error processing this repository. You can try
                     reprocessing it.
                   </p>
+                  {repository.error_message && (
+                    <p className="mt-1 text-sm text-red-700">
+                      {repository.error_message}
+                    </p>
+                  )}
                   <Button
                     variant="outline"
                     className="mt-2"
@@ -364,7 +370,12 @@ export function RepositoryPage() {
         )}
 
         {/* AI Search Interface */}
-        <SearchInterface repositoryId={repositoryId} canSearch={!!canSearch} />
+        {/* Keyed so results and in-flight searches never carry over to another repository */}
+        <SearchInterface
+          key={repositoryId}
+          repositoryId={repositoryId}
+          canSearch={!!canSearch}
+        />
 
         {/* Quick Actions */}
         <div className="flex flex-wrap gap-4">

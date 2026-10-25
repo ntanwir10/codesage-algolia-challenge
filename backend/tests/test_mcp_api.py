@@ -65,6 +65,17 @@ def test_resources(client, db_session):
     assert bad.status_code == 404
 
 
+def test_reading_a_resource_requires_the_key(client, monkeypatch):
+    # It lists a repository's file paths, which no public GET shows
+    from app.core.config import get_settings
+
+    monkeypatch.setattr(get_settings(), "codesage_api_key", "s3cret")
+    params = {"uri": "codesage://repositories"}
+    assert client.get(f"{BASE}/mcp/resources/read", params=params).status_code == 401
+    ok = client.get(f"{BASE}/mcp/resources/read", params=params, headers={"X-API-Key": "s3cret"})
+    assert ok.status_code == 200
+
+
 def test_suggestions_distinct(client, algolia_index):
     seen = []
 

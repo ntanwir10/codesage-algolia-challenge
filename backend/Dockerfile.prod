@@ -21,7 +21,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     ENVIRONMENT=production
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends curl git \
+    && apt-get install -y --no-install-recommends curl \
     && apt-get clean && find /var/lib/apt/lists -type f -delete
 
 COPY --from=builder /usr/local/lib/python3.13/site-packages /usr/local/lib/python3.13/site-packages

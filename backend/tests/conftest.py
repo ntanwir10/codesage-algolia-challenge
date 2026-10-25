@@ -30,6 +30,8 @@ from app.services import algolia_service as algolia_module
 from app.services import github_service as github_module
 from app.services.algolia_service import AlgoliaService
 
+LOCAL = ("127.0.0.1", 50000)  # TestClient's default peer, "testclient", is not a loopback address
+
 
 @pytest.fixture(autouse=True)
 def reset_rate_limits():
@@ -87,7 +89,7 @@ def client(db_session):
 
     app.dependency_overrides[get_db] = override_get_db
     try:
-        yield TestClient(app, base_url="http://localhost")
+        yield TestClient(app, base_url="http://localhost", client=LOCAL)
     finally:
         app.dependency_overrides.clear()
 
@@ -192,6 +194,7 @@ def github(monkeypatch):
 
     class FakeGitHubService:
         max_files = 1000
+        max_total_bytes = 100 * 1024 * 1024
 
         async def get_repository_files(self, repo_url, branch=None):
             fake.calls.append((repo_url, branch))

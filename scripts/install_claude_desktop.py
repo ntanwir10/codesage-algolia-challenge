@@ -82,11 +82,11 @@ def masked(config: dict, name: str) -> dict:
     return out
 
 
-def write_atomic(path: Path, data: str) -> None:
+def write_atomic(path: Path, data: bytes) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=path.name + ".", suffix=".tmp")
     try:
-        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        with os.fdopen(fd, "wb") as fh:
             fh.write(data)
         os.chmod(tmp, 0o600)
         os.replace(tmp, path)
@@ -187,10 +187,10 @@ def main(argv: list[str] | None = None) -> int:
         )
     if config_path.exists():
         backup = config_path.with_name(f"{config_path.name}.bak-{time.strftime('%Y%m%d-%H%M%S')}")
-        backup.write_bytes(config_path.read_bytes())
-        os.chmod(backup, 0o600)
+        # A byte-for-byte copy, created at mode 600 so the key it holds is never world-readable
+        write_atomic(backup, config_path.read_bytes())
         print(f"backup: {backup}")
-    write_atomic(config_path, json.dumps(merged, indent=2) + "\n")
+    write_atomic(config_path, (json.dumps(merged, indent=2) + "\n").encode())
     print(f"updated {config_path}: mcpServers.{args.name} -> {LAUNCHER}")
     print("Restart Claude Desktop to pick it up.")
     return 0

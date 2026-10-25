@@ -115,31 +115,27 @@ class CodeParser:
         return await asyncio.to_thread(self.parse, file_path, content, language)
 
     def parse(self, file_path: str, content: str, language: str) -> list[ParsedCodeEntity]:
-        """Synchronous entity extraction; returns [] for unsupported input or on error"""
-        try:
-            if not content or not content.strip():
-                return []
-
-            if language in self.parsers:
-                entities = self.parsers[language](content, file_path)
-            elif language in LANGUAGE_SPECS:
-                entities = self._parse_tree_sitter(content, file_path, language)
-            else:
-                # No entities for config/markup languages (css, html, json, yaml, ...) or unknown ones
-                entities = []
-
-            logger.debug(
-                "Extracted code entities",
-                file_path=file_path,
-                language=language,
-                entities_count=len(entities)
-            )
-
-            return entities
-
-        except Exception as e:
-            logger.error("Failed to parse code file", file_path=file_path, error=str(e))
+        """Synchronous entity extraction; [] for unsupported input. Raises if parsing fails,
+        so the caller can report the file instead of counting it as cleanly processed."""
+        if not content or not content.strip():
             return []
+
+        if language in self.parsers:
+            entities = self.parsers[language](content, file_path)
+        elif language in LANGUAGE_SPECS:
+            entities = self._parse_tree_sitter(content, file_path, language)
+        else:
+            # No entities for config/markup languages (css, html, json, yaml, ...) or unknown ones
+            entities = []
+
+        logger.debug(
+            "Extracted code entities",
+            file_path=file_path,
+            language=language,
+            entities_count=len(entities)
+        )
+
+        return entities
 
     def _parse_python(self, content: str, file_path: str) -> list[ParsedCodeEntity]:
         """Parse Python code for functions, classes, imports"""
