@@ -135,6 +135,17 @@ async def test_unreachable_backend_retries_once_and_reports():
     assert len(calls) == 2
 
 
+async def test_resources_never_send_the_key_over_plain_http_to_another_host():
+    backend = Backend()
+    config = Config(server_url="http://codesage.example", api_key="k-123")
+    async with make_client(backend, config=config) as client:
+        with pytest.raises(MCPError, match="CODESAGE_ALLOW_INSECURE_AUTH"):
+            await client.list_resources()
+        with pytest.raises(MCPError, match="CODESAGE_ALLOW_INSECURE_AUTH"):
+            await client.read_resource("codesage://repositories")
+    assert backend.requests == []
+
+
 async def test_a_login_in_the_url_stays_out_of_messages():
     def down(request):
         raise httpx.ConnectError("refused")
