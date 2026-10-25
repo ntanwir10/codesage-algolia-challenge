@@ -6,10 +6,23 @@
 
 Built for the [Algolia MCP Server Challenge](https://dev.to/challenges/algolia-2025-07-09).
 
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/diagrams/codesage-system-dark.svg">
-  <img alt="CodeSage architecture: the browser dashboard and Claude Desktop's MCP bridge call the FastAPI backend, optionally through the prod nginx; a background job fetches files from GitHub, parses them, stores them in SQLite and indexes them in Algolia" src="docs/diagrams/codesage-system-light.svg">
-</picture>
+```mermaid
+flowchart TB
+    you(["You"]) --> browser["Web dashboard<br/>React + Vite"]
+    you --> claude["Claude Desktop"]
+    claude -- "tools/call over stdio" --> bridge["MCP bridge"]
+    browser -- "REST and WebSocket" --> nginx["nginx, prod only<br/>HTTPS, login, adds the API key"]
+    bridge -- "HTTP with the API key" --> nginx
+    nginx --> api["CodeSage backend<br/>FastAPI: REST, WebSocket, MCP tools"]
+    api -- "starts" --> job["Indexing job"]
+    job -- "fetch files" --> github["GitHub"]
+    job -- "store" --> db[("SQLite<br/>files and entities")]
+    job -- "index" --> algolia[("Algolia<br/>search index")]
+    api -- "search" --> algolia
+    api -- "read files" --> db
+```
+
+In development there is no nginx: the dashboard and the bridge call the backend directly.
 
 ## Contents
 
@@ -26,56 +39,143 @@ Built for the [Algolia MCP Server Challenge](https://dev.to/challenges/algolia-2
 
 There are two ways in, and both end at the same FastAPI backend:
 
-- **Web dashboard** (React + Vite). Add a GitHub repository, watch it index, and search it. It calls the REST API and gets live status over a WebSocket.
+- **Web dashboard** (React + Vite). Add a GitHub repository, watch it index, and search it.
 - **Claude Desktop.** Claude Desktop starts `mcp_launcher.sh`, which runs a small stdio MCP bridge (`backend/codesage_mcp`). The bridge turns Claude's tool calls into HTTP calls to the backend.
 
-The backend runs indexing as an in-process background job, which takes four steps:
+Indexing runs as a background job inside the backend. Search goes to Algolia; reading files and listing definitions go to SQLite.
 
-1. Fetch the repository's files from GitHub.
-2. Parse them into entities with tree-sitter (Python uses `ast`).
-3. Store files and entities in SQLite.
-4. Index the entities in Algolia.
+### Inside the backend
 
-Search goes to Algolia; reading files and listing definitions go to SQLite. In production, nginx sits in front: it serves HTTPS, asks for a basic-auth login, and adds the API key itself, so the key never reaches a browser.
+```mermaid
+flowchart TB
+    request["HTTP request or WebSocket"] --> guard["Request guard<br/>origin check, local-only without a key"]
+    guard --> repos["/repositories<br/>create, reprocess, delete"]
+    guard --> mcp["/ai/mcp<br/>tool calls, resources"]
+    guard --> ws["/ws<br/>live status"]
+    repos -- "schedules" --> job["Indexing job<br/>at most 2 at once"]
+    job --> github["GitHub fetch"]
+    job --> parser["Code parser<br/>tree-sitter, Python ast"]
+    job --> db[("SQLite")]
+    job --> algolia[("Algolia")]
+    job -- "progress" --> ws
+    mcp --> tools["MCP tools"]
+    tools -- "search_code" --> algolia
+    tools -- "file and definition tools" --> db
+```
 
-The diagrams below are generated with archify from the code. Every box cites the source lines it describes, and the diagram sources are in [docs/diagrams/src](docs/diagrams/src). They follow your light or dark theme.
+### Adding a repository
 
-### Indexing pipeline
+```mermaid
+flowchart TD
+    add["POST /api/v1/repositories/"] --> valid{"Valid GitHub URL<br/>and branch?"}
+    valid -- "no" --> bad["422"]
+    valid -- "yes" --> known{"Already added?"}
+    known -- "yes" --> dup["409"]
+    known -- "no" --> create["Create the row<br/>status pending"]
+    create --> created["201 with the repository"]
+    create --> schedule["Start a background job"]
+    again["POST /api/v1/repositories/{id}/process"] --> busy{"Job running, or completed<br/>without force_reprocess?"}
+    busy -- "yes" --> conflict["409"]
+    busy -- "no" --> schedule
+    schedule --> processing["Mark it processing<br/>progress back to 0"]
+    processing --> slot["Wait for a run slot"]
+    slot --> run["Indexing run"]
+```
 
-What happens between `POST /api/v1/repositories/` and a searchable index.
+### The indexing run
 
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/diagrams/indexing-pipeline-dark.svg">
-  <img alt="Indexing pipeline: validate the URL, create the row, schedule a job, wait for a run slot, fetch files from GitHub, clear the previous data, parse and store files in batches, index into Algolia, then record completed, partially indexed or failed" src="docs/diagrams/indexing-pipeline-light.svg">
-</picture>
+```mermaid
+flowchart TD
+    start(["Run starts"]) --> configured{"Algolia<br/>configured?"}
+    configured -- "yes" --> fetch["List the repository on GitHub<br/>skip vendored and minified files, lockfiles"]
+    fetch --> select["Keep files under 1 MB<br/>at most 1000 files and 100 MB"]
+    select --> download["Download the files"]
+    download --> clear["Clear the previous index<br/>Algolia records and rows"]
+    clear --> batch["Next batch of 200 files"]
+    batch --> parse["Parse each file<br/>a parse failure is counted"]
+    parse --> store["Store files and entities<br/>a failed batch is rolled back"]
+    store --> more{"More files?"}
+    more -- "yes" --> batch
+    more -- "no" --> index["Index the entities in Algolia"]
+    index --> skipped{"Anything left out?"}
+    skipped -- "no" --> completed["completed"]
+    skipped -- "yes" --> partial["completed<br/>error_message: Partially indexed"]
+    configured -- "no" --> failed["failed<br/>error_message says why"]
+    fetch -. "GitHub error" .-> failed
+    index -. "nothing indexed,<br/>or Algolia rejects it" .-> failed
+```
 
-A few rules shape the pipeline:
-
-- **Run limits.** One job runs per repository, and at most two repositories index at once. A queued run already shows `processing`.
-- **File limits.** At most 1000 files of under 1 MB each, and 100 MB in total, are fetched per repository. `dist/`, `build/`, `vendor/`, `node_modules/`, minified files and lockfiles are skipped.
-- **Problem files.** A file that fails to parse is still stored, and a batch that fails to store is rolled back. Both are counted.
-- **Partial runs.** A run that left files out ends `completed`, with `Partially indexed: ...` in `error_message`.
+Progress is pushed to the dashboard after every batch. A file that fails to parse is still stored, without entities.
 
 ### Repository status
 
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/diagrams/repository-status-dark.svg">
-  <img alt="Repository status lifecycle: pending, processing, then completed or failed; reprocess returns to processing; a server restart or a crash marks interrupted runs failed" src="docs/diagrams/repository-status-light.svg">
-</picture>
+```mermaid
+stateDiagram-v2
+    [*] --> pending: repository added
+    pending --> processing: job starts
+    processing --> completed: indexed
+    processing --> failed: error or crash
+    completed --> processing: reprocess with force_reprocess
+    failed --> processing: reprocess
+    pending --> failed: server restart
+    processing --> failed: server restart
+    completed --> [*]: deleted
+    failed --> [*]: deleted
+    note right of completed: a partial index is noted in error_message
+```
 
-### User journeys
+A repository can't be deleted while its job is running.
 
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/diagrams/user-journeys-dark.svg">
-  <img alt="User journeys: in the web dashboard, add a repository, watch live progress, then search; in Claude Desktop, install the MCP server, ask a question, and Claude calls CodeSage tools" src="docs/diagrams/user-journeys-light.svg">
-</picture>
+### Using the web dashboard
 
-### A Claude Desktop tool call
+```mermaid
+flowchart TB
+    home["Home<br/>paste a GitHub URL"] --> page["Repository page<br/>live progress"]
+    dashboard["Dashboard<br/>all repositories"] --> page
+    dashboard --> delete["Delete"]
+    page --> outcome{"Run ends"}
+    outcome -- "completed or<br/>partially indexed" --> search["Search<br/>with suggestions"]
+    outcome -- "failed, reason shown" --> reprocess["Reprocess"]
+    reprocess --> page
+    search --> github["Open the result on GitHub<br/>at the exact line"]
+```
 
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/diagrams/mcp-tool-call-dark.svg">
-  <img alt="Sequence of a tool call: Claude Desktop sends tools/call to the MCP bridge over stdio, the bridge posts to the backend with the API key, the backend checks the key and rate limit, runs the tool against Algolia or SQLite, and the result returns to Claude" src="docs/diagrams/mcp-tool-call-light.svg">
-</picture>
+Progress arrives over the WebSocket, with polling every 3 seconds as well.
+
+### Using it from Claude Desktop
+
+```mermaid
+flowchart TB
+    install["make install-claude"] --> restart["Restart Claude Desktop"]
+    restart --> ask["Ask about a repository"]
+    ask --> tools["Claude calls CodeSage tools"]
+    tools --> answer["Answer with code and GitHub links"]
+```
+
+Each tool call takes this path:
+
+```mermaid
+sequenceDiagram
+    actor You
+    participant Claude as Claude Desktop
+    participant Bridge as MCP bridge
+    participant API as Backend
+    participant Data as Algolia or SQLite
+    You->>Claude: ask a question
+    Claude->>Bridge: tools/call
+    Bridge->>API: POST /ai/mcp/tools/call
+    Note over API: checks key,<br/>origin, rate limit
+    API->>Data: query
+    Data-->>API: matches
+    API-->>Bridge: result or error
+    Bridge-->>Claude: tool result
+    Claude-->>You: answer with code
+```
+
+- **Bridge.** It talks to Claude Desktop over stdio and checks the arguments first. It won't send the key over plain `http://` to a remote host.
+- **nginx.** In prod the request goes through nginx, which checks your login and adds the API key.
+- **Backend.** `search_code` queries Algolia; the other tools read SQLite.
+- **Errors.** A `401`, `422` or `429`, or an unreachable backend, comes back to Claude as a tool error that says what to fix.
 
 More detail is in [docs/architecture.md](docs/architecture.md) (data model, search index, WebSocket protocol) and [docs/MCP_INTEGRATION_GUIDE.md](docs/MCP_INTEGRATION_GUIDE.md) (tools, arguments, troubleshooting).
 
@@ -239,7 +339,7 @@ backend/alembic/        database migrations, applied at startup
 backend/tests/          pytest suite
 frontend/src/           React dashboard: pages/, components/, services/ (API and WebSocket clients)
 deployment/             Compose files, dev nginx.conf and the prod nginx template
-docs/                   architecture notes, MCP guide, diagrams and their sources
+docs/                   architecture notes and the MCP guide
 scripts/                install_claude_desktop.py
 mcp_launcher.sh         what Claude Desktop launches
 ```

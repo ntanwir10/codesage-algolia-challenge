@@ -100,5 +100,5 @@ tmp/
 temp/
 .tmp/
 
-# archify work folders (diagram renders and receipts); exported SVGs and sources live in docs/diagrams
+# archify work folders (local diagram renders and receipts)
 .archify/
