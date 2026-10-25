@@ -192,7 +192,8 @@ export class WebSocketService {
     socket.onopen = () => {
       if (this.ws !== socket) return;
       this.isConnecting = false;
-      this.reconnectAttempts = 0;
+      // The backoff resets on the server's "connected" frame, not here: a full server
+      // accepts and then closes with 1013, and resetting on open would retry every second
       this.notifyConnection("connected");
       for (const repositoryId of this.repoListeners.keys()) {
         this.send({ type: "subscribe", repository_id: repositoryId });
@@ -327,11 +328,14 @@ export class WebSocketService {
           ?.forEach((cb) => cb(update));
         break;
       }
+      case "connected":
+        this.reconnectAttempts = 0;
+        break;
       case "error":
         console.warn("WebSocket server error:", message.data?.message);
         break;
       default:
-        // connected / subscribed / unsubscribed / pong need no handling
+        // subscribed / unsubscribed / pong need no handling
         break;
     }
   }

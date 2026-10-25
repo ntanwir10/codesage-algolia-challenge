@@ -140,11 +140,18 @@ async def update_repository(
 
     update_data = repository_update.model_dump(exclude_unset=True)
     # A run (or a delete) holds the repository: a new branch mid-run would label the old
-    # branch's index with it, and the run's own commits would race this one
-    if is_processing(repository_id) and update_data.get("branch", repository.branch) != repository.branch:
+    # branch's index with it, and the run sets language and framework itself when it ends
+    held = [
+        field for field in ("branch", "language", "framework")
+        if field in update_data and update_data[field] != getattr(repository, field)
+    ]
+    if held and is_processing(repository_id):
         raise HTTPException(
             status_code=409,
-            detail=f"Repository {repository_id} is being processed; change the branch when it finishes",
+            detail=(
+                f"Repository {repository_id} is being processed; "
+                f"change {', '.join(held)} when it finishes"
+            ),
         )
 
     # Update repository fields

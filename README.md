@@ -79,6 +79,7 @@ The response is `201` with the repository record, and a background job starts (o
 - Status moves `pending`, `processing`, then `completed` or `failed`. On failure, `error_message` says why. A `completed` run that left files out (they could not be stored or parsed, or were over the limits) says so in `error_message`, as `Partially indexed: ...`.
 - Poll `GET /api/v1/repositories/{id}/status`, or connect to `/ws`, send `{"type":"subscribe","repository_id":N}`, and read `{type, data}` frames.
 - `POST /api/v1/repositories/{id}/process?force_reprocess=true` re-runs processing. It returns `202`, or `409` if a job is already running (or the repository is completed and `force_reprocess` is not set).
+- `PUT /api/v1/repositories/{id}` returns `409` if it would change `branch`, `language` or `framework` while a job or a delete holds the repository; other fields can change at any time. An empty `branch` is stored as null (the default branch).
 - A server restart marks interrupted runs as `failed`; reprocess them.
 
 ### Connect Claude Desktop

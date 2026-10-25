@@ -294,8 +294,13 @@ class TestUrlValidation:
         monkeypatch.setattr("app.api.v1.endpoints.repositories.is_processing", lambda _id: True)
         url = f"{REPOS}{created['id']}"
         assert client.put(url, json={"branch": "dev"}).status_code == 409
-        # Other fields, or the same branch, are fine
+        # The run sets these itself when it ends, so an edit now would be overwritten
+        response = client.put(url, json={"language": "go", "framework": "gin"})
+        assert response.status_code == 409
+        assert "language, framework" in response.json()["detail"]
+        # Other fields, or the same branch (empty is the same as null), are fine
         assert client.put(url, json={"name": "renamed", "branch": None}).status_code == 200
+        assert client.put(url, json={"branch": ""}).status_code == 200
 
     def test_a_bad_body_is_not_logged_as_a_database_error(self, monkeypatch):
         # FastAPI raises a body's 422 through get_db (the client fixture overrides it, so drive it here)
@@ -337,10 +342,14 @@ class TestUrlValidation:
 
     def test_put_accepts_a_branch_or_the_default(self, client):
         created = client.post(REPOS, json={"url": URL}).json()
-        for branch in ("feature/x", "", None):
+        # Empty is stored as null, which the UI shows as "default" (it showed "" as a blank)
+        for branch, stored in (("feature/x", "feature/x"), ("", None), (None, None)):
             response = client.put(f"{REPOS}{created['id']}", json={"branch": branch})
             assert response.status_code == 200
-            assert response.json()["branch"] == branch
+            assert response.json()["branch"] == stored
+
+    def test_an_empty_branch_on_create_is_stored_as_null(self, client):
+        assert client.post(REPOS, json={"url": URL, "branch": ""}).json()["branch"] is None
 
     def test_explicit_branch_is_validated_on_create(self, client):
         assert client.post(REPOS, json={"url": URL, "branch": "../main"}).status_code == 422

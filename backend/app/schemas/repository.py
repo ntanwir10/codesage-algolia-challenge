@@ -32,8 +32,8 @@ class RepositoryCreate(RepositoryBase):
         if self.branch and not is_valid_branch(self.branch):
             raise ValueError("Invalid branch name")
         self.url = f"https://github.com/{owner}/{repo}"
-        if url_branch and not self.branch:
-            self.branch = url_branch
+        # Empty means the default branch; store it as null, like an update does
+        self.branch = self.branch or url_branch or None
         if not self.name.strip():
             self.name = f"{owner}/{repo}"
         return self
@@ -61,7 +61,7 @@ class RepositoryUpdate(BaseModel):
     def branch_is_valid(cls, branch: str | None) -> str | None:
         if branch and not is_valid_branch(branch):
             raise ValueError("Invalid branch name")
-        return branch
+        return branch or None  # empty means the default branch, the same as null
 
 
 class RepositoryResponse(RepositoryBase):

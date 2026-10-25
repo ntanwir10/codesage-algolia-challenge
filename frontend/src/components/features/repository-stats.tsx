@@ -46,7 +46,7 @@ export function RepositoryStats({
         [stats?.language ?? repository.language, stats?.framework ?? repository.framework]
           .filter(Boolean)
           .join(" / ") || "Unknown",
-      detail: `Branch: ${repository.branch ?? "default"}`,
+      detail: `Branch: ${repository.branch || "default"}`,
       icon: "💻",
     },
   ];

@@ -165,6 +165,25 @@ describe("WebSocketService", () => {
     expect(last().sent).toContainEqual({ type: "subscribe", repository_id: 4 });
   });
 
+  it("keeps backing off when a full server accepts and then closes with 1013", () => {
+    vi.spyOn(Math, "random").mockReturnValue(1); // no jitter: delays are exactly 1s, 2s, 4s
+    service.onRepositoryUpdate(4, () => {});
+    for (const delay of [1000, 2000, 4000]) {
+      last().open();
+      last().drop(1013);
+      vi.advanceTimersByTime(delay - 1);
+      const before = FakeWebSocket.instances.length;
+      vi.advanceTimersByTime(1);
+      expect(FakeWebSocket.instances).toHaveLength(before + 1);
+    }
+    // A real welcome resets it: the next drop retries after 1s again
+    last().open();
+    last().receive({ type: "connected" });
+    last().drop();
+    vi.advanceTimersByTime(1000);
+    expect(FakeWebSocket.instances).toHaveLength(5);
+  });
+
   it("stops reconnecting when the server rejects the API key", () => {
     vi.spyOn(console, "warn").mockImplementation(() => {});
     service.onRepositoryUpdate(4, () => {});
