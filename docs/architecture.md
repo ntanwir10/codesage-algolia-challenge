@@ -23,7 +23,7 @@ Everything runs in one backend process; the other parts are clients or proxies.
 | Core | `backend/app/core/` | `config.py` (settings and startup validation), `security.py` (API key, request guard, rate limiter, failure messages), `database.py` (engine, session) and `migrations.py` (Alembic at startup). |
 | Models | `backend/app/models/` | SQLAlchemy tables: `Repository`, `CodeFile`, `CodeEntity`. |
 | Services | `backend/app/services/` | `repository_service.py` (job lifecycle), `github_service.py` (listing and download), `code_parser.py` (entities), `algolia_service.py` (index and search), `mcp_tools.py` (the six tools), `websocket_service.py` (live status) and `performance_monitor.py` (metrics). |
-| MCP bridge | `backend/codesage_mcp/` | Stdio MCP server that Claude Desktop runs. It holds no data and turns `tools/list`, `tools/call`, `resources/list` and `resources/read` into HTTP calls to `/api/v1/ai`. Tool names and argument models live in `schemas.py`, which the backend imports too, so `tools/list` works with the backend down. Requests time out after 30 s. |
+| MCP bridge | `backend/codesage_mcp/` | Stdio MCP server that Claude Desktop runs. It holds no data and turns `tools/list`, `tools/call`, `resources/list` and `resources/read` into HTTP calls to `/api/v1/ai`. Tool names and argument models live in `schemas.py`, which the backend imports too, so `tools/list` works with the backend down. Requests time out after 30 s, and a connection after 5 s. |
 | Dashboard | `frontend/` | React + Vite. `services/api.ts` and `services/websocket.ts` are the REST and WebSocket clients. In the dev stack nginx serves the built bundle. |
 | nginx | `deployment/nginx.conf`, `deployment/nginx.prod.conf.template` | Dev: HTTP proxy that drops requests for any `Host` except `localhost` and `127.0.0.1`. Prod: see [The prod nginx role](#the-prod-nginx-role). |
 
@@ -82,9 +82,9 @@ A run turns a GitHub repository into stored files, entities and Algolia records.
 
 ### Steps
 
-1. **Schedule.** `POST /repositories/` (`201`) or `POST /repositories/{id}/process` (`202`) starts an asyncio task. The task is refused with `409` if one is already running for that repository.
+1. **Check and schedule.** `POST /repositories/` first rejects a duplicate URL (`409`, matched regardless of case), then requires Algolia to be configured (`503`), then calls `GitHubService.check_repository`. That check makes one GET for the repository and one for its branch, 10 s in total, with no retries or rate-limit sleeps. It maps problems to a status without creating a row: `422` for a missing, private, empty or denied repository or a missing branch; `502` for a rejected `GITHUB_TOKEN`, a network error or a GitHub 5xx; `503` with `Retry-After` for a rate limit; `504` for a timeout. Then `POST /repositories/` (`201`) or `POST /repositories/{id}/process` (`202`, also `503` without Algolia) starts an asyncio task. The task is refused with `409` if one is already running for that repository. `/process` sets the repository to `processing` before it returns, so a client polling `/status` never reads the old `failed`.
 2. **Mark and wait.** The repository becomes `processing` with `processed_files` back at 0, and the status is broadcast. A run waits for one of two slots while already showing `processing`.
-3. **Check Algolia.** Missing credentials, or a missing URL, fail the run with a message.
+3. **Check Algolia.** The endpoints already refuse a missing configuration, so this only fails a run when the credentials went away after it was scheduled. The run fails with a message.
 4. **List.** The branch is the repository's, the URL's, or the default branch from the GitHub API. One recursive git trees call lists the blobs; symlinks are ignored.
 5. **Select.** Denied directories (`node_modules`, `dist`, `build`, `vendor`, `third_party`, `.git`, `__pycache__`, `.next`, `coverage`), minified and generated files (`*.min.js`, `*.min.css`, `*.bundle.js`, `*.map`), lockfiles, unknown extensions and files of 1 MB or more are dropped. The rest are sorted by path and kept in order until 1000 files or 100 MB; the remainder counts as skipped.
 6. **Truncated trees.** If GitHub marks the tree truncated, the contents API is walked breadth-first from the root, one request per directory and 300 at most, pruning denied directories. Its result is merged with the entries the truncated tree did return. If the cap is hit, the deepest unlisted directories are left out and the run is flagged.
@@ -98,7 +98,7 @@ A run turns a GitHub repository into stored files, entities and Algolia records.
 
 - **Parse failure.** The file is still stored, without entities, and counted as unparsed.
 - **Store failure.** A failed batch commit is rolled back, its files are counted as failed, its records are not indexed, and the run continues with the next batch.
-- **Run failure.** Any other exception rolls back, sets `failed` with a message of at most 500 characters, and broadcasts it. A database error is recorded as a generic message, because its text carries SQL and file contents.
+- **Run failure.** Any other exception rolls back, sets `failed` with a message of at most 500 characters, and broadcasts it. A database error is recorded as a generic message, because its text carries SQL and file contents. A GitHub error is recorded as its own sentence, such as the rate-limit message with the wait. Other exceptions are recorded as `ClassName: message`. If a reprocess had already cleared the old index, the message ends with a note that the previous index was removed.
 - **Partial index.** The run still ends `completed` when something was left out, and `error_message` starts with `Partially indexed:`. It names each cause: files that could not be stored, files that could not be parsed, files skipped over the 1000-file or 100 MB limit, and a listing too large to read in full. The dashboard shows this as amber.
 - **Job crash.** If the task itself dies, the row is set to `failed` ("Processing stopped unexpectedly") so it does not stay `processing`.
 - **Server restart.** At startup, every repository left `pending` or `processing` is set to `failed` ("interrupted by a server restart"). Reprocess it to retry.
@@ -139,7 +139,7 @@ A record is trimmed to 9000 bytes of JSON, `content` first and then `parameters`
 
 ### Queries
 
-- **`search_code`.** The MCP tool resolves the repository by id, name or URL and requires it to be `completed`. It then queries Algolia with `repository_id=<n>` as a numeric filter (the facet form matches nothing), plus optional `language` and `entity_type` filters with escaped values. Without a repository it searches every repository, including any being reprocessed. Results carry a snippet (600 characters), signature and description (300 each) and a GitHub permalink at the exact lines. A failed query becomes a tool error that hides the Algolia host.
+- **`search_code`.** The MCP tool resolves the repository by id, name or URL and requires it to be `completed`; a `failed`, `pending` or `processing` one is refused with the reason or the progress. It then queries Algolia with `repository_id=<n>` as a numeric filter (the facet form matches nothing), plus optional `language` and `entity_type` filters with escaped values. Without a repository it searches every repository, including any being reprocessed. Results carry a snippet (600 characters), signature and description (300 each) and a GitHub permalink at the exact lines. Every other tool refuses a repository that is not `completed`, with the reason or the progress. If Algolia is not configured, the tool says so. A failed query becomes a tool error that hides the Algolia host.
 - **Suggestions.** `GET /api/v1/ai/search/suggestions` needs at least two characters, asks Algolia for twice the limit (1 to 20, default 10) and returns the distinct entity names in rank order. Any failure returns an empty list.
 - **Writes and waits.** Indexing and deletes poll the Algolia task with a deadline (300 s to index, 120 s to delete), because the v3 client would wait forever. An indexing timeout is logged and the run goes on, since the records were accepted. A delete timeout fails the run.
 - **Threads.** The v3 client is synchronous, so each call runs in a worker thread, and there is one client per set of credentials.
@@ -150,10 +150,11 @@ A record is trimmed to 9000 bytes of JSON, `content` first and then `parameters`
 
 ### Connection
 
-- **Auth.** The key is read from a `codesage.key.<hex>` subprotocol, which is how browsers send it, or else from the `X-API-Key` header, which the prod nginx sends. With a key configured, a missing or wrong key is accepted and then closed with code 1008, because a close before accept reaches browsers as 1006. With no key configured, any connection passes this check.
+- **Auth.** The key is read from a `codesage.key.<hex>` subprotocol, which is how browsers send it, or else from the `X-API-Key` header, which the prod nginx sends. With a key configured, a missing or wrong key is accepted and then closed with code 1008 and the reason "Invalid or missing API key", because a close before accept reaches browsers as 1006. With no key configured, any connection passes this check.
 - **Request guard.** Before the endpoint runs, the guard closes the handshake with 1008 if the `Host` or `Origin` is refused. See [BrowserRequestGuard](#browserrequestguard).
-- **Caps.** At most 200 open connections, and 20 from one client address. A new one over either cap is accepted and closed with 1013 ("try again later"), so the client's reconnect backoff applies. Behind the prod nginx, uvicorn takes the address from `X-Forwarded-For`.
+- **Caps.** At most 200 open connections, and 20 from one client address. A new one over either cap is accepted and closed with 1013 and the reason "Too many connections; try again later", so the client's reconnect backoff applies. Behind the prod nginx, uvicorn takes the address from `X-Forwarded-For`.
 - **Subprotocol.** `codesage` is echoed back when the client offered it.
+- **Unexpected errors.** An exception in the handler closes the socket with 1011 and the reason "Internal error".
 
 ### Messages
 
@@ -223,7 +224,8 @@ Limits come from slowapi, per client address, and can be turned off with `ENABLE
 
 ### Secrets and errors
 
-- **Logs and responses.** An unhandled exception returns `500` with a generic message and an `X-Request-ID`; the details go to the log under that ID.
+- **Logs and responses.** An unhandled exception returns `500` with `{detail, request_id}` and an `X-Request-ID` header; the details go to the log under that ID. The response carries CORS headers for an allowed origin, because the handler sits outside the CORS middleware, so a browser can read it.
+- **Shapes.** Errors are `{detail}` with a string. Validation errors (`422`) carry a list whose `loc` names the field, such as `["body","url"]`. A rate limit is `429` with `{detail}` and a `Retry-After` header. An id or `skip` too large for the database is `422`, not a `500`.
 - **Recorded failures.** `failure_message` is used for `error_message`, WebSocket frames, metrics and parse logs. It replaces SQLAlchemy errors with a fixed message and truncates other errors to 500 characters.
 - **Tool errors.** A failed Algolia query reaches Claude as "Search is unavailable", and the health check says only that Algolia is unreachable, because client errors can name the Algolia host or app id.
 - **Key transport.** Browsers send the key to `/ws` in a subprotocol, so it never appears in a URL or an access log.
@@ -237,7 +239,7 @@ Limits come from slowapi, per client address, and can be turned off with `ENABLE
 - **TLS and login.** Port 443 requires basic auth, with the login file in `deployment/htpasswd`. Port 80 answers `/health` and redirects everything else to HTTPS.
 - **Key injection.** nginx sets `X-API-Key` on every `/api/` and `/ws` request and clears `Authorization`, so the browser never holds the key.
 - **Forwarding.** It passes `Host` with its port, `X-Forwarded-For` and `X-Forwarded-Proto: https`, which the origin check and the per-client WebSocket cap rely on.
-- **Health.** `/health` skips basic auth.
+- **Health.** `/health` skips basic auth. It returns `200` for `healthy` and `degraded` (Algolia unreachable or not configured) and `503` only when the database fails, so the Docker healthcheck stays green while Algolia is unset.
 
 The bridge sends the key itself when it talks to the backend directly. Through nginx it uses the basic-auth login instead, and nginx supplies the key. It refuses to send either over plain `http://` to a non-loopback host.
 

@@ -71,7 +71,9 @@ flowchart TD
     valid -- "no" --> bad["422"]
     valid -- "yes" --> known{"Already added?"}
     known -- "yes" --> dup["409"]
-    known -- "no" --> create["Create the row<br/>status pending"]
+    known -- "no" --> ready{"Algolia set up and<br/>repo and branch on GitHub?"}
+    ready -- "no" --> refused["422, 502, 503 or 504<br/>nothing created"]
+    ready -- "yes" --> create["Create the row<br/>status pending"]
     create --> created["201 with the repository"]
     create --> schedule["Start a background job"]
     again["POST /api/v1/repositories/{id}/process"] --> busy{"Job running, or completed<br/>without force_reprocess?"}
@@ -81,6 +83,21 @@ flowchart TD
     processing --> slot["Wait for a run slot"]
     slot --> run["Indexing run"]
 ```
+
+The dashboard shows every refusal under the URL field and stays on the Home page. Nothing is created on any of them.
+
+| You see | Status | Cause |
+| --- | --- | --- |
+| A message about the URL or branch | 422 | Not a GitHub repository URL, or an invalid branch name |
+| "GitHub repository owner/repo was not found" | 422 | The repository doesn't exist, or it's private and the server's `GITHUB_TOKEN` can't read it |
+| "Branch 'x' does not exist", "owner/repo is empty" or "GitHub denied access" | 422 | The branch is missing, the repository has no content, or GitHub refused access |
+| "owner/repo has already been added", with an "Open it" link | 409 | Same URL as an existing repository. Case doesn't matter. The body also has `repository_id` |
+| "GitHub's API rate limit was reached; try again in about N minutes" | 503 | GitHub is rate-limiting the server. `Retry-After` says how long |
+| "GitHub rejected the server's GITHUB_TOKEN" or "Could not reach GitHub; try again" | 502 | The token is invalid, or GitHub is down or unreachable |
+| "GitHub did not respond in time; try again" | 504 | GitHub took longer than the 10 s check |
+| "Search indexing is not configured on the server" | 503 | `ALGOLIA_APP_ID` or `ALGOLIA_ADMIN_API_KEY` is unset |
+
+The GitHub check makes one attempt per call, with no retries. A repository that passes can still fail later, during the run; the dashboard then shows the reason on its card.
 
 ### The indexing run
 
@@ -175,7 +192,7 @@ sequenceDiagram
 - **Bridge.** It talks to Claude Desktop over stdio and checks the arguments first. It won't send the key over plain `http://` to a remote host.
 - **nginx.** In prod the request goes through nginx, which checks your login and adds the API key.
 - **Backend.** `search_code` queries Algolia; the other tools read SQLite.
-- **Errors.** A `401`, `422` or `429`, or an unreachable backend, comes back to Claude as a tool error that says what to fix.
+- **Errors.** A rejected key or login (`401`), a refused host (`403`), a wrong URL (`404`), bad arguments (`422`), a rate limit (`429`), a backend error (`5xx`), a timeout or an unreachable backend comes back to Claude as a tool error that says what to fix. Every tool also refuses a repository that failed or is still indexing, and says why or how far along it is.
 
 More detail is in [docs/architecture.md](docs/architecture.md) (data model, search index, WebSocket protocol) and [docs/MCP_INTEGRATION_GUIDE.md](docs/MCP_INTEGRATION_GUIDE.md) (tools, arguments, troubleshooting).
 
@@ -194,8 +211,8 @@ You need:
 
 - Python 3.13 and [`uv`](https://docs.astral.sh/uv/) (or any way to create `.venv` at the repo root)
 - Node.js 22 and npm
-- An Algolia application ID and Admin API key
-- A GitHub token. It's optional but recommended; without one, GitHub's low unauthenticated rate limit applies.
+- An Algolia application ID and Admin API key. Without them the backend still starts, but adding a repository returns `503` and `/health` reports `degraded`.
+- A GitHub token. It's optional but recommended; without one, GitHub's low unauthenticated rate limit applies, and private repositories can't be read.
 
 **1. Install.**
 
@@ -203,7 +220,7 @@ You need:
 make setup
 ```
 
-This copies `.env.example` to `backend/.env` if it's missing, creates `.venv` and installs the backend dependencies into it, and runs `npm ci` in `frontend/`.
+This copies `.env.example` to `backend/.env` if it's missing, creates `.venv` and installs the backend dependencies into it, and runs `npm ci` in `frontend/`. It stops with a message if Python 3.13 (or `uv`) or Node 22 is missing.
 
 **2. Configure.** Edit `backend/.env`:
 
@@ -218,6 +235,8 @@ CODESAGE_API_KEY=...   # generate one with the command below
 python -c "import secrets; print(secrets.token_urlsafe(32))"
 ```
 
+A value left empty, or left as a `your-...-here` placeholder, counts as unset.
+
 For the dashboard, put the same key in `frontend/.env.local` as `VITE_CODESAGE_API_KEY=...`. The key is optional while the backend only listens on `127.0.0.1`; see [Security](#security).
 
 **3. Run.**
@@ -226,9 +245,9 @@ For the dashboard, put the same key in `frontend/.env.local` as `VITE_CODESAGE_A
 make start   # backend on http://127.0.0.1:8001, dashboard on http://localhost:5173
 ```
 
-`make start-backend` and `make start-frontend` run them separately, and `make stop` stops both. API docs are at http://127.0.0.1:8001/docs.
+`make start` waits up to 15 seconds for the backend to answer `/health`, and exits with an error if it doesn't. The dashboard needs port 5173; if it's taken, Vite exits instead of picking another port. `make start-backend` and `make start-frontend` run them separately, `make stop` stops both, and `make health` reports whether the backend answers. API docs are at http://127.0.0.1:8001/docs.
 
-**4. Index a repository.** Open http://localhost:5173 and paste a GitHub URL. The repository page shows progress live and turns searchable when it's done.
+**4. Index a repository.** Open http://localhost:5173 and paste a GitHub URL. The repository page shows progress live and turns searchable when it's done. If GitHub or Algolia refuses the repository, the form says why; see [Adding a repository](#adding-a-repository).
 
 **5. Connect Claude Desktop.**
 
@@ -250,6 +269,8 @@ Restart Claude Desktop and keep the backend running. Then ask Claude something l
 | Dashboard (`/dashboard`) | All repositories with their status and progress. Delete a repository from here. |
 
 A finished repository shows a green card. It shows amber if it was only partially indexed and red if it failed; both say why.
+
+An unknown path shows "Page not found". A repository that doesn't exist says so; any other load error shows the message with "Try again". A failed repository says why on its page and on its dashboard card.
 
 ### Claude Desktop and MCP tools
 
@@ -276,11 +297,13 @@ curl -X POST http://127.0.0.1:8001/api/v1/repositories/ \
   -d '{"url": "https://github.com/owner/repo"}'
 ```
 
-- **Create.** The response is `201`, and a background job starts. A duplicate URL gets `409`.
-- **Status.** Poll `GET /api/v1/repositories/{id}/status`. For push updates, connect to `/ws`, send `{"type": "subscribe", "repository_id": N}` and read `{type, data}` frames.
-- **Reprocess.** `POST /api/v1/repositories/{id}/process?force_reprocess=true` re-runs indexing and returns `202`. It returns `409` while a job is running.
+- **Create.** GitHub is checked first; see [Adding a repository](#adding-a-repository). The response is `201`, and a background job starts. A duplicate URL gets `409` with `{detail, repository_id}`; URLs match regardless of case. A bad URL or branch gets `422` with `loc` of `["body","url"]` or `["body","branch"]`. A missing or private repository, a missing branch or an empty repository gets `422` with a string `detail`. A GitHub or network problem gets `502`, `503` (with `Retry-After` on a rate limit) or `504`, and an unconfigured Algolia gets `503`.
+- **Status.** Poll `GET /api/v1/repositories/{id}/status`; it includes `error_message`. For push updates, connect to `/ws`, send `{"type": "subscribe", "repository_id": N}` and read `{type, data}` frames.
+- **Reprocess.** `POST /api/v1/repositories/{id}/process?force_reprocess=true` re-runs indexing and returns `202` and sets the repository to `processing` first. It returns `409` while a job is running, and `503` if Algolia isn't configured.
 - **Edit.** `PUT /api/v1/repositories/{id}` returns `409` if it would change `branch`, `language` or `framework` while a job or a delete holds the repository; other fields can change at any time. An empty `branch` means the default branch.
 - **Restarts.** A server restart marks interrupted runs `failed`; reprocess them.
+- **Errors.** Errors are `{"detail": "..."}`. Validation errors (`422`) carry a list instead, with the field in `loc`. An id or `skip` too large for the database is `422`. Rate limiting (`429`) sends `Retry-After`. A `500` has `{detail, request_id}`, the same ID as the `X-Request-ID` header and the server log, and carries CORS headers so a browser can read it.
+- **Health.** `GET /health` is `200` `healthy`, `200` `degraded` when Algolia is unreachable or not configured, and `503` `unhealthy` when the database fails.
 
 ## Security
 
@@ -304,9 +327,9 @@ curl -X POST http://127.0.0.1:8001/api/v1/repositories/ \
 | --- | --- | --- |
 | `CODESAGE_API_KEY` | unset | Required unless the server listens on loopback only |
 | `MCP_SERVER_HOST`, `MCP_SERVER_PORT` | `127.0.0.1`, `8001` | A non-loopback host requires the key |
-| `ALGOLIA_APP_ID`, `ALGOLIA_ADMIN_API_KEY` | unset | Required for indexing |
+| `ALGOLIA_APP_ID`, `ALGOLIA_ADMIN_API_KEY` | unset | Required for indexing and search. Empty or `your-...-here` values count as unset: adding or reprocessing a repository returns `503`, MCP search says Algolia isn't configured, and `/health` is `degraded` |
 | `ALGOLIA_INDEX_NAME` | `codesage_code_entities` | One index per database; the Compose files use their own |
-| `GITHUB_TOKEN` | unset | Raises GitHub rate limits |
+| `GITHUB_TOKEN` | unset | Raises GitHub rate limits and allows private repositories. If GitHub rejects it, adding a repository returns `502` |
 | `DATABASE_URL` | `sqlite:///./codesage.db` | SQLite only |
 | `CORS_ORIGINS` | localhost ports 3000, 5173, 5174 | Comma-separated list of origins; `*` is rejected. Also decides which browser origins may write |
 | `ALLOWED_HOSTS` | unset | With a key set, extra hostnames the API answers to, besides loopback and the `CORS_ORIGINS` hosts. Comma-separated; `*.example.com` allows subdomains, `*` allows any host |
