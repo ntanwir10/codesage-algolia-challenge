@@ -1,6 +1,6 @@
 # MCP integration guide
 
-How to connect Claude Desktop (or any MCP client) to CodeSage: the installer, the stdio bridge's settings, the six tools and two resources it serves, the backend endpoints behind them, and what to do when a call fails. For the end-to-end picture, including the tool-call sequence diagram, see the [root README](../README.md#using-it-from-claude-desktop).
+How to connect Claude Desktop (or any MCP client) to CodeSage: the installer, the stdio bridge's settings, the seven tools and two resources it serves, the backend endpoints behind them, and what to do when a call fails. For the end-to-end picture, including the tool-call sequence diagram, see the [root README](../README.md#using-it-from-claude-desktop).
 
 ## Contents
 
@@ -129,7 +129,7 @@ Request behaviour:
 
 `repository` accepts the numeric ID, the name, or `owner/name`; `list_repositories` shows them. Matching on name and `owner/name` ignores case.
 
-- **Not ready.** Every tool except `list_repositories` refuses a repository that isn't `completed`. A failed one gives the reason from `error_message` and says to reprocess it. A `pending` or `processing` one shows progress, such as "still indexing (120/400 files)".
+- **Not ready.** Every tool except `list_repositories` and `add_repository` refuses a repository that isn't `completed`. A failed one gives the reason from `error_message` and says to reprocess it. A `pending` or `processing` one shows progress, such as "still indexing (120/400 files)".
 - **Ambiguous names.** If more than one repository matches, the call errors, lists the candidates with their IDs, and asks for the numeric ID.
 - **Unknown or out-of-range IDs.** The error lists the available repositories. IDs longer than 19 digits are treated as not found.
 
@@ -139,17 +139,19 @@ Lists indexed repositories with `id`, `name`, `url`, `branch`, `status`, `total_
 
 ### `search_code`
 
-Full-text search over functions, classes, imports and doc sections. Each result has the entity name and type, file path, line range, language, a signature, a snippet and a GitHub link.
+Full-text search over functions, classes, imports, doc sections and Terraform blocks. Each result has the entity name and type, file path, line range, language, a signature, a snippet and a source link.
 
 | Argument | Type | Default | Notes |
 | --- | --- | --- | --- |
 | `query` | string, required | | At least 1 character |
 | `repository` | string | all repositories | A named repository must have status `completed` |
 | `language` | string | | For example `python` |
-| `entity_type` | `function`, `class`, `import`, `doc_section` | | |
+| `entity_type` | `function`, `class`, `import`, `doc_section`, `terraform_block` | | |
 | `limit` | integer 1-50 | 10 | Results per page |
 | `page` | integer >= 0 | 0 | Zero-based |
 
+- **Plain-words queries.** If no result matches every word, Algolia drops the words that miss, ignores stop words and plurals, and returns the best partial matches. A question works as a query.
+- **Source links.** GitHub gets `#L<start>-L<end>`, GitLab `/-/blob/...#L<start>-<end>` and Bitbucket `/src/...#lines-<start>:<end>`. A repository on any other host has no link.
 - **Truncation.** Snippets are cut at 600 characters, and signatures and descriptions at 300.
 - **Errors.** A repository that is `failed`, `pending` or `processing` is refused, as for every tool. If Algolia isn't configured, the error says `ALGOLIA_APP_ID` and `ALGOLIA_ADMIN_API_KEY` are missing. Any other Algolia failure becomes the generic "Search is unavailable; try again later." The detail is logged on the backend only, because it can name the Algolia host or app ID.
 
@@ -175,7 +177,7 @@ Lists definitions ordered by file path, then line.
 | --- | --- | --- | --- |
 | `repository` | string, required | | |
 | `path_prefix` | string | | Only files whose path starts with this |
-| `entity_type` | `function`, `class`, `import`, `doc_section` | | |
+| `entity_type` | `function`, `class`, `import`, `doc_section`, `terraform_block` | | |
 | `name` | string | | Case-insensitive substring of the entity name |
 | `limit` | integer 1-500 | 100 | `total` in the result counts all matches |
 
@@ -207,6 +209,39 @@ Finds lines that match a literal string or a regular expression, in file path or
 - **Regex limits.** A file gets 1 second and the whole call gets 10 seconds. Files over 1,000,000 characters are skipped. A call that runs out of time returns `truncated: true`.
 - **Skipped files.** They appear as `skipped_files` (the first 50) with `skipped_count` for the total. Both are absent when nothing was skipped.
 - **Literal search** has no time limits.
+
+### `add_repository`
+
+Adds a repository and starts indexing it. It returns `repository_id`, `name`, `status` and a message; indexing runs in the background, so follow it with `list_repositories` and search once the status is `completed`.
+
+| Argument | Type | Default | Notes |
+| --- | --- | --- | --- |
+| `url` | string, required | | https URL of the repository |
+| `branch` | string | default branch | A branch in the URL (`/tree/dev`) is understood too |
+| `description` | string | | Optional note |
+
+- **Same checks as the dashboard.** A duplicate URL (case-insensitive), a missing Algolia setup, and a missing repository or branch are refused before anything is created.
+- **Needs the API key,** like every tool call, and counts toward the 30 per minute limit.
+- **Errors.** A bad URL gives a message that starts with `url:` and says why (only https, no credentials or port, no `localhost` or private IP address). A duplicate gives "<name> is already added as repository <id>." Other refusals use the messages below.
+
+| Message | Cause |
+| --- | --- |
+| `<host>/<path> was not found or is private; only public repositories are supported on <host>.` | The repository doesn't exist, or it is private (on a host other than github.com) |
+| `Branch '<b>' does not exist in <host>/<path>.` | The branch is missing |
+| `<host>/<path> is empty; there is nothing to index.` | No commits |
+| `<host> did not respond in time; try again.` | The 10 s check timed out |
+| `Could not reach <host>; try again.` | The host or git failed in some other way |
+| `Search indexing is not configured on the server (Algolia credentials are missing).` | `ALGOLIA_APP_ID` or `ALGOLIA_ADMIN_API_KEY` is unset |
+
+### Other git hosts
+
+Ask Claude: *"Add https://gitlab.com/group/project to CodeSage"*, then *"Search it for where requests are retried"*.
+
+- **Hosts.** GitHub, GitLab (nested groups too), Bitbucket and self-hosted servers, over https. Branch URLs such as `.../-/tree/dev` or Bitbucket's `/src/<branch>` work.
+- **Public only.** Private repositories are refused on every host but github.com, where the backend's `GITHUB_TOKEN` can read them.
+- **How it reads.** For a host other than github.com the backend runs `git ls-remote` (10 s) to check and a shallow `git clone` (120 s) to read. Git runs without a shell, a credential helper or prompts, over https only, and skips symlinks. github.com keeps the REST API path.
+- **Names.** Repositories on other hosts are named `<host>/<path>`, which you can pass as `repository` to the other tools.
+- **Only here.** The web dashboard and `POST /api/v1/repositories/` take github.com only.
 
 ## Resources
 
@@ -262,6 +297,7 @@ curl -X POST http://127.0.0.1:8001/api/v1/ai/mcp/tools/call \
 | Any other non-200 | `Unexpected response from CodeSage backend (<status>): <detail>` |
 | 200 that is not a JSON object | `CodeSage backend returned an unexpected response; check MCP_SERVER_URL` |
 | 200 with `is_error: true` | The backend's message, for example `Repository 'x' failed to index: <reason>. Reprocess it from the dashboard.` |
+| 200 with `is_error: true` from `add_repository` | The refusal text, such as `<host>/<path> was not found or is private; only public repositories are supported on <host>.`; see [`add_repository`](#add_repository) |
 | Bad arguments, caught by the bridge | `Invalid arguments for '<name>': <field>: <reason>`, nothing is sent |
 
 Resource reads fail as MCP protocol errors instead of tool errors, with the same wording. The one difference is a 404 with a JSON body, which reads `Resource or repository not found: <detail>`.
@@ -285,7 +321,9 @@ Read the bridge's stderr in Claude Desktop's MCP log for the `codesage` server. 
 | `returned an unexpected response; check MCP_SERVER_URL` | The URL points at something that is not the CodeSage backend | Point `MCP_SERVER_URL` at the backend root, without `/api/v1` |
 | `Invalid arguments for ...` | A wrong or unknown argument | Match the argument tables above |
 | `Repository '...' failed to index: ...` | Indexing failed; the message is the reason | Fix the cause, then reprocess it from the dashboard |
-| `Repository '...' is still indexing (n/m files)` | It is `pending` or `processing`. Every tool except `list_repositories` refuses it | Wait for it to complete |
+| `Repository '...' is still indexing (n/m files)` | It is `pending` or `processing`. Every tool except `list_repositories` and `add_repository` refuses it | Wait for it to complete |
+| `... was not found or is private; only public repositories are supported on <host>.` | `add_repository` on a private or missing repository, on a host other than github.com | Make the repository public, or check the URL |
+| `url: ...` from `add_repository` | The URL isn't an https repository URL (port, credentials, `localhost` and private IPs are refused) | Use the plain https URL |
 | `Search is not configured on the server` | `ALGOLIA_APP_ID` or `ALGOLIA_ADMIN_API_KEY` is empty or still a placeholder | Set them in `backend/.env` and restart the backend |
 | `Search is unavailable; try again later.` | Algolia is unreachable or rejected the query | Check the backend log; the detail is logged there only |
 | Tools are listed but searches return nothing | No repository has finished indexing | Check `GET /api/v1/repositories/` for status and `error_message` |
@@ -299,12 +337,13 @@ Read the bridge's stderr in Claude Desktop's MCP log for the `codesage` server. 
 npx @modelcontextprotocol/inspector ./mcp_launcher.sh  # run from the repo root
 ```
 
-Set `MCP_SERVER_URL` and `CODESAGE_API_KEY` in the Inspector's environment fields, or export them first. You should see six tools under Tools. With the backend running, calling one returns JSON.
+Set `MCP_SERVER_URL` and `CODESAGE_API_KEY` in the Inspector's environment fields, or export them first. You should see seven tools under Tools. With the backend running, calling one returns JSON.
 
 ## Known limitations
 
 - **Backend must be running.** The bridge does not start it.
 - **Single process.** The backend keeps job state in memory, so run one worker.
 - **Rate limits are per address.** The 30 per minute on tool calls and resource reads is shared by everything behind one IP, such as nginx in the prod stack.
+- **Other hosts are public only.** `add_repository` can't read private repositories except on github.com, and the dashboard can't add other hosts at all.
 - **Cross-repository search.** `search_code` without `repository` includes repositories that are being reprocessed.
 - **No prompts.** The server offers tools and resources only.

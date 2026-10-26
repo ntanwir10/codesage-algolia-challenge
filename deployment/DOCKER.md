@@ -18,7 +18,7 @@ CodeSage ships two Compose stacks: a **dev** stack for one user on localhost, an
 | | Dev | Prod |
 | --- | --- | --- |
 | Compose file | `deployment/docker-compose.yml` | `deployment/docker-compose.prod.yml` |
-| Backend image | `backend/Dockerfile` (source bind-mounted, uvicorn `--reload`) | `backend/Dockerfile.prod` (multi-stage, no bind mount, `--workers 1`, `ENVIRONMENT=production` so `/docs` is off) |
+| Backend image | `backend/Dockerfile` (source bind-mounted, uvicorn `--reload`) | `backend/Dockerfile.prod` (multi-stage, no bind mount, `--workers 1`, `ENVIRONMENT=production` so `/docs` is off; installs `curl` and `git`, which the `add_repository` tool uses to clone public repositories from hosts other than github.com) |
 | nginx | `deployment/nginx.conf`, plain HTTP | `deployment/nginx.prod.conf.template`, HTTPS and basic auth |
 | Containers | `codesage_mcp_server`, `codesage_nginx` | `codesage_mcp_server_prod`, `codesage_nginx_prod` |
 | Published ports | `127.0.0.1:80` (nginx), `127.0.0.1:8001` (backend) | `80` and `443` (nginx). The backend is not published |

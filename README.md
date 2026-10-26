@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/ntanwir10/codesage-algolia-challenge/actions/workflows/ci.yml/badge.svg)](https://github.com/ntanwir10/codesage-algolia-challenge/actions/workflows/ci.yml)
 
-**Search and read GitHub codebases from Claude.** CodeSage indexes a repository's functions, classes, imports and documentation into Algolia, then serves them to Claude Desktop (or any MCP client) as six tools. A web dashboard adds repositories, shows indexing progress live and searches the index.
+**Search and read codebases from Claude.** CodeSage indexes a repository's functions, classes, imports, documentation and Terraform blocks into Algolia, then serves them to Claude Desktop (or any MCP client) as seven tools. A web dashboard adds GitHub repositories, shows indexing progress live and searches the index. Claude can also add public repositories from other git hosts.
 
 Built for the [Algolia MCP Server Challenge](https://dev.to/challenges/algolia-2025-07-09).
 
@@ -15,7 +15,7 @@ flowchart TB
     bridge -- "HTTP with the API key" --> nginx
     nginx --> api["CodeSage backend<br/>FastAPI: REST, WebSocket, MCP tools"]
     api -- "starts" --> job["Indexing job"]
-    job -- "fetch files" --> github["GitHub"]
+    job -- "fetch files" --> github["GitHub API,<br/>or git clone"]
     job -- "store" --> db[("SQLite<br/>files and entities")]
     job -- "index" --> algolia[("Algolia<br/>search index")]
     api -- "search" --> algolia
@@ -40,7 +40,7 @@ In development there is no nginx: the dashboard and the bridge call the backend 
 There are two ways in, and both end at the same FastAPI backend:
 
 - **Web dashboard** (React + Vite). Add a GitHub repository, watch it index, and search it.
-- **Claude Desktop.** Claude Desktop starts `mcp_launcher.sh`, which runs a small stdio MCP bridge (`backend/codesage_mcp`). The bridge turns Claude's tool calls into HTTP calls to the backend.
+- **Claude Desktop.** Claude Desktop starts `mcp_launcher.sh`, which runs a small stdio MCP bridge (`backend/codesage_mcp`). The bridge turns Claude's tool calls into HTTP calls to the backend. Claude can search, read and also add repositories, including public ones on GitLab, Bitbucket and other git hosts.
 
 Indexing runs as a background job inside the backend. Search goes to Algolia; reading files and listing definitions go to SQLite.
 
@@ -53,7 +53,7 @@ flowchart TB
     guard --> mcp["/ai/mcp<br/>tool calls, resources"]
     guard --> ws["/ws<br/>live status"]
     repos -- "schedules" --> job["Indexing job<br/>at most 2 at once"]
-    job --> github["GitHub fetch"]
+    job --> github["Fetch<br/>GitHub API or git clone"]
     job --> parser["Code parser<br/>tree-sitter, Python ast"]
     job --> db[("SQLite")]
     job --> algolia[("Algolia")]
@@ -84,7 +84,7 @@ flowchart TD
     slot --> run["Indexing run"]
 ```
 
-The dashboard shows every refusal under the URL field and stays on the Home page. Nothing is created on any of them.
+The dashboard shows every refusal under the repository field and stays on the Home page. Nothing is created on any of them. The REST endpoint and the dashboard take github.com only. The `add_repository` tool runs the same checks for other hosts, with the messages in [Other git hosts](#other-git-hosts).
 
 | You see | Status | Cause |
 | --- | --- | --- |
@@ -104,7 +104,7 @@ The GitHub check makes one attempt per call, with no retries. A repository that 
 ```mermaid
 flowchart TD
     start(["Run starts"]) --> configured{"Algolia<br/>configured?"}
-    configured -- "yes" --> fetch["List the repository on GitHub<br/>skip vendored and minified files, lockfiles"]
+    configured -- "yes" --> fetch["List the repository<br/>GitHub API, or a shallow clone<br/>skip vendored and minified files, lockfiles"]
     fetch --> select["Keep files under 1 MB<br/>at most 1000 files and 100 MB"]
     select --> download["Download the files"]
     download --> clear["Clear the previous index<br/>Algolia records and rows"]
@@ -118,11 +118,11 @@ flowchart TD
     skipped -- "no" --> completed["completed"]
     skipped -- "yes" --> partial["completed<br/>error_message: Partially indexed"]
     configured -- "no" --> failed["failed<br/>error_message says why"]
-    fetch -. "GitHub error" .-> failed
+    fetch -. "GitHub or clone error" .-> failed
     index -. "nothing indexed,<br/>or Algolia rejects it" .-> failed
 ```
 
-Progress is pushed to the dashboard after every batch. A file that fails to parse is still stored, without entities. A repository too large for one GitHub tree call is also listed through the contents API, up to 300 directories; anything it never reaches counts as left out.
+Progress is pushed to the dashboard after every batch. A file that fails to parse is still stored, without entities. A repository too large for one GitHub tree call is also listed through the contents API, up to 300 directories; anything it never reaches counts as left out. Repositories on other hosts are read with a shallow `git clone` instead, and the same file rules apply.
 
 ### Repository status
 
@@ -141,20 +141,20 @@ stateDiagram-v2
     note right of completed: a partial index is noted in error_message
 ```
 
-A repository can't be deleted while its job is running.
+A repository can't be deleted while its job is running. Delete returns as soon as Algolia accepts the removal; it doesn't wait for Algolia to finish.
 
 ### Using the web dashboard
 
 ```mermaid
 flowchart TB
-    home["Home<br/>paste a GitHub URL"] --> page["Repository page<br/>live progress"]
+    home["Home<br/>enter owner/repo"] --> page["Repository page<br/>live progress"]
     dashboard["Dashboard<br/>all repositories"] --> page
     dashboard --> delete["Delete"]
     page --> outcome{"Run ends"}
     outcome -- "completed or<br/>partially indexed" --> search["Search<br/>with suggestions"]
     outcome -- "failed, reason shown" --> reprocess["Reprocess"]
     reprocess --> page
-    search --> github["Open the result on GitHub<br/>at the exact line"]
+    search --> github["Open the result at the<br/>exact line on its host"]
 ```
 
 Progress arrives over the WebSocket, with polling every 3 seconds as well.
@@ -166,7 +166,7 @@ flowchart TB
     install["make install-claude"] --> restart["Restart Claude Desktop"]
     restart --> ask["Ask about a repository"]
     ask --> tools["Claude calls CodeSage tools"]
-    tools --> answer["Answer with code and GitHub links"]
+    tools --> answer["Answer with code and source links"]
 ```
 
 Each tool call takes this path:
@@ -203,6 +203,7 @@ More detail is in [docs/architecture.md](docs/architecture.md) (data model, sear
 | Python | `ast`, with a line scanner for files `ast` can't parse | functions, classes, methods, imports |
 | JavaScript, TypeScript, Java, Go, Rust, C, C++, C#, PHP, Ruby | tree-sitter | functions, classes, methods, imports |
 | Markdown | heading scanner | a `doc_section` per heading |
+| Terraform (`.tf`, `.tfvars`), HCL (`.hcl`) | tree-sitter HCL grammar | a `terraform_block` per top-level block, named like `resource aws_s3_bucket.logs`, `module network`, `variable region` or `output api_url` |
 | CSS, HTML, JSON, YAML, XML | none | stored and readable, but no entities |
 
 ## Quick start
@@ -247,7 +248,7 @@ make start   # backend on http://127.0.0.1:8001, dashboard on http://localhost:5
 
 `make start` waits up to 15 seconds for the backend to answer `/health`, and exits with an error if it doesn't. The dashboard needs port 5173; if it's taken, Vite exits instead of picking another port. `make start-backend` and `make start-frontend` run them separately, `make stop` stops both, and `make health` reports whether the backend answers. API docs are at http://127.0.0.1:8001/docs.
 
-**4. Index a repository.** Open http://localhost:5173 and paste a GitHub URL. The repository page shows progress live and turns searchable when it's done. If GitHub or Algolia refuses the repository, the form says why; see [Adding a repository](#adding-a-repository).
+**4. Index a repository.** Open http://localhost:5173 and enter `owner/repo` (a pasted GitHub URL works too). The repository page shows progress live and turns searchable when it's done. If GitHub or Algolia refuses the repository, the form says why; see [Adding a repository](#adding-a-repository).
 
 **5. Connect Claude Desktop.**
 
@@ -264,8 +265,8 @@ Restart Claude Desktop and keep the backend running. Then ask Claude something l
 
 | Page | What you can do |
 | --- | --- |
-| Home (`/`) | Add a repository by URL, optionally with a branch. `https://github.com/owner/repo/tree/<branch>` works too. |
-| Repository (`/repository/:id`) | Watch indexing progress. Afterwards, search with suggestions and open results on GitHub at the exact line. Reprocess or delete the repository. |
+| Home (`/`) | Add a GitHub repository. The field has a `github.com/` prefix: type `owner/repo` or paste a GitHub URL, and it is trimmed to `owner/repo`. The branch has its own optional field. |
+| Repository (`/repository/:id`) | Watch indexing progress. Afterwards, search with suggestions and open results at the exact line. The source link says "View on GitHub", or "View source" for a repository on another host. Reprocess or delete the repository. |
 | Dashboard (`/dashboard`) | All repositories with their status and progress. Delete a repository from here. |
 
 A finished repository shows a green card. It shows amber if it was only partially indexed and red if it failed; both say why.
@@ -277,15 +278,27 @@ An unknown path shows "Page not found". A repository that doesn't exist says so;
 | Tool | What it returns |
 | --- | --- |
 | `list_repositories` | Indexed repositories with status and size |
-| `search_code` | Full-text matches over functions, classes, imports and doc sections, with GitHub links |
+| `search_code` | Full-text matches over functions, classes, imports, doc sections and Terraform blocks, with source links. A question in plain words returns the best partial matches |
 | `get_file` | A file with line numbers: at most 400 lines and 100,000 characters per call |
 | `list_definitions` | Definitions in a repository, by file and line |
 | `analyze_repository` | File, line and entity counts, languages, top directories, largest files |
 | `find_patterns` | Literal or regex line matches. Regex search stops after 10 s per call |
+| `add_repository` | Adds a repository by https URL and starts indexing. Public repositories on any git host; needs the API key |
 
 The installer merges CodeSage into your Claude Desktop config without touching other servers. It writes a backup first, and both files are mode 600 because they hold the key.
 
 For the HTTPS prod stack, use `make install-claude ARGS="--server-url https://your-host --basic-auth <user>"`. The password goes to the macOS Keychain, and nginx supplies the API key. See [docs/MCP_INTEGRATION_GUIDE.md](docs/MCP_INTEGRATION_GUIDE.md) for manual setup and troubleshooting.
+
+### Other git hosts
+
+Ask Claude: *"Add https://gitlab.com/group/project to CodeSage"*. Claude calls `add_repository` and you follow progress with `list_repositories`.
+
+- **Hosts.** https URLs on GitHub, GitLab (nested groups too), Bitbucket and self-hosted servers. Branch URLs such as `.../-/tree/dev` work.
+- **Public only.** Private repositories are refused on every host but github.com, where the server's `GITHUB_TOKEN` can read them. The message is "... was not found or is private; only public repositories are supported on <host>."
+- **Rejected URLs.** Ports, credentials, `localhost` and private IP addresses.
+- **Names and links.** Repositories on other hosts are named `<host>/<path>`. Search results link to GitLab and Bitbucket at the exact line. Other hosts get no link.
+- **Not in the dashboard.** The web form and `POST /api/v1/repositories/` take github.com only.
+- **Needs git.** The backend runs `git ls-remote` to check (10 s) and a shallow `git clone` to read (120 s). The prod Docker image includes git.
 
 ### REST API
 
@@ -297,10 +310,11 @@ curl -X POST http://127.0.0.1:8001/api/v1/repositories/ \
   -d '{"url": "https://github.com/owner/repo"}'
 ```
 
-- **Create.** GitHub is checked first; see [Adding a repository](#adding-a-repository). The response is `201`, and a background job starts. A duplicate URL gets `409` with `{detail, repository_id}`; URLs match regardless of case. A bad URL or branch gets `422` with `loc` of `["body","url"]` or `["body","branch"]`. A missing or private repository, a missing branch or an empty repository gets `422` with a string `detail`. A GitHub or network problem gets `502`, `503` (with `Retry-After` on a rate limit) or `504`, and an unconfigured Algolia gets `503`.
+- **Create.** GitHub is checked first; see [Adding a repository](#adding-a-repository). The response is `201`, and a background job starts. A duplicate URL gets `409` with `{detail, repository_id}`; URLs match regardless of case. A bad URL or branch gets `422` with `loc` of `["body","url"]` or `["body","branch"]`. A missing or private repository, a missing branch or an empty repository gets `422` with a string `detail`. A GitHub or network problem gets `502`, `503` (with `Retry-After` on a rate limit) or `504`, and an unconfigured Algolia gets `503`. A URL on another host gets `422`; those go in through the `add_repository` tool.
 - **Status.** Poll `GET /api/v1/repositories/{id}/status`; it includes `error_message`. For push updates, connect to `/ws`, send `{"type": "subscribe", "repository_id": N}` and read `{type, data}` frames.
 - **Reprocess.** `POST /api/v1/repositories/{id}/process?force_reprocess=true` re-runs indexing and returns `202` and sets the repository to `processing` first. It returns `409` while a job is running, and `503` if Algolia isn't configured.
 - **Edit.** `PUT /api/v1/repositories/{id}` returns `409` if it would change `branch`, `language` or `framework` while a job or a delete holds the repository; other fields can change at any time. An empty `branch` means the default branch.
+- **Delete.** `DELETE /api/v1/repositories/{id}` sends the removal to Algolia and returns without waiting for Algolia to finish. That is safe because Algolia applies an index's tasks in order, so a later re-add that reuses the id still lands after the delete. It returns `409` while a job is running. If Algolia refuses the request it returns `502` and the repository stays. Reprocess still waits.
 - **Restarts.** A server restart marks interrupted runs `failed`; reprocess them.
 - **Errors.** Errors are `{"detail": "..."}`. Validation errors (`422`) carry a list instead, with the field in `loc`. An id or `skip` too large for the database is `422`. Rate limiting (`429`) sends `Retry-After`. A `500` has `{detail, request_id}`, the same ID as the `X-Request-ID` header and the server log, and carries CORS headers so a browser can read it.
 - **Health.** `GET /health` is `200` `healthy`, `200` `degraded` when Algolia is unreachable or not configured, and `503` `unhealthy` when the database fails.
@@ -329,7 +343,7 @@ curl -X POST http://127.0.0.1:8001/api/v1/repositories/ \
 | `MCP_SERVER_HOST`, `MCP_SERVER_PORT` | `127.0.0.1`, `8001` | A non-loopback host requires the key |
 | `ALGOLIA_APP_ID`, `ALGOLIA_ADMIN_API_KEY` | unset | Required for indexing and search. Empty or `your-...-here` values count as unset: adding or reprocessing a repository returns `503`, MCP search says Algolia isn't configured, and `/health` is `degraded` |
 | `ALGOLIA_INDEX_NAME` | `codesage_code_entities` | One index per database; the Compose files use their own |
-| `GITHUB_TOKEN` | unset | Raises GitHub rate limits and allows private repositories. If GitHub rejects it, adding a repository returns `502` |
+| `GITHUB_TOKEN` | unset | Raises GitHub rate limits and allows private github.com repositories. If GitHub rejects it, adding a repository returns `502` |
 | `DATABASE_URL` | `sqlite:///./codesage.db` | SQLite only |
 | `CORS_ORIGINS` | localhost ports 3000, 5173, 5174 | Comma-separated list of origins; `*` is rejected. Also decides which browser origins may write |
 | `ALLOWED_HOSTS` | unset | With a key set, extra hostnames the API answers to, besides loopback and the `CORS_ORIGINS` hosts. Comma-separated; `*.example.com` allows subdomains, `*` allows any host |
