@@ -102,3 +102,6 @@ temp/
 
 # archify work folders (local diagram renders and receipts)
 .archify/
+
+# Claude desktop app (preview config, session worktrees)
+.claude/
