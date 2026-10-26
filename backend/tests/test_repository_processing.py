@@ -94,9 +94,7 @@ async def test_github_errors_mark_the_run_failed(
     await process(db_session, repository)
 
     assert repository.status == "failed"
-    assert repository.error_message == (
-        f"GitHubAPIError: GitHub request failed ({status})"
-    )
+    assert repository.error_message == f"GitHub request failed ({status})"
     assert algolia_index.records == {}
 
 

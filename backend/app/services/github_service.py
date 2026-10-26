@@ -1,5 +1,6 @@
 import asyncio
 import fnmatch
+import math
 import re
 import time
 from collections import deque
@@ -154,9 +155,44 @@ def quote_path(path: str) -> str:
 class GitHubAPIError(Exception):
     """GitHub returned an error status while listing repository contents"""
 
+    user_facing = True  # the message is written for the person who added the repository
+
     def __init__(self, status: int, message: str):
         super().__init__(message)
         self.status = status
+
+
+class RepositoryCheckError(Exception):
+    """The pre-flight check refused a repository; the endpoint returns it as an HTTP error"""
+
+    def __init__(self, status_code: int, detail: str, headers: dict[str, str] | None = None):
+        super().__init__(detail)
+        self.status_code = status_code
+        self.detail = detail
+        self.headers = headers
+
+
+def rate_limit_wait(headers) -> float | None:
+    """Seconds until a rate-limited 403/429 clears, or None when headers say nothing"""
+    try:
+        if "Retry-After" in headers:
+            return max(1.0, float(headers["Retry-After"]))
+        if headers.get("X-RateLimit-Remaining") == "0":
+            return max(1.0, int(headers["X-RateLimit-Reset"]) - time.time())
+    except (KeyError, ValueError):
+        pass
+    return None
+
+
+def is_rate_limited(status: int, headers) -> bool:
+    return status in (403, 429) and (
+        headers.get("X-RateLimit-Remaining") == "0" or "Retry-After" in headers
+    )
+
+
+def _about_minutes(seconds: float) -> str:
+    minutes = max(1, math.ceil(seconds / 60))
+    return f"about {minutes} minute{'' if minutes == 1 else 's'}"
 
 
 @dataclass
@@ -193,7 +229,7 @@ class GitHubService:
         if not self.token:
             logger.warning("GitHub token not found. Rate limits will be lower.")
 
-    def _new_session(self) -> aiohttp.ClientSession:
+    def _new_session(self, total_timeout: float = 30) -> aiohttp.ClientSession:
         """One session per get_repository_files call"""
         headers = {
             "Accept": "application/vnd.github.v3+json",
@@ -201,7 +237,7 @@ class GitHubService:
         }
         if self.token:
             headers["Authorization"] = f"token {self.token}"
-        timeout = aiohttp.ClientTimeout(total=30, connect=10)
+        timeout = aiohttp.ClientTimeout(total=total_timeout, connect=10)
         return aiohttp.ClientSession(headers=headers, timeout=timeout)
 
     async def _make_request_with_retries(
@@ -251,16 +287,14 @@ class GitHubService:
                     continue
                 if status < 500:
                     raise failure
-            except TimeoutError:
+            except TimeoutError as e:
                 target = f"{owner}/{repo}/{path}" if path else f"{owner}/{repo}"
-                failure = GitHubAPIError(
-                    504, f"GitHub API request timed out (504) while reading {target}"
-                )
+                logger.warning("GitHub request timed out", url=url, error=str(e))
+                failure = GitHubAPIError(504, f"GitHub did not respond in time while reading {target}")
             except aiohttp.ClientError as e:
                 target = f"{owner}/{repo}/{path}" if path else f"{owner}/{repo}"
-                failure = GitHubAPIError(
-                    503, f"GitHub API connection failed (503) while reading {target}: {e}"
-                )
+                logger.warning("GitHub request failed", url=url, error=str(e))
+                failure = GitHubAPIError(503, f"Could not reach GitHub while reading {target}")
 
             attempt += 1
             if attempt >= MAX_RETRIES:
@@ -268,6 +302,79 @@ class GitHubService:
             delay = RETRY_BACKOFF_BASE * 2 ** (attempt - 1)
             logger.warning("Retrying GitHub request", url=url, attempt=attempt, delay=delay)
             await asyncio.sleep(delay)
+
+    async def check_repository(self, url: str, branch: str | None = None) -> None:
+        """Fail fast, before a row exists, if the repository or branch can't be read.
+
+        One attempt each for the repository and its branch, 10 s in total: no retries or
+        rate-limit sleeps, since the caller is an HTTP request with its own timeout.
+        Raises RepositoryCheckError carrying the HTTP status and message to return.
+        """
+        owner, repo, url_branch = parse_github_url(url)
+        branch = branch or url_branch
+        name = f"{owner}/{repo}"
+        session = self._new_session(total_timeout=10)
+        try:
+            status, info = await self._check_get(session, f"{self.base_url}/repos/{owner}/{repo}")
+            if status == 404:
+                raise RepositoryCheckError(
+                    422,
+                    f"GitHub repository {name} was not found. Check the URL; "
+                    "if it's private, the server's GITHUB_TOKEN needs access.",
+                )
+            if status == 403:
+                raise RepositoryCheckError(422, f"GitHub denied access to {name}.")
+            if status != 200 or not isinstance(info, dict):
+                raise RepositoryCheckError(502, "Could not reach GitHub; try again.")
+
+            branch = branch or info.get("default_branch")
+            if not branch:
+                return  # get_repository_files reports a missing default branch itself
+            status, _ = await self._check_get(
+                session, f"{self.base_url}/repos/{owner}/{repo}/branches/{quote_path(branch)}"
+            )
+            if status == 404:
+                # Assumed: GitHub answers 404 for any branch of an empty repository
+                if info.get("size") == 0:
+                    raise RepositoryCheckError(422, f"{name} is empty; there is nothing to index.")
+                raise RepositoryCheckError(422, f"Branch '{branch}' does not exist in {name}.")
+            if status == 403:
+                raise RepositoryCheckError(422, f"GitHub denied access to {name}.")
+            if status != 200:
+                raise RepositoryCheckError(502, "Could not reach GitHub; try again.")
+        finally:
+            await session.close()
+
+    async def _check_get(self, session: aiohttp.ClientSession, url: str) -> tuple[int, Any]:
+        """One GET for check_repository: (status, JSON) for 200, 403 and 404, else raises"""
+        try:
+            async with session.get(url) as response:
+                status, headers = response.status, response.headers
+                body = await response.json(content_type=None) if status == 200 else None
+        except TimeoutError as e:
+            logger.warning("GitHub check timed out", url=url, error=str(e))
+            raise RepositoryCheckError(504, "GitHub did not respond in time; try again.") from e
+        except aiohttp.ClientError as e:
+            logger.warning("GitHub check failed", url=url, error=str(e))
+            raise RepositoryCheckError(502, "Could not reach GitHub; try again.") from e
+
+        if is_rate_limited(status, headers):
+            wait = rate_limit_wait(headers) or 60.0
+            raise RepositoryCheckError(
+                503,
+                f"GitHub's API rate limit was reached; try again in {_about_minutes(wait)}.",
+                {"Retry-After": str(math.ceil(wait))},
+            )
+        if status == 401:
+            raise RepositoryCheckError(
+                502,
+                "GitHub rejected the server's GITHUB_TOKEN; check the token configured "
+                "on the CodeSage server.",
+            )
+        if status >= 500:
+            logger.warning("GitHub check got a server error", url=url, status=status)
+            raise RepositoryCheckError(502, "Could not reach GitHub; try again.")
+        return status, body
 
     async def get_repository_files(
         self, repo_url: str, branch: str | None = None
@@ -468,8 +575,10 @@ class GitHubService:
         target = f"{owner}/{repo}/{path}" if path else f"{owner}/{repo}"
         if status == 401:
             return f"GitHub rejected the token (401) for {target}; check GITHUB_TOKEN"
-        if status in (403, 429) and headers.get("X-RateLimit-Remaining") == "0":
-            return f"GitHub API rate limit exceeded ({status}) while reading {target}"
+        if is_rate_limited(status, headers):
+            wait = rate_limit_wait(headers)
+            retry = f"; try again in {_about_minutes(wait)}" if wait else ""
+            return f"GitHub API rate limit exceeded ({status}) while reading {target}{retry}"
         if status == 403:
             return f"GitHub denied access (403) to {target}"
         if status == 404:

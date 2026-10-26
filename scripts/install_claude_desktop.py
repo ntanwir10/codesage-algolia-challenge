@@ -128,7 +128,11 @@ def main(argv: list[str] | None = None) -> int:
     # Behind the basic-auth proxy nginx supplies the key, so don't copy the backend's into this config
     api_key = args.api_key or ("" if args.basic_auth else read_env_value(ENV_FILE, "CODESAGE_API_KEY")) or ""
 
-    if urlsplit(server_url).password:
+    parts = urlsplit(server_url)
+    if parts.scheme not in ("http", "https") or not parts.hostname:
+        print("error: --server-url must be an http(s) URL with a host", file=sys.stderr)
+        return 1
+    if parts.password:
         print(
             "error: --server-url contains a password, which would be stored in plain text; "
             "use --basic-auth USER instead (the password goes to the macOS Keychain)",
@@ -143,6 +147,9 @@ def main(argv: list[str] | None = None) -> int:
     if config_path.exists():
         try:
             existing = json.loads(config_path.read_text(encoding="utf-8") or "{}")
+        except (OSError, UnicodeDecodeError) as exc:
+            print(f"error: cannot read {config_path}: {exc}", file=sys.stderr)
+            return 1
         except json.JSONDecodeError as exc:
             print(
                 f"error: {config_path} is not valid JSON ({exc}); refusing to overwrite it",
@@ -173,24 +180,50 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps(masked(merged, args.name), indent=2))
         return 0
 
+    if args.config is None and not config_path.parent.exists():
+        print(
+            f"warning: {config_path.parent} does not exist; Claude Desktop doesn't seem to be installed",
+            file=sys.stderr,
+        )
+    # Fail on an unwritable directory before the Keychain is touched, so no orphan item is left
+    try:
+        config_path.parent.mkdir(parents=True, exist_ok=True)
+        if not os.access(config_path.parent, os.W_OK):
+            raise PermissionError(f"{config_path.parent} is not writable")
+    except OSError as exc:
+        print(f"error: cannot write {config_path}: {exc}", file=sys.stderr)
+        return 1
     if args.basic_auth:
         print(f"Enter the password for {args.basic_auth}; it is stored in the Keychain only.")
         # -w as the last option makes `security` prompt, so the password is never in argv
         cmd = ["security", "add-generic-password", "-U", "-s", "codesage-mcp", "-a", args.basic_auth, "-w"]
         if subprocess.run(cmd).returncode != 0:
-            print("error: could not store the password in the Keychain", file=sys.stderr)
+            print(
+                "error: could not store the password in the Keychain (prompt cancelled or "
+                "keychain locked?); nothing was changed",
+                file=sys.stderr,
+            )
             return 1
     if not api_key and not args.basic_auth:
         print(
             "warning: no API key found (--api-key or CODESAGE_API_KEY in backend/.env); writing it empty",
             file=sys.stderr,
         )
-    if config_path.exists():
-        backup = config_path.with_name(f"{config_path.name}.bak-{time.strftime('%Y%m%d-%H%M%S')}")
-        # A byte-for-byte copy, created at mode 600 so the key it holds is never world-readable
-        write_atomic(backup, config_path.read_bytes())
-        print(f"backup: {backup}")
-    write_atomic(config_path, (json.dumps(merged, indent=2) + "\n").encode())
+    try:
+        if config_path.exists():
+            stamp = f"{time.strftime('%Y%m%d-%H%M%S')}-{os.getpid()}"
+            backup = config_path.with_name(f"{config_path.name}.bak-{stamp}")
+            n = 0
+            while backup.exists():  # same second, same process
+                n += 1
+                backup = config_path.with_name(f"{config_path.name}.bak-{stamp}-{n}")
+            # A byte-for-byte copy, created at mode 600 so the key it holds is never world-readable
+            write_atomic(backup, config_path.read_bytes())
+            print(f"backup: {backup}")
+        write_atomic(config_path, (json.dumps(merged, indent=2) + "\n").encode())
+    except OSError as exc:
+        print(f"error: cannot write {config_path}: {exc}", file=sys.stderr)
+        return 1
     print(f"updated {config_path}: mcpServers.{args.name} -> {LAUNCHER}")
     print("Restart Claude Desktop to pick it up.")
     return 0

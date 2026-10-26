@@ -456,4 +456,4 @@ async def test_failed_run_reports_its_reason_through_the_api(client, db_session,
 
     body = client.get(f"/api/v1/repositories/{repo.id}").json()
     assert body["status"] == "failed"
-    assert body["error_message"] == "GitHubAPIError: GitHub repository or path not found (404): octo/demo"
+    assert body["error_message"] == "GitHub repository or path not found (404): octo/demo"

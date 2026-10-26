@@ -2,6 +2,7 @@ from datetime import datetime
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic_core import PydanticCustomError
 
 from app.services.github_service import is_valid_branch, parse_github_url
 
@@ -26,11 +27,25 @@ class RepositoryCreate(RepositoryBase):
 
     url: str = Field(..., description="GitHub repository URL")
 
+    @field_validator("url")
+    @classmethod
+    def url_is_github(cls, url: str) -> str:
+        try:
+            parse_github_url(url)
+        except ValueError as e:
+            raise PydanticCustomError("invalid_url", str(e)) from e
+        return url
+
+    @field_validator("branch")
+    @classmethod
+    def branch_is_valid(cls, branch: str | None) -> str | None:
+        if branch and not is_valid_branch(branch):
+            raise PydanticCustomError("invalid_branch", "Invalid branch name")
+        return branch
+
     @model_validator(mode="after")
     def normalise(self) -> "RepositoryCreate":
         owner, repo, url_branch = parse_github_url(self.url)
-        if self.branch and not is_valid_branch(self.branch):
-            raise ValueError("Invalid branch name")
         self.url = f"https://github.com/{owner}/{repo}"
         # An explicit empty branch means the default one, even with a /tree/<branch> URL;
         # an omitted or null branch falls back to the URL's. Stored as null, like an update does

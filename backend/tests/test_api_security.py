@@ -267,11 +267,11 @@ class TestBehindTheProdProxy:
 class TestRateLimit:
     def test_limit_returns_429(self, client, monkeypatch):
         monkeypatch.setattr(get_settings(), "rate_limit_default", "2/minute")
-        statuses = [
-            client.post(REPOS, json={"url": f"https://github.com/o/r{i}"}).status_code
-            for i in range(3)
-        ]
+        responses = [client.post(REPOS, json={"url": f"https://github.com/o/r{i}"}) for i in range(3)]
+        statuses = [r.status_code for r in responses]
+        limited = responses[-1]
         assert statuses == [201, 201, 429]
+        assert limited.json()["detail"].startswith("Too many requests")
 
 
 class TestUrlValidation:
@@ -434,6 +434,7 @@ class TestHealthAndMcp:
         response = client.get("/health")
         assert response.status_code == 200
         body = response.json()
+        assert body["status"] == "degraded"
         assert body["components"]["algolia"]["status"] == "not_configured"
         assert body["components"]["database"]["status"] == "healthy"
         assert body["timestamp"] != "2024-01-01T00:00:00Z"

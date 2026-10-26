@@ -38,6 +38,9 @@ def failure_message(error: Exception) -> str:
     # A SQLAlchemy error's text carries the SQL and its parameters, which include file contents
     if isinstance(error, SQLAlchemyError):
         return "Database error while storing the repository"
+    # These errors' messages are already written for the person reading them
+    if getattr(error, "user_facing", False):
+        return str(error)[:500]
     return f"{type(error).__name__}: {error}"[:500]
 
 

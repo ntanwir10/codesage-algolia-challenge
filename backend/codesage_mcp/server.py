@@ -38,6 +38,7 @@ DEFAULT_SERVER_URL = "http://127.0.0.1:8001"
 LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1"}
 API_PREFIX = "/api/v1/ai"
 REQUEST_TIMEOUT = 30.0
+CONNECT_TIMEOUT = 5.0
 SERVER_NAME = "codesage"
 SERVER_VERSION = "1.0.0"
 UNEXPECTED_RESPONSE = "CodeSage backend returned an unexpected response; check MCP_SERVER_URL"
@@ -82,6 +83,13 @@ class Config:
         )
 
     @property
+    def url_problem(self) -> str | None:
+        parts = urlsplit(self.server_url)
+        if parts.scheme in ("http", "https") and parts.hostname:
+            return None
+        return f"MCP_SERVER_URL must start with http:// or https:// (got '{self.display_url}')"
+
+    @property
     def display_url(self) -> str:
         """server_url without a user:password@, for messages and logs (Claude Desktop keeps stderr)"""
         parts = urlsplit(self.server_url)
@@ -103,7 +111,10 @@ ClientFactory = Callable[[Config], httpx.AsyncClient]
 
 def default_client_factory(config: Config) -> httpx.AsyncClient:
     return httpx.AsyncClient(
-        base_url=config.base_url, headers=config.headers, auth=config.auth, timeout=REQUEST_TIMEOUT
+        base_url=config.base_url,
+        headers=config.headers,
+        auth=config.auth,
+        timeout=httpx.Timeout(REQUEST_TIMEOUT, connect=CONNECT_TIMEOUT),
     )
 
 
@@ -119,7 +130,22 @@ class CodeSageBridge:
         self._client_factory = client_factory
 
     def not_reachable_message(self) -> str:
-        return f"CodeSage backend not reachable at {self.config.display_url}; start it with `make start-backend`"
+        hint = (
+            "start it with `make start-backend`"
+            if urlsplit(self.config.server_url).hostname in LOOPBACK_HOSTS
+            else "check MCP_SERVER_URL and that the host is up"
+        )
+        return f"CodeSage backend not reachable at {self.config.display_url}; {hint}"
+
+    def _transport_message(self, exc: Exception) -> str:
+        if isinstance(exc, BackendUnreachable):
+            return self.not_reachable_message()
+        if isinstance(exc, httpx.TimeoutException):
+            return f"CodeSage backend did not answer within {REQUEST_TIMEOUT:g} s."
+        return f"CodeSage backend request failed: {type(exc).__name__}: {exc}"
+
+    def _config_problem(self) -> str | None:
+        return self.config.url_problem or self.config.insecure_auth_problem
 
     @staticmethod
     def _json_object(response: httpx.Response) -> dict[str, Any]:
@@ -156,34 +182,59 @@ class CodeSageBridge:
             return response.text[:500]
         return body.get("detail", body) if isinstance(body, dict) else body
 
-    def _http_error(self, response: httpx.Response, tool: str) -> types.CallToolResult:
+    def _status_message(self, response: httpx.Response, subject: str, resource: bool = False) -> str:
+        """One wording for a non-200 answer, shared by tool calls and resource reads"""
         status = response.status_code
         detail = self._detail(response)
+        try:
+            body = response.json()
+        except ValueError:
+            body = None
         if status == 401 and "basic" in response.headers.get("www-authenticate", "").lower():
             # Only a basic-auth proxy (the prod nginx) asks for a login; the backend never does
-            msg = (
+            return (
                 "The proxy in front of CodeSage rejected the login (401); check the user and "
                 "password (CODESAGE_BASIC_AUTH_USER and its Keychain entry)"
             )
-        elif status == 401:
-            msg = "CodeSage backend rejected the API key (401); check CODESAGE_API_KEY in the MCP server config"
-        elif status == 404:
-            msg = f"Unknown tool '{tool}' (404): {detail}"
-        elif status == 422:
-            msg = f"Invalid arguments for '{tool}' (422): {json.dumps(detail, indent=2)}"
-        elif status == 429:
-            msg = "CodeSage backend rate limit exceeded (429); wait a moment and retry"
-        elif status >= 500:
-            msg = f"CodeSage backend error ({status}): {detail}"
-        else:
-            msg = f"Unexpected response from CodeSage backend ({status}): {detail}"
-        return self._error(msg)
+        if status == 401 and not self.config.api_key:
+            return (
+                "No API key is configured; set CODESAGE_API_KEY in the MCP server's env "
+                "in the Claude Desktop config."
+            )
+        if status == 401:
+            return "CodeSage backend rejected the API key (401); check CODESAGE_API_KEY in the MCP server config"
+        if status == 403:
+            return (
+                f"CodeSage refused the request (403): {str(detail).rstrip('.')}. If the backend runs on "
+                "another host, add that host to ALLOWED_HOSTS on the backend and check MCP_SERVER_URL."
+            )
+        if status == 404 and resource and body is not None:
+            return f"Resource or repository not found: {detail}"
+        if status == 404:
+            # Tool names are validated locally, so a 404 here means the URL is wrong
+            return (
+                f"The backend returned 404 for {response.request.url.path}; check that "
+                "MCP_SERVER_URL points at the backend root (no /api/v1)."
+            )
+        if status == 422:
+            return f"Invalid arguments for '{subject}' (422): {json.dumps(detail, indent=2)}"
+        if status == 429:
+            return "CodeSage backend rate limit exceeded (429); wait a moment and retry"
+        if status >= 500:
+            if body is None:  # nginx HTML and the like: don't echo it
+                return f"CodeSage backend error ({status}); the backend or the proxy in front of it may be down."
+            request_id = (body.get("request_id") if isinstance(body, dict) else None) or response.headers.get(
+                "x-request-id"
+            )
+            suffix = f" (request {request_id})" if request_id else ""
+            return f"CodeSage backend error ({status}): {detail}{suffix}"
+        return f"Unexpected response from CodeSage backend ({status}): {detail}"
 
     async def call_tool(self, name: str, arguments: dict[str, Any] | None) -> types.CallToolResult:
         spec = TOOLS.get(name)
         if spec is None:
             return self._error(f"Unknown tool '{name}'. Available tools: {', '.join(TOOLS)}")
-        if problem := self.config.insecure_auth_problem:
+        if problem := self._config_problem():
             return self._error(problem)
         try:
             args = spec.args_model.model_validate(arguments or {})
@@ -197,13 +248,11 @@ class CodeSageBridge:
         payload = {"tool_name": name, "arguments": args.model_dump(exclude_none=True)}
         try:
             response = await self._request("POST", "/mcp/tools/call", json=payload)
-        except BackendUnreachable:
-            return self._error(self.not_reachable_message())
-        except httpx.HTTPError as exc:
-            return self._error(f"CodeSage backend request failed: {type(exc).__name__}: {exc}")
+        except (BackendUnreachable, httpx.HTTPError) as exc:
+            return self._error(self._transport_message(exc))
 
         if response.status_code != 200:
-            return self._http_error(response, name)
+            return self._error(self._status_message(response, name))
         try:
             body = self._json_object(response)
         except MCPError:
@@ -245,27 +294,17 @@ class CodeSageBridge:
 
     async def _resource_request(self, path: str, **kwargs: Any) -> httpx.Response:
         # Resource reads carry the same key or login as tool calls
-        if problem := self.config.insecure_auth_problem:
+        if problem := self._config_problem():
             raise MCPError(types.INVALID_REQUEST, problem)
         try:
             response = await self._request("GET", path, **kwargs)
-        except BackendUnreachable:
-            raise MCPError(types.INTERNAL_ERROR, self.not_reachable_message()) from None
-        except httpx.HTTPError as exc:
-            raise MCPError(types.INTERNAL_ERROR, f"CodeSage backend request failed: {exc}") from exc
+        except (BackendUnreachable, httpx.HTTPError) as exc:
+            raise MCPError(types.INTERNAL_ERROR, self._transport_message(exc)) from exc
         if response.status_code == 200:
             return response
-        detail = self._detail(response)
-        if response.status_code == 404:
-            raise MCPError(types.INVALID_PARAMS, f"Resource not found: {detail}")
-        if response.status_code == 401:
-            raise MCPError(
-                types.INTERNAL_ERROR,
-                "CodeSage backend rejected the API key; check CODESAGE_API_KEY",
-            )
-        raise MCPError(
-            types.INTERNAL_ERROR, f"CodeSage backend error ({response.status_code}): {detail}"
-        )
+        message = self._status_message(response, "resource read", resource=True)
+        is_missing = message.startswith("Resource or repository not found")
+        raise MCPError(types.INVALID_PARAMS if is_missing else types.INTERNAL_ERROR, message)
 
 
 def build_server(

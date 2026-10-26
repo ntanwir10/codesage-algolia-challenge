@@ -142,10 +142,46 @@ async def test_search_permalink_percent_encodes_branch_and_path(db_session, algo
 
 
 async def test_search_requires_completed(db_session, algolia_index):
-    make_repo(db_session, name="busy", url=None, status="processing")
-    with pytest.raises(ToolError, match="processing"):
+    make_repo(db_session, name="busy", url=None, status="processing", total_files=10, processed_files=4)
+    with pytest.raises(ToolError, match=r"'busy' is still indexing \(4/10 files\)"):
         await call_tool(db_session, "search_code", {"query": "x", "repository": "busy"})
     assert algolia_index.searches == []
+
+
+async def test_search_not_configured(db_session, repo, monkeypatch):
+    class Unconfigured:
+        def is_available(self):
+            return False
+
+    monkeypatch.setattr(mcp_tools.algolia_service, "AlgoliaService", Unconfigured)
+    with pytest.raises(ToolError, match="Search is not configured on the server.*ALGOLIA_APP_ID"):
+        await call_tool(db_session, "search_code", {"query": "x"})
+
+
+TOOL_ARGS = {
+    "search_code": {"query": "x"},
+    "get_file": {"path": "a.ts"},
+    "list_definitions": {},
+    "analyze_repository": {},
+    "find_patterns": {"pattern": "x"},
+}
+
+
+@pytest.mark.parametrize("tool", TOOL_ARGS)
+@pytest.mark.parametrize(
+    ("kw", "message"),
+    [
+        ({"status": "failed", "error_message": "Rate limited"}, "failed to index: Rate limited. Reprocess"),
+        ({"status": "failed"}, "failed to index. Reprocess it from the dashboard."),
+        ({"status": "processing", "total_files": 8, "processed_files": 3}, "still indexing (3/8 files); try"),
+        ({"status": "pending"}, "still indexing; try again when it completes."),
+    ],
+)
+async def test_tools_refuse_repositories_that_are_not_ready(db_session, algolia_index, tool, kw, message):
+    make_repo(db_session, name="r", url=None, **kw)
+    with pytest.raises(ToolError, match=r"Repository 'r' ") as excinfo:
+        await call_tool(db_session, tool, {"repository": "r", **TOOL_ARGS[tool]})
+    assert message in str(excinfo.value)
 
 
 async def test_search_algolia_failure(db_session, repo, algolia_index):

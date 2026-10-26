@@ -6,13 +6,14 @@ cached Settings object: database, Algolia, GitHub, API key, CORS, rate limits
 and the MCP server description.
 """
 
+import re
 from functools import lru_cache
 from urllib.parse import urlsplit
 
 # Load environment variables from .env file
 import structlog
 from dotenv import load_dotenv
-from pydantic import Field
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 load_dotenv()
@@ -99,6 +100,14 @@ class Settings(BaseSettings):
         default="http://localhost:3000,http://localhost:5173,http://localhost:5174",
         description="Comma-separated list of CORS origins",
     )
+
+    @field_validator("algolia_app_id", "algolia_admin_api_key", "github_token", mode="before")
+    @classmethod
+    def _placeholder_is_unset(cls, value):
+        """An .env copied from the old example still holds 'your-...-here'; that means not configured"""
+        if isinstance(value, str) and re.fullmatch(r"your-.*-here", value.strip()):
+            return None
+        return value
 
     @property
     def cors_origins_list(self) -> list[str]:

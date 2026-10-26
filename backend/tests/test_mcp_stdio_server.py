@@ -109,7 +109,7 @@ async def test_422_includes_field_errors():
 
 @pytest.mark.parametrize(
     ("status", "needle"),
-    [(401, "CODESAGE_API_KEY"), (404, "Unknown tool"), (429, "rate limit"), (503, "503")],
+    [(401, "CODESAGE_API_KEY"), (404, "returned 404"), (429, "rate limit"), (503, "503")],
 )
 async def test_http_errors_become_is_error(status, needle):
     async with make_client(
@@ -131,8 +131,19 @@ async def test_unreachable_backend_retries_once_and_reports():
         result = await client.call_tool("list_repositories", {})
     assert result.is_error
     assert "CodeSage backend not reachable at https://backend.test" in result.content[0].text
-    assert "make start-backend" in result.content[0].text
+    assert "check MCP_SERVER_URL and that the host is up" in result.content[0].text
     assert len(calls) == 2
+
+
+@pytest.mark.parametrize("url", ["http://127.0.0.1:8001", "http://localhost:8001", "http://[::1]:8001"])
+async def test_loopback_unreachable_suggests_starting_the_backend(url):
+    def down(request):
+        raise httpx.ConnectError("refused")
+
+    async with make_client(Backend(down), config=Config(server_url=url)) as client:
+        result = await client.call_tool("list_repositories", {})
+    assert "make start-backend" in result.content[0].text
+    assert "check MCP_SERVER_URL" not in result.content[0].text
 
 
 async def test_resources_never_send_the_key_over_plain_http_to_another_host():
@@ -319,3 +330,85 @@ async def test_api_key_is_never_sent_over_plain_http_to_another_host(url, refuse
         result = await client.call_tool("list_repositories", {})
     assert result.is_error is refused
     assert (backend.requests == []) is refused
+
+
+# --- error wording, shared by tool calls and resource reads -------------------------------
+
+
+async def tool_text(backend: Backend, config: Config | None = None) -> str:
+    async with make_client(backend, api_key="k", config=config) as client:
+        result = await client.call_tool("list_repositories", {})
+    assert result.is_error
+    return result.content[0].text
+
+
+async def resource_text(backend: Backend, config: Config | None = None) -> str:
+    async with make_client(backend, api_key="k", config=config) as client:
+        with pytest.raises(MCPError) as err:
+            await client.read_resource("codesage://repos")
+    return err.value.message
+
+
+def reply(status, **kwargs):
+    return Backend(lambda r: httpx.Response(status, **kwargs))
+
+
+@pytest.mark.parametrize("ask", [tool_text, resource_text])
+async def test_status_wording_matches_for_tools_and_resources(ask):
+    assert "rejected the API key" in await ask(reply(401, json={"detail": "x"}))
+    assert "rate limit exceeded (429)" in await ask(reply(429, json={"detail": "slow"}))
+    text = await ask(reply(403, json={"detail": "Invalid host header"}))
+    assert "refused the request (403): Invalid host header." in text and "ALLOWED_HOSTS" in text
+    text = await ask(reply(404, text="<html>nope</html>"))
+    assert "returned 404 for /api/v1/ai/mcp/" in text and "no /api/v1" in text
+    text = await ask(reply(502, text="<html>Bad Gateway</html>"))
+    assert text.startswith("CodeSage backend error (502); the backend or the proxy")
+    assert "Bad Gateway" not in text
+
+
+async def test_missing_key_vs_wrong_key():
+    cfg = Config(server_url="https://backend.test")
+    missing = await tool_text(reply(401, json={"detail": "x"}), Config(server_url="https://backend.test"))
+    assert "No API key is configured" in missing and "CODESAGE_API_KEY" in missing
+    wrong = await tool_text(reply(401, json={"detail": "x"}), Config(server_url=cfg.server_url, api_key="bad"))
+    assert "rejected the API key" in wrong
+    assert "No API key is configured" in await resource_text(reply(401), cfg)
+
+
+async def test_5xx_with_json_detail_and_request_id():
+    body = {"detail": "boom", "request_id": "abc123"}
+    assert await tool_text(reply(500, json=body)) == "CodeSage backend error (500): boom (request abc123)"
+    assert await resource_text(reply(500, json=body)) == "CodeSage backend error (500): boom (request abc123)"
+    header = reply(503, json={"detail": "busy"}, headers={"X-Request-ID": "h-9"})
+    assert await tool_text(header) == "CodeSage backend error (503): busy (request h-9)"
+    assert await tool_text(reply(500, json={"detail": "boom"})) == "CodeSage backend error (500): boom"
+
+
+async def test_resource_404_with_json_detail_is_a_real_not_found():
+    text = await resource_text(reply(404, json={"detail": "Unknown resource"}))
+    assert text == "Resource or repository not found: Unknown resource"
+
+
+async def test_timeout_is_reported_with_the_limit():
+    def slow(request):
+        raise httpx.ReadTimeout("slow")
+
+    assert await tool_text(Backend(slow)) == "CodeSage backend did not answer within 30 s."
+    assert "did not answer within 30 s" in await resource_text(Backend(slow))
+
+
+@pytest.mark.parametrize("url", ["localhost:8001", "backend.test", "ftp://backend.test"])
+async def test_url_without_http_scheme_is_refused_before_any_request(url):
+    backend = Backend()
+    config = Config(server_url=url)
+    expected = f"MCP_SERVER_URL must start with http:// or https:// (got '{url}')"
+    assert await tool_text(backend, config) == expected
+    assert await resource_text(backend, config) == expected
+    assert backend.requests == []
+
+
+async def test_resource_transport_errors_keep_type_and_message():
+    def boom(request):
+        raise httpx.ReadError("reset by peer")
+
+    assert "ReadError: reset by peer" in await resource_text(Backend(boom))

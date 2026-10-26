@@ -96,6 +96,22 @@ def resolve_repository(db: Session, ref: str) -> Repository:
     raise ToolError(f"Repository '{ref}' not found. Available repositories: {available}")
 
 
+def _require_ready(repository: Repository) -> None:
+    """Refuse to answer from a repository whose index is failed or incomplete"""
+    if repository.status == "completed":
+        return
+    name = repository.name
+    if repository.status == "failed":
+        reason = f": {repository.error_message}" if repository.error_message else ""
+        raise ToolError(f"Repository '{name}' failed to index{reason}. Reprocess it from the dashboard.")
+    progress = (
+        f" ({repository.processed_files or 0}/{repository.total_files} files)"
+        if repository.total_files
+        else ""
+    )
+    raise ToolError(f"Repository '{name}' is still indexing{progress}; try again when it completes.")
+
+
 def _entity_counts(db: Session) -> dict[int, int]:
     rows = db.query(CodeEntity.repository_id, func.count()).group_by(CodeEntity.repository_id).all()
     return dict(rows)
@@ -143,13 +159,15 @@ async def search_code(db: Session, args: schemas.SearchCodeArgs) -> dict:
     repository = None
     if args.repository is not None:
         repository = resolve_repository(db, args.repository)
-        if repository.status != "completed":
-            raise ToolError(
-                f"Repository '{repository.name}' is not searchable yet (status: {repository.status})"
-            )
+        _require_ready(repository)
 
+    service = algolia_service.AlgoliaService()
+    if not service.is_available():
+        raise ToolError(
+            "Search is not configured on the server (ALGOLIA_APP_ID / ALGOLIA_ADMIN_API_KEY are missing)."
+        )
     try:
-        response = await algolia_service.AlgoliaService().search_code(
+        response = await service.search_code(
             args.query,
             repository_id=repository.id if repository else None,
             language=args.language,
@@ -160,7 +178,7 @@ async def search_code(db: Session, args: schemas.SearchCodeArgs) -> dict:
     except Exception as exc:
         # The client's text can name the Algolia host or app id; it stays in the log
         logger.warning("MCP search failed", error=str(exc))
-        raise ToolError("Search is unavailable; try again later") from exc
+        raise ToolError("Search is unavailable; try again later.") from exc
 
     hits = response.get("hits", [])
     known = {repository.id: repository} if repository else {}
@@ -199,6 +217,7 @@ async def search_code(db: Session, args: schemas.SearchCodeArgs) -> dict:
 
 async def get_file(db: Session, args: schemas.GetFileArgs) -> dict:
     repository = resolve_repository(db, args.repository)
+    _require_ready(repository)
     code_file = (
         db.query(CodeFile)
         .filter(CodeFile.repository_id == repository.id, CodeFile.file_path == args.path)
@@ -240,6 +259,7 @@ async def get_file(db: Session, args: schemas.GetFileArgs) -> dict:
 
 async def list_definitions(db: Session, args: schemas.ListDefinitionsArgs) -> dict:
     repository = resolve_repository(db, args.repository)
+    _require_ready(repository)
     query = (
         db.query(CodeEntity, CodeFile.file_path)
         .join(CodeFile, CodeEntity.file_id == CodeFile.id)
@@ -283,6 +303,7 @@ async def list_definitions(db: Session, args: schemas.ListDefinitionsArgs) -> di
 
 async def analyze_repository(db: Session, args: schemas.AnalyzeRepositoryArgs) -> dict:
     repository = resolve_repository(db, args.repository)
+    _require_ready(repository)
     stats = await RepositoryService(db).get_repository_statistics(repository)
 
     files = (
@@ -354,6 +375,7 @@ def _scan(
 
 async def find_patterns(db: Session, args: schemas.FindPatternsArgs) -> dict:
     repository = resolve_repository(db, args.repository)
+    _require_ready(repository)
     if args.regex:
         try:
             regex.compile(args.pattern)

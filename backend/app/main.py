@@ -12,7 +12,6 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from sqlalchemy import text
 
@@ -110,7 +109,24 @@ app = FastAPI(
 )
 
 app.state.limiter = limiter
-app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
+DEFAULT_RETRY_AFTER = 60
+
+
+async def rate_limit_exceeded_handler(request: Request, exc: RateLimitExceeded):
+    """429 in the API's {detail} shape, with Retry-After taken from the matched limit's window"""
+    try:
+        seconds = int(exc.limit.limit.get_expiry())
+    except (AttributeError, TypeError, ValueError):
+        seconds = DEFAULT_RETRY_AFTER
+    return JSONResponse(
+        status_code=429,
+        content={"detail": f"Too many requests; try again in {seconds} seconds."},
+        headers={"Retry-After": str(seconds)},
+    )
+
+
+app.add_exception_handler(RateLimitExceeded, rate_limit_exceeded_handler)
 
 logger.info(
     "CodeSage MCP Server configured",
@@ -145,6 +161,13 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
         exc_info=exc,
     )
     headers = {"X-Request-ID": request_id} if request_id else {}
+    # ServerErrorMiddleware sits outside CORSMiddleware, so a 500 needs its CORS headers added here
+    origin = request.headers.get("origin")
+    if origin and origin in CORS_OPTIONS["allow_origins"]:
+        headers["Access-Control-Allow-Origin"] = origin
+        headers["Vary"] = "Origin"
+        if CORS_OPTIONS["allow_credentials"]:
+            headers["Access-Control-Allow-Credentials"] = "true"
     return JSONResponse(
         status_code=500,
         content={"detail": "Internal server error", "request_id": request_id},
@@ -152,14 +175,14 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
     )
 
 
-# Add middleware
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=settings.cors_origins_list,
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+# Shared with unhandled_exception_handler, which mirrors these on a 500
+CORS_OPTIONS = {
+    "allow_origins": settings.cors_origins_list,
+    "allow_credentials": True,
+    "allow_methods": ["*"],
+    "allow_headers": ["*"],
+}
+app.add_middleware(CORSMiddleware, **CORS_OPTIONS)
 
 # Include API routes
 app.include_router(api_router, prefix="/api/v1")
@@ -210,7 +233,7 @@ async def _check_algolia() -> dict:
 
 @app.get("/health")
 async def health_check():
-    """Health check: the database decides 200 vs 503, Algolia only degrades"""
+    """Health check: the database decides 200 vs 503, Algolia (down or not configured) only degrades"""
     components: dict[str, dict] = {}
 
     try:
@@ -225,7 +248,7 @@ async def health_check():
 
     if components["database"]["status"] != "healthy":
         overall = "unhealthy"
-    elif components["algolia"]["status"] == "degraded":
+    elif components["algolia"]["status"] in ("degraded", "not_configured"):
         overall = "degraded"
     else:
         overall = "healthy"

@@ -56,6 +56,8 @@ def _run_slot() -> asyncio.Semaphore:
 class IngestionError(Exception):
     """A processing run that would leave the repository with nothing searchable"""
 
+    user_facing = True  # messages are written for the person who added the repository
+
 
 class RepositoryBusyError(Exception):
     """The repository already has a processing job running"""
