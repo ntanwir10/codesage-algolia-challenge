@@ -72,6 +72,11 @@ setup:
 # Quick start commands  
 start:
 	@echo "🚀 Starting CodeSage - MCP-First Code Discovery..."
+	@# A backend already on 8001 would answer the health check below on behalf of ours
+	@if curl -fsS http://127.0.0.1:8001/health >/dev/null 2>&1; then \
+		echo "❌ A backend is already running on port 8001. Stop it with 'make stop', or run 'make start-frontend' to use it."; \
+		exit 1; \
+	fi
 	@$(MAKE) start-backend & pid=$$!; ok=; \
 	for i in $$(seq 1 15); do \
 		kill -0 $$pid 2>/dev/null || break; \
@@ -88,7 +93,7 @@ start:
 start-backend:
 	@echo "🔧 Starting CodeSage - MCP-First Code Discovery backend server..."
 	@echo "📍 Make sure your virtual environment is active: source .venv/bin/activate"
-	cd backend && ../.venv/bin/python -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8001
+	cd backend && exec ../.venv/bin/python -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8001
 
 start-frontend:
 	@echo "🎨 Starting frontend development server..."
