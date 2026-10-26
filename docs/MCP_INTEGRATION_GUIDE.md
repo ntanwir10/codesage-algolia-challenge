@@ -28,7 +28,7 @@ Claude Desktop starts `mcp_launcher.sh`. The launcher runs `python -m codesage_m
 ## Prerequisites
 
 - **Virtualenv.** `.venv` exists at the repo root (`make setup`).
-- **Backend config.** `backend/.env` has your Algolia credentials, and `CODESAGE_API_KEY` if you set one. Empty values and leftover `your-...-here` placeholders count as unset, and search then fails with a clear message.
+- **Backend config.** `backend/.env` has your Algolia credentials, and `CODESAGE_API_KEY`, which `make setup`, `make start` and `make install-claude` generate if it is missing (and copy to `frontend/.env`). To rotate it, delete the line, run `make setup` and `make install-claude`, then restart Claude Desktop. Empty values and leftover `your-...-here` placeholders count as unset, and search then fails with a clear message.
 - **Backend running.** `make start-backend`, with at least one repository in status `completed`. Every tool refuses a repository that is `failed`, `pending` or `processing`.
 
 ## Install into Claude Desktop
@@ -75,7 +75,7 @@ Options go through `ARGS`. Restart Claude Desktop afterwards.
 - **Protects the key.** Both files are written atomically (temp file, then rename) at mode 600, because they can hold the API key.
 - **Refuses to overwrite a bad file.** If the config is not valid JSON, or not a JSON object, it exits with an error and changes nothing. A config it can't read, or a folder it can't write to, is also a one-line error, and it checks this before touching the Keychain, so a failed run leaves no stray item.
 - **Warns when Claude Desktop looks missing.** If the default config folder doesn't exist, it prints a warning and creates the folder anyway. It doesn't warn when you pass `--config`.
-- **Reads the key from `backend/.env`.** `--api-key` wins. With `--basic-auth` it does not copy the backend's key, because nginx adds it. With no key found and no `--basic-auth`, it warns and writes an empty `CODESAGE_API_KEY`.
+- **Reads the key from `backend/.env`.** `--api-key` wins. With `--basic-auth` it does not copy the backend's key, because nginx adds it. `make install-claude` first generates the key if `backend/.env` has none. Run directly with no key found and no `--basic-auth`, it warns and writes an empty `CODESAGE_API_KEY`.
 - **Keeps passwords out of the config.** A password in `--server-url` is refused, and the `--basic-auth` password is never in argv or the file.
 
 ## Manual install

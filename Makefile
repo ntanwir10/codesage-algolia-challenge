@@ -61,17 +61,19 @@ setup:
 	else .venv/bin/python -m pip install -r backend/requirements-dev.txt; fi
 	@command -v node >/dev/null && [ "$$(node -p 'process.versions.node.split(".")[0]')" -ge 22 ] || { echo "❌ Node.js 22 or newer is required"; exit 1; }
 	@cd frontend && npm ci
+	@.venv/bin/python scripts/ensure_api_key.py
 	@echo ""
 	@echo "📋 Edit backend/.env (these values are empty by default):"
 	@echo "   ALGOLIA_APP_ID, ALGOLIA_ADMIN_API_KEY  (from the Algolia dashboard; needed for indexing and search)"
 	@echo "   GITHUB_TOKEN                           (optional; raises GitHub rate limits)"
-	@echo "   CODESAGE_API_KEY                       (optional for local use; required when the server listens beyond localhost (Docker))"
+	@echo "   CODESAGE_API_KEY                       (generated automatically and copied to frontend/.env; keep it, rotate by deleting the line and re-running 'make setup')"
 	@echo ""
 	@echo "🎯 Next: 'make start', then 'make install-claude' for Claude Desktop"
 
 # Quick start commands  
 start:
 	@echo "🚀 Starting CodeSage - MCP-First Code Discovery..."
+	@.venv/bin/python scripts/ensure_api_key.py
 	@# A backend already on 8001 would answer the health check below on behalf of ours
 	@if curl -fsS http://127.0.0.1:8001/health >/dev/null 2>&1; then \
 		echo "❌ A backend is already running on port 8001. Stop it with 'make stop', or run 'make start-frontend' to use it."; \
@@ -194,4 +196,5 @@ status:
 
 # Register the MCP server with Claude Desktop (use ARGS='--dry-run' to preview)
 install-claude:
+	.venv/bin/python scripts/ensure_api_key.py
 	.venv/bin/python scripts/install_claude_desktop.py $(ARGS)

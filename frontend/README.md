@@ -44,7 +44,7 @@ Put these in `frontend/.env.local` for development (see `.env.example`). In Dock
 | Variable | Default | Notes |
 | --- | --- | --- |
 | `VITE_API_BASE_URL` | `/api/v1` | A trailing slash is dropped, and `/api/v1` is appended if missing, so a bare backend origin works. |
-| `VITE_CODESAGE_API_KEY` | unset | Must equal `CODESAGE_API_KEY` in `backend/.env`. Sent as `X-API-Key` and in a WebSocket subprotocol. |
+| `VITE_CODESAGE_API_KEY` | unset | Must equal `CODESAGE_API_KEY` in `backend/.env`. `make setup`, `make start` and `make install-claude` write it to `frontend/.env` and keep it in sync; restart `npm run dev` after it changes. Sent as `X-API-Key` and in a WebSocket subprotocol. |
 | `VITE_WS_URL` or `VITE_WEBSOCKET_URL` | unset | WebSocket URL. Unset means same-origin `/ws`, using `wss:` on https pages and `ws:` otherwise. `VITE_WS_URL` wins if both are set. |
 | `VITE_ENABLE_DEV_TOOLS` | unset | `true` shows the React Query devtools. |
 

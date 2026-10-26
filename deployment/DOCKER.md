@@ -48,6 +48,8 @@ The dev stack serves the built dashboard and proxies the API through nginx, with
    ```bash
    python -c "import secrets; print(secrets.token_urlsafe(32))"   # put this in backend/.env
    export CODESAGE_API_KEY=<the same key>                         # used at build time
+   # after `make setup` the key already lives in backend/.env:
+   # export CODESAGE_API_KEY=$(sed -n 's/^CODESAGE_API_KEY=//p' backend/.env)
    ```
 
 3. **Build and start.**
