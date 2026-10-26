@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { onApiAuthError } from "@/services/api";
+import { clearAuthNotice, onApiAuthError } from "@/services/api";
 import {
   WebSocketService,
   buildWebSocketProtocols,
@@ -60,6 +60,7 @@ describe("WebSocketService", () => {
 
   beforeEach(() => {
     vi.useFakeTimers();
+    clearAuthNotice();
     FakeWebSocket.instances = [];
     vi.stubGlobal("WebSocket", FakeWebSocket);
     vi.stubEnv("VITE_WS_URL", "");

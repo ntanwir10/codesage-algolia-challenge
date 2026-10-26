@@ -13,7 +13,7 @@ export function RepositoryStats({
   repository,
   className,
 }: RepositoryStatsProps) {
-  const { data: stats } = useQuery({
+  const { data: stats, isError } = useQuery({
     queryKey: ["repository-stats", repository.id],
     queryFn: () => api.getRepositoryStats(repository.id),
     refetchInterval: (query) => pollWhileActive(query.state.data),
@@ -23,6 +23,8 @@ export function RepositoryStats({
     .map(([type, count]) => `${count.toLocaleString()} ${type}`)
     .join(" · ");
 
+  // Errored with nothing to show: a dash, not a misleading 0.
+  const noStats = isError && !stats;
   const cards = [
     {
       label: "Files",
@@ -36,7 +38,7 @@ export function RepositoryStats({
     },
     {
       label: "Indexed Entities",
-      value: (stats?.total_entities ?? 0).toLocaleString(),
+      value: noStats ? "–" : (stats?.total_entities ?? 0).toLocaleString(),
       detail: entityBreakdown,
       icon: "🧩",
     },

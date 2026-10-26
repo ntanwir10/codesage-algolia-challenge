@@ -52,3 +52,25 @@ describe("toast", () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 });
+
+describe("toast accessibility", () => {
+  it("renders a labelled live region and alerts for errors", () => {
+    function Errors() {
+      const { addToast } = useToast();
+      return (
+        <button onClick={() => addToast({ type: "error", title: "Boom" })}>
+          add
+        </button>
+      );
+    }
+    render(
+      <ToastProvider>
+        <Errors />
+      </ToastProvider>
+    );
+    const region = screen.getByRole("region", { name: "Notifications" });
+    expect(region).toHaveAttribute("aria-live", "polite");
+    act(() => screen.getByText("add").click());
+    expect(screen.getByRole("alert")).toHaveTextContent("Boom");
+  });
+});

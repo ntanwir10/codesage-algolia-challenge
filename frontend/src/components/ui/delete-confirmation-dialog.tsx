@@ -1,3 +1,4 @@
+import { useEffect, useId } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 
@@ -24,10 +25,21 @@ export function DeleteConfirmationDialog({
   isDeleting = false,
   variant = "danger",
 }: DeleteConfirmationDialogProps) {
+  const titleId = useId();
+
+  useEffect(() => {
+    if (!isOpen) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && !isDeleting) onClose();
+    };
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, [isOpen, isDeleting, onClose]);
+
   if (!isOpen) return null;
 
   const handleBackdropClick = (e: React.MouseEvent) => {
-    if (e.target === e.currentTarget) {
+    if (e.target === e.currentTarget && !isDeleting) {
       onClose();
     }
   };
@@ -52,13 +64,18 @@ export function DeleteConfirmationDialog({
       className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4"
       onClick={handleBackdropClick}
     >
-      <Card className="w-full max-w-md mx-auto">
+      <Card
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        className="w-full max-w-md mx-auto"
+      >
         <CardHeader>
           <div className="flex items-center gap-3">
             <div className={`p-2 ${styles.iconBg} rounded-lg`}>
               <span className="text-2xl">{styles.icon}</span>
             </div>
-            <CardTitle className="text-lg">{title}</CardTitle>
+            <CardTitle id={titleId} className="text-lg">{title}</CardTitle>
           </div>
         </CardHeader>
         <CardContent className="space-y-4">
@@ -68,6 +85,7 @@ export function DeleteConfirmationDialog({
             <Button
               variant="outline"
               onClick={onClose}
+              autoFocus
               disabled={isDeleting}
               className="min-w-20"
             >

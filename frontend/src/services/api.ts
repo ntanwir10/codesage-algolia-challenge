@@ -35,13 +35,18 @@ export function onApiAuthError(listener: AuthErrorListener): () => void {
   };
 }
 
-let lastAuthNotice = 0;
+// Fire once, then stay quiet until a request succeeds again (polling keeps 401ing).
+let authErrorNotified = false;
 /** Also called by the WebSocket service when /ws closes with 1008. */
 export function notifyAuthError(): void {
-  const now = Date.now();
-  if (now - lastAuthNotice < 5000) return;
-  lastAuthNotice = now;
+  if (authErrorNotified) return;
+  authErrorNotified = true;
   authErrorListeners.forEach((listener) => listener());
+}
+
+/** A request (or the WebSocket handshake) got through, so the next 401 is news again. */
+export function clearAuthNotice(): void {
+  authErrorNotified = false;
 }
 
 function resolveBaseURL(): string {
@@ -85,7 +90,10 @@ export class CodeSageAPI {
     });
 
     this.client.interceptors.response.use(
-      (response) => response,
+      (response) => {
+        clearAuthNotice();
+        return response;
+      },
       (error: unknown) => {
         if (axios.isAxiosError(error) && error.response?.status === 401) {
           notifyAuthError();

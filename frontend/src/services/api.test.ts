@@ -153,4 +153,19 @@ describe("CodeSageAPI", () => {
     expect(listener).toHaveBeenCalledTimes(1);
     off();
   });
+
+  it("notifies once per 401 streak and again after a success", async () => {
+    const listener = vi.fn();
+    const off = onApiAuthError(listener);
+    const ok = makeApi({}, 200).api;
+    const bad = makeApi({ detail: "Unauthorized" }, 401).api;
+    await ok.getRepositories(); // reset any earlier streak
+    await expect(bad.getRepositories()).rejects.toBeInstanceOf(AxiosError);
+    await expect(bad.getRepositories()).rejects.toBeInstanceOf(AxiosError);
+    expect(listener).toHaveBeenCalledTimes(1);
+    await ok.getRepositories();
+    await expect(bad.getRepositories()).rejects.toBeInstanceOf(AxiosError);
+    expect(listener).toHaveBeenCalledTimes(2);
+    off();
+  });
 });

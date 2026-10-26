@@ -40,6 +40,8 @@ export function DashboardPage() {
     queryFn: () => api.getRepositories(),
     // Poll every ~3s while any repository is pending/processing.
     refetchInterval: (query) => pollWhileAnyActive(query.state.data),
+    // Pick up repos added in another tab or via Claude (global default is 5 min).
+    staleTime: 30_000,
   });
 
   const repositories = useMemo(() => loaded ?? [], [loaded]);
@@ -82,7 +84,15 @@ export function DashboardPage() {
       refetch();
     } catch (error) {
       const { message, status } = describeError(error);
+      const id = deleteDialog.repository.id;
       setDeleteDialog({ isOpen: false, repository: null, isDeleting: false });
+      // 404: already gone, so the goal is met. 401: the global toast covers it.
+      if (status === 404) {
+        queryClient.removeQueries({ queryKey: ["repository", id] });
+        refetch();
+        return;
+      }
+      if (status === 401) return;
       addToast({
         type: "error",
         title:
@@ -127,7 +137,7 @@ export function DashboardPage() {
           <EmptyState
             icon="❌"
             title="Failed to load repositories"
-            description="There was an error loading your repositories. Please try again."
+            description={describeError(error).message}
             action={{
               label: "Try Again",
               onClick: () => refetch(),
@@ -141,7 +151,7 @@ export function DashboardPage() {
   const stats = {
     total: repositories.length,
     completed: repositories.filter((r) => r.status === "completed").length,
-    processing: repositories.filter((r) => r.status === "processing").length,
+    processing: repositories.filter((r) => isActiveStatus(r.status)).length,
     failed: repositories.filter((r) => r.status === "failed").length,
   };
 
@@ -149,7 +159,7 @@ export function DashboardPage() {
     <div className="container mx-auto px-4 py-8">
       <div className="max-w-6xl mx-auto">
         {/* Header */}
-        <div className="flex items-center justify-between mb-8">
+        <div className="flex flex-wrap items-center justify-between gap-2 mb-8">
           <div>
             <h1 className="text-3xl font-bold">Repository Dashboard</h1>
             <p className="text-muted-foreground">
@@ -157,12 +167,18 @@ export function DashboardPage() {
             </p>
           </div>
           <Link to="/">
-            <Button className="gap-2">
+            <Button className="gap-2 whitespace-nowrap">
               <span>+</span>
               Add Repository
             </Button>
           </Link>
         </div>
+
+        {error && (
+          <p role="status" className="text-sm text-muted-foreground mb-4">
+            Couldn't refresh. Showing the last loaded data; retrying…
+          </p>
+        )}
 
         {/* Stats Cards */}
         <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-8">
@@ -250,11 +266,13 @@ export function DashboardPage() {
           </Card>
         ) : (
           <div className="space-y-4">
-            <div className="flex items-center justify-between">
+            <div className="flex flex-wrap items-center justify-between gap-2">
               <h2 className="text-xl font-semibold">Your Repositories</h2>
               {stats.processing > 0 && (
                 <div className="text-sm text-muted-foreground">
-                  🔄 {stats.processing} repositories processing
+                  🔄 {stats.processing}{" "}
+                  {stats.processing === 1 ? "repository" : "repositories"}{" "}
+                  processing
                 </div>
               )}
             </div>
@@ -265,7 +283,7 @@ export function DashboardPage() {
                 className="hover:shadow-lg transition-all duration-200"
               >
                 <CardHeader>
-                  <div className="flex items-center justify-between">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
                     <div className="flex items-center gap-3">
                       <div className="p-2 bg-gray-100 rounded-lg">
                         <span className="text-2xl">📂</span>
@@ -279,11 +297,11 @@ export function DashboardPage() {
                         )}
                       </div>
                     </div>
-                    <div className="flex items-center gap-3">
+                    <div className="flex flex-wrap items-center gap-3">
                       <StatusBadge status={repo.status} />
                       <div className="flex items-center gap-2">
                         <Link to={`/repository/${repo.id}`}>
-                          <Button variant="outline" size="sm">
+                          <Button variant="outline" size="sm" className="whitespace-nowrap">
                             View Details
                           </Button>
                         </Link>
@@ -293,6 +311,7 @@ export function DashboardPage() {
                           onClick={() => handleDeleteClick(repo)}
                           className="text-red-600 hover:text-red-700 hover:bg-red-50"
                           title="Delete repository"
+                          aria-label={`Delete ${repo.name}`}
                         >
                           <span className="text-sm">🗑️</span>
                         </Button>
@@ -301,6 +320,11 @@ export function DashboardPage() {
                   </div>
                 </CardHeader>
                 <CardContent>
+                  {repo.status === "failed" && repo.error_message && (
+                    <p className="text-sm text-red-600 break-words mb-4">
+                      {repo.error_message}
+                    </p>
+                  )}
                   <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm mb-4">
                     <div className="flex items-center gap-2">
                       <span className="text-gray-500">📄</span>

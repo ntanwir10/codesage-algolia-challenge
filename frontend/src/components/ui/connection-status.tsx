@@ -7,14 +7,19 @@ export function ConnectionStatus() {
   const [status, setStatus] = useState(websocketService.getStatus());
   const [showDetails, setShowDetails] = useState(false);
   const [isDismissed, setIsDismissed] = useState(false);
+  // A connection was lost/failed while subscriptions exist. Sticky across the
+  // connecting/disconnected flips of each retry; cleared only on success.
+  const [lost, setLost] = useState(false);
 
   useEffect(() => {
     const unsubscribe = websocketService.onConnectionStatusChange(
       (newStatus) => {
         setStatus(newStatus);
-        // Reset dismissed state when status changes to show important updates
-        if (newStatus === "connecting" || newStatus === "connected") {
+        if (newStatus === "connected") {
+          setLost(false);
           setIsDismissed(false);
+        } else if (newStatus === "disconnected") {
+          setLost(websocketService.hasSubscribers());
         }
       }
     );
@@ -55,6 +60,38 @@ export function ConnectionStatus() {
   // Don't show anything when dismissed
   if (isDismissed) {
     return null;
+  }
+
+  if (lost && status !== "connected") {
+    return (
+      <div className="fixed bottom-4 right-4 z-40">
+        <Card className="border text-yellow-700 bg-yellow-50 border-yellow-200">
+          <CardContent className="p-3">
+            <p role="status" className="text-sm font-medium">
+              Live updates unavailable. Retrying…
+            </p>
+            <div className="flex items-center gap-2 mt-2">
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => websocketService.reconnect()}
+                className="text-xs h-6 px-2"
+              >
+                Reconnect
+              </Button>
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={() => setIsDismissed(true)}
+                className="text-xs h-6 px-2"
+              >
+                Dismiss
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+      </div>
+    );
   }
 
   // Don't show disconnected state unless details are requested or there was an error

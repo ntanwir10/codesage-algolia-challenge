@@ -4,8 +4,6 @@ import { useQueryClient } from "@tanstack/react-query";
 import { GitHubForm, type GitHubFormData } from "@/components/forms/github-form";
 import { useToast } from "@/components/ui/toast";
 import { api } from "@/services/api";
-import { describeError } from "@/lib/errors";
-import { isAxiosError } from "axios";
 import type { CreateRepositoryRequest } from "@/types/repository";
 
 export function HomePage() {
@@ -34,28 +32,6 @@ export function HomePage() {
         description: "Processing has started. Progress appears on this page.",
       });
       navigate(`/repository/${repository.id}`);
-    } catch (error: unknown) {
-      const { message, status } = describeError(error);
-      // 422 details are shown inline by the form; everything else is toasted.
-      const inlineByForm =
-        status === 422 &&
-        isAxiosError(error) &&
-        Array.isArray(error.response?.data?.detail);
-      if (!inlineByForm) {
-        addToast({
-          type: status === 409 ? "warning" : "error",
-          title:
-            status === 409
-              ? "Repository already exists"
-              : status === 429
-              ? "Slow down"
-              : "Failed to add repository",
-          description: message,
-          duration: 8000,
-        });
-      }
-      // Rethrow so the form keeps the user's input.
-      throw error;
     } finally {
       setIsSubmitting(false);
     }

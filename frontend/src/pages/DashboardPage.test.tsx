@@ -1,6 +1,7 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
+import { AxiosError } from "axios";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ToastProvider } from "@/components/ui/toast";
 import { api } from "@/services/api";
@@ -24,8 +25,62 @@ const repository: Repository = {
   created_at: "2026-10-25T00:00:00Z",
 };
 
+function renderPage() {
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  render(
+    <QueryClientProvider client={client}>
+      <ToastProvider>
+        <MemoryRouter>
+          <DashboardPage />
+        </MemoryRouter>
+      </ToastProvider>
+    </QueryClientProvider>
+  );
+  return client;
+}
+
+function httpError(status: number, detail: string) {
+  return new AxiosError("x", "ERR", undefined, undefined, {
+    status,
+    data: { detail },
+  } as never);
+}
+
 describe("DashboardPage", () => {
   afterEach(() => vi.restoreAllMocks());
+
+  it("shows error_message on failed cards", async () => {
+    vi.spyOn(api, "getRepositories").mockResolvedValue([
+      { ...repository, status: "failed", error_message: "Repository not found" },
+    ]);
+    renderPage();
+    expect(await screen.findByText("Repository not found")).toBeInTheDocument();
+  });
+
+  it("uses the described message when the load fails", async () => {
+    vi.spyOn(api, "getRepositories").mockRejectedValue(httpError(400, "Backend exploded"));
+    renderPage();
+    expect(await screen.findByText("Backend exploded")).toBeInTheDocument();
+  });
+
+  it("counts pending repos as processing", async () => {
+    vi.spyOn(api, "getRepositories").mockResolvedValue([
+      { ...repository, status: "pending", processed_files: 0 },
+    ]);
+    renderPage();
+    expect(await screen.findByText(/1 repository processing/)).toBeInTheDocument();
+  });
+
+  it("treats a 404 delete as success: refetches, no error toast", async () => {
+    const list = vi.spyOn(api, "getRepositories").mockResolvedValue([repository]);
+    vi.spyOn(api, "deleteRepository").mockRejectedValue(httpError(404, "gone"));
+    renderPage();
+    fireEvent.click(await screen.findByLabelText("Delete octo/demo"));
+    fireEvent.click(screen.getByText("Delete Repository", { selector: "button" }));
+    await waitFor(() => expect(list).toHaveBeenCalledTimes(2));
+    expect(screen.queryByText("Failed to delete repository")).not.toBeInTheDocument();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
 
   it("keeps the list when a background refetch fails", async () => {
     vi.spyOn(api, "getRepositories").mockResolvedValue([repository]);

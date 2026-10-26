@@ -19,6 +19,7 @@ export function LoadingSpinner({
 
   return (
     <div
+      role="status"
       className={cn(
         "flex flex-col items-center justify-center gap-3",
         className
@@ -30,7 +31,11 @@ export function LoadingSpinner({
           sizeClasses[size]
         )}
       />
-      {text && <p className="text-sm text-muted-foreground">{text}</p>}
+      {text ? (
+        <p className="text-sm text-muted-foreground">{text}</p>
+      ) : (
+        <span className="sr-only">Loading...</span>
+      )}
     </div>
   );
 }

@@ -1,7 +1,10 @@
+import { useState } from "react";
+import { Link } from "react-router-dom";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { isAxiosError } from "axios";
 import { z } from "zod";
+import { describeError } from "@/lib/errors";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -16,6 +19,7 @@ import {
 const githubUrlSchema = z.object({
   url: z
     .string()
+    .trim()
     .min(1, "GitHub URL is required")
     .url("Must be a valid URL")
     .regex(
@@ -44,6 +48,7 @@ export function GitHubForm({ onSubmit, isLoading = false }: GitHubFormProps) {
     reset,
     watch,
     setError,
+    clearErrors,
   } = useForm<GitHubFormData>({
     resolver: zodResolver(githubUrlSchema),
     defaultValues: {
@@ -54,27 +59,33 @@ export function GitHubForm({ onSubmit, isLoading = false }: GitHubFormProps) {
     mode: "onChange",
   });
 
+  // Set when the server says the repo already exists (409), to link to it.
+  const [existingId, setExistingId] = useState<number>();
+
   // Watch URL to extract repository name
   const urlValue = watch("url");
   const repoName = urlValue ? extractRepoName(urlValue) : "";
+
+  const urlField = register("url");
+  const serverError = errors.root?.server;
+  const errorId = errors.url
+    ? "url-error"
+    : serverError
+    ? "url-server-error"
+    : undefined;
 
   const handleFormSubmit = async (data: GitHubFormData) => {
     try {
       await onSubmit(githubUrlSchema.parse(data));
       reset();
     } catch (error) {
-      // Keep the user's input; surface server-side validation messages
-      const detail = isAxiosError(error)
-        ? error.response?.data?.detail
-        : undefined;
-      if (isAxiosError(error) && error.response?.status === 422 && Array.isArray(detail)) {
-        const messages = detail
-          .map((d: { msg?: string }) => d?.msg)
-          .filter(Boolean)
-          .join("; ");
-        setError("root.server", { message: messages || "Validation failed" });
+      // Keep the user's input and show the failure under the URL field.
+      setExistingId(undefined);
+      if (isAxiosError(error) && error.response?.status === 409) {
+        const id = error.response.data?.repository_id;
+        if (typeof id === "number") setExistingId(id);
       }
-      // Other failures (409, 429, ...) are toasted by the caller.
+      setError("root.server", { message: describeError(error).message });
     }
   };
 
@@ -98,11 +109,40 @@ export function GitHubForm({ onSubmit, isLoading = false }: GitHubFormProps) {
             <Input
               id="url"
               placeholder="https://github.com/owner/repository"
-              {...register("url")}
+              {...urlField}
+              onChange={(e) => {
+                clearErrors("root.server");
+                setExistingId(undefined);
+                return urlField.onChange(e);
+              }}
+              aria-invalid={!!(errors.url || serverError)}
+              aria-describedby={errorId}
               className={errors.url ? "border-destructive" : ""}
             />
             {errors.url && (
-              <p className="text-sm text-destructive">{errors.url.message}</p>
+              <p id="url-error" className="text-sm text-destructive">
+                {errors.url.message}
+              </p>
+            )}
+            {serverError && (
+              <p
+                id="url-server-error"
+                role="alert"
+                className="text-sm text-destructive"
+              >
+                {serverError.message}
+                {existingId !== undefined && (
+                  <>
+                    {" "}
+                    <Link
+                      to={`/repository/${existingId}`}
+                      className="underline font-medium"
+                    >
+                      Open it
+                    </Link>
+                  </>
+                )}
+              </p>
             )}
             {repoName && !errors.url && (
               <p className="text-sm text-muted-foreground">
@@ -139,12 +179,6 @@ export function GitHubForm({ onSubmit, isLoading = false }: GitHubFormProps) {
             />
           </div>
 
-          {errors.root?.server && (
-            <p role="alert" className="text-sm text-destructive">
-              {errors.root.server.message}
-            </p>
-          )}
-
           <Button
             type="submit"
             className="w-full"
@@ -153,7 +187,7 @@ export function GitHubForm({ onSubmit, isLoading = false }: GitHubFormProps) {
             {isLoading ? (
               <span className="flex items-center gap-2">
                 <span className="animate-spin">⏳</span>
-                Processing...
+                Checking repository…
               </span>
             ) : (
               "Add Repository"
