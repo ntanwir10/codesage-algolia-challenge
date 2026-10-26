@@ -15,17 +15,25 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 
-// Validation schema
+// Accepts owner/repo or a pasted GitHub URL; returns "owner/repo" or null.
+function parseRepo(input: string): string | null {
+  const path = input
+    .trim()
+    .replace(/^(https?:\/\/)?(www\.)?(github\.com\/)?/i, "")
+    .replace(/\/+$/, "")
+    .replace(/\.git$/, "");
+  return /^[\w.-]+\/[\w.-]+$/.test(path) ? path : null;
+}
+
+// Validation schema: submits the normalised full URL.
 const githubUrlSchema = z.object({
   url: z
     .string()
-    .trim()
-    .min(1, "GitHub URL is required")
-    .url("Must be a valid URL")
-    .regex(
-      /^https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/?$/,
-      "Must be a valid GitHub repository URL (https://github.com/owner/repo)"
-    ),
+    .refine(
+      (v) => parseRepo(v) !== null,
+      "Enter owner/repo, for example facebook/react"
+    )
+    .transform((v) => `https://github.com/${parseRepo(v)}`),
   // Empty means "use the repository's default branch"; never sent when empty.
   branch: z.string().optional(),
   description: z.string().optional(),
@@ -62,9 +70,9 @@ export function GitHubForm({ onSubmit, isLoading = false }: GitHubFormProps) {
   // Set when the server says the repo already exists (409), to link to it.
   const [existingId, setExistingId] = useState<number>();
 
-  // Watch URL to extract repository name
+  // Watch input to preview the normalised owner/repo
   const urlValue = watch("url");
-  const repoName = urlValue ? extractRepoName(urlValue) : "";
+  const repoName = (urlValue && parseRepo(urlValue)) || "";
 
   const urlField = register("url");
   const serverError = errors.root?.server;
@@ -97,28 +105,37 @@ export function GitHubForm({ onSubmit, isLoading = false }: GitHubFormProps) {
           Add GitHub Repository
         </CardTitle>
         <CardDescription>
-          Enter a GitHub repository URL to index and analyze with AI
+          Enter a GitHub repository (owner/repo) to index and analyze with AI
         </CardDescription>
       </CardHeader>
       <CardContent>
         <form onSubmit={handleSubmit(handleFormSubmit)} className="space-y-6">
           <div className="space-y-2">
             <label htmlFor="url" className="text-sm font-medium">
-              GitHub Repository URL *
+              GitHub repository *
             </label>
-            <Input
-              id="url"
-              placeholder="https://github.com/owner/repository"
-              {...urlField}
-              onChange={(e) => {
-                clearErrors("root.server");
-                setExistingId(undefined);
-                return urlField.onChange(e);
-              }}
-              aria-invalid={!!(errors.url || serverError)}
-              aria-describedby={errorId}
-              className={errors.url ? "border-destructive" : ""}
-            />
+            <div
+              className={`flex items-center rounded-md border border-input bg-background focus-within:ring-2 focus-within:ring-ring ${
+                errors.url ? "border-destructive" : ""
+              }`}
+            >
+              <span className="pl-3 text-sm text-muted-foreground select-none">
+                github.com/
+              </span>
+              <Input
+                id="url"
+                placeholder="owner/repo"
+                {...urlField}
+                onChange={(e) => {
+                  clearErrors("root.server");
+                  setExistingId(undefined);
+                  return urlField.onChange(e);
+                }}
+                aria-invalid={!!(errors.url || serverError)}
+                aria-describedby={errorId}
+                className="border-0 shadow-none focus-visible:ring-0 pl-0.5"
+              />
+            </div>
             {errors.url && (
               <p id="url-error" className="text-sm text-destructive">
                 {errors.url.message}
@@ -197,17 +214,4 @@ export function GitHubForm({ onSubmit, isLoading = false }: GitHubFormProps) {
       </CardContent>
     </Card>
   );
-}
-
-// Helper function to extract repository name from GitHub URL
-function extractRepoName(url: string): string {
-  try {
-    const match = url.match(/github\.com\/([^/]+)\/([^/]+)/);
-    if (match) {
-      return `${match[1]}/${match[2].replace(/\.git$/, "")}`;
-    }
-    return "";
-  } catch {
-    return "";
-  }
 }

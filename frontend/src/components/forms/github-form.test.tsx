@@ -17,14 +17,15 @@ const axiosErr = (status: number, data: unknown) =>
     data,
   } as never);
 const URL_OK = "https://github.com/owner/repo";
-const submitValid = async (url = URL_OK) => {
+const SHORT = "owner/repo";
+const submitValid = async (url = SHORT) => {
   await userEvent.type(urlInput(), url);
   await waitFor(() => expect(submitBtn()).toBeEnabled());
   await userEvent.click(submitBtn());
 };
 
 const submitBtn = () => screen.getByRole("button", { name: /add repository/i });
-const urlInput = () => screen.getByLabelText(/github repository url/i);
+const urlInput = () => screen.getByLabelText(/github repository/i);
 
 describe("GitHubForm", () => {
   it("disables submit when empty", () => {
@@ -32,26 +33,29 @@ describe("GitHubForm", () => {
     expect(submitBtn()).toBeDisabled();
   });
 
-  it("rejects a non-GitHub URL with an error", async () => {
-    const onSubmit = vi.fn();
-    renderForm(onSubmit);
-    await userEvent.type(urlInput(), "https://example.com/foo/bar");
-    expect(await screen.findByText(/valid github repository url/i)).toBeInTheDocument();
-    expect(submitBtn()).toBeDisabled();
-    expect(onSubmit).not.toHaveBeenCalled();
-  });
+  it.each(["owner", "owner/repo/extra", "https://gitlab.com/a/b"])(
+    "rejects %s with a hint",
+    async (junk) => {
+      const onSubmit = vi.fn();
+      renderForm(onSubmit);
+      await userEvent.type(urlInput(), junk);
+      expect(await screen.findByText(/enter owner\/repo/i)).toBeInTheDocument();
+      expect(submitBtn()).toBeDisabled();
+      expect(onSubmit).not.toHaveBeenCalled();
+    }
+  );
 
-  it("submits a valid URL and resets on success", async () => {
+  it.each([
+    SHORT,
+    "https://github.com/owner/repo.git/",
+    "github.com/owner/repo",
+    "http://www.github.com/owner/repo/",
+  ])("submits %s as the full URL and resets on success", async (input) => {
     const onSubmit = vi.fn().mockResolvedValue(undefined);
     renderForm(onSubmit);
-    await userEvent.type(urlInput(), "https://github.com/owner/repo");
-    await waitFor(() => expect(submitBtn()).toBeEnabled());
-    await userEvent.click(submitBtn());
+    await submitValid(input);
     await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
-    expect(onSubmit.mock.calls[0][0]).toMatchObject({
-      url: "https://github.com/owner/repo",
-      branch: "",
-    });
+    expect(onSubmit.mock.calls[0][0]).toMatchObject({ url: URL_OK, branch: "" });
     await waitFor(() => expect(urlInput()).toHaveValue(""));
   });
 
@@ -59,11 +63,9 @@ describe("GitHubForm", () => {
     const onSubmit = vi.fn().mockRejectedValue(new Error("boom"));
     vi.spyOn(console, "error").mockImplementation(() => {});
     renderForm(onSubmit);
-    await userEvent.type(urlInput(), "https://github.com/owner/repo");
-    await waitFor(() => expect(submitBtn()).toBeEnabled());
-    await userEvent.click(submitBtn());
+    await submitValid();
     await waitFor(() => expect(onSubmit).toHaveBeenCalled());
-    expect(urlInput()).toHaveValue("https://github.com/owner/repo");
+    expect(urlInput()).toHaveValue(SHORT);
   });
 
   it("shows a 422 array detail inline", async () => {
@@ -75,7 +77,7 @@ describe("GitHubForm", () => {
     renderForm(onSubmit);
     await submitValid();
     expect(await screen.findByRole("alert")).toHaveTextContent("repo not found; bad branch");
-    expect(urlInput()).toHaveValue(URL_OK);
+    expect(urlInput()).toHaveValue(SHORT);
   });
 
   it("shows a 422 string detail under the URL input", async () => {
@@ -125,7 +127,7 @@ describe("GitHubForm", () => {
   it("accepts a URL with trailing whitespace", async () => {
     const onSubmit = vi.fn().mockResolvedValue(undefined);
     renderForm(onSubmit);
-    await submitValid(`${URL_OK} `);
+    await submitValid(`${SHORT} `);
     await waitFor(() => expect(onSubmit).toHaveBeenCalled());
     expect(onSubmit.mock.calls[0][0].url).toBe(URL_OK);
   });

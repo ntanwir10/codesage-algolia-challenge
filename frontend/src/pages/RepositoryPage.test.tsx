@@ -83,6 +83,17 @@ describe("RepositoryPage completion card", () => {
     expect(screen.getByText(message)).toBeInTheDocument();
     expect(screen.queryByText("Repository analysis complete!")).not.toBeInTheDocument();
   });
+
+  it("labels the source link by host", async () => {
+    renderPage(repository);
+    expect(await screen.findByRole("link", { name: "View on GitHub →" })).toBeInTheDocument();
+  });
+
+  it("says View source for a non-GitHub host", async () => {
+    renderPage({ ...repository, url: "https://gitlab.com/octo/demo" });
+    expect(await screen.findByRole("link", { name: "View source →" })).toBeInTheDocument();
+    expect(screen.queryByText("View on GitHub →")).not.toBeInTheDocument();
+  });
 });
 
 describe("RepositoryPage failures", () => {

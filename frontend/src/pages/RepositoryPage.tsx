@@ -17,6 +17,15 @@ import { describeError } from "@/lib/errors";
 import { isActiveStatus, pollWhileActive } from "@/lib/polling";
 import { isHttpUrl } from "@/lib/utils";
 
+// "View on GitHub" only for github.com; other hosts get a neutral label.
+function sourceLabel(url: string) {
+  try {
+    return new URL(url).hostname === "github.com" ? "View on GitHub" : "View source";
+  } catch {
+    return "View source";
+  }
+}
+
 export function RepositoryPage() {
   const { id } = useParams<{ id: string }>();
   // Strict: parseInt would load repo 12 for "12abc". 0 means invalid.
@@ -239,7 +248,7 @@ export function RepositoryPage() {
                     rel="noopener noreferrer"
                     className="text-sm text-blue-600 hover:underline font-medium break-all"
                   >
-                    View on GitHub →
+                    {sourceLabel(repository.url)} →
                   </a>
                 )}
                 <span className="text-sm text-muted-foreground">
@@ -417,7 +426,7 @@ export function RepositoryPage() {
             <a href={repository.url} target="_blank" rel="noopener noreferrer">
               <Button variant="outline" className="gap-2">
                 <span>🔗</span>
-                View on GitHub
+                {sourceLabel(repository.url)}
               </Button>
             </a>
           )}
