@@ -466,9 +466,13 @@ class RepositoryService:
                 error=str(e),
             )
 
-    async def _clear_repository_data(self, repository_id: int, algolia_service):
-        """Remove a repository's stored files, entities and Algolia records"""
-        if not await algolia_service.delete_repository_index(repository_id, wait=True):
+    async def _clear_repository_data(self, repository_id: int, algolia_service, wait: bool = True):
+        """Remove a repository's stored files, entities and Algolia records.
+
+        A plain delete passes wait=False: Algolia applies an index's tasks in order, so records
+        indexed later under a reused id still land after the delete instead of being removed by it.
+        """
+        if not await algolia_service.delete_repository_index(repository_id, wait=wait):
             raise IngestionError("Could not remove previously indexed records from Algolia")
         self._index_cleared = True
 
@@ -501,7 +505,7 @@ class RepositoryService:
         try:
             # Bulk-deletes the rows off the event loop, so the ORM cascade below finds none to load
             try:
-                await self._clear_repository_data(repository.id, AlgoliaService())
+                await self._clear_repository_data(repository.id, AlgoliaService(), wait=False)
             except IngestionError:
                 return False
 
