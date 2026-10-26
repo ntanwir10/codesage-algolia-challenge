@@ -14,7 +14,7 @@ BODY_MAX_CHARS = 2000
 @dataclass
 class ParsedCodeEntity:
     """Represents a code entity (function, class, import, doc section) extracted from a file"""
-    entity_type: str  # "function", "class", "import", "doc_section"
+    entity_type: str  # "function", "class", "import", "doc_section", "terraform_block"
     name: str
     description: str
     line_start: int
@@ -101,6 +101,8 @@ class CodeParser:
         self.parsers = {
             "python": self._parse_python,
             "markdown": self._parse_markdown,
+            "terraform": self._parse_hcl,
+            "hcl": self._parse_hcl,
         }
         self._ts_parsers = {}
 
@@ -356,6 +358,45 @@ class CodeParser:
                 content=lines[number - 1],
                 body=make_body(lines, number, line_end),
             ))
+        return entities
+
+    def _parse_hcl(self, content: str, file_path: str) -> list[ParsedCodeEntity]:
+        """Each top-level Terraform/HCL block becomes a terraform_block, named from its type and labels"""
+        lines = content.splitlines()
+        root = self._get_ts_parser("hcl").parse(content.encode()).root_node
+        entities = []
+        # config_file > body > block; a leading # or // comment run is the docstring
+        body = next((c for c in root.children if c.type == "body"), None)
+        comments: list = []
+        for node in body.children if body else []:
+            if node.type == "comment":
+                if comments and node.start_point[0] != comments[-1].end_point[0] + 1:
+                    comments = []
+                comments.append(node)
+                continue
+            if node.type == "block":
+                kind = self._text(node.children[0])
+                labels = [
+                    self._text(c).strip('"') for c in node.children[1:]
+                    if c.type in ("string_lit", "identifier")
+                ]
+                name = kind
+                if labels:
+                    name += " " + ".".join(labels) if kind in ("resource", "data") else " " + " ".join(labels)
+                line_start, line_end = node.start_point[0] + 1, node.end_point[0] + 1
+                doc = ""
+                if comments and comments[-1].end_point[0] + 1 == node.start_point[0]:
+                    doc = " ".join(self._text(c).lstrip("#/ \t").rstrip() for c in comments)
+                entities.append(ParsedCodeEntity(
+                    entity_type="terraform_block",
+                    name=name,
+                    description=doc or f"Terraform {name}",
+                    line_start=line_start,
+                    line_end=line_end,
+                    content=lines[line_start - 1],
+                    body=make_body(lines, line_start, line_end),
+                ))
+            comments = []
         return entities
 
     # --------------------------------------------------------------- tree-sitter
