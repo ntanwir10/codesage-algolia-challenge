@@ -1,0 +1,265 @@
+---
+title: Web dashboard
+description: Every page, message and state of the CodeSage React dashboard, from adding a repository to deleting it.
+---
+
+import { Aside, LinkCard } from '@astrojs/starlight/components';
+import Mermaid from '~/components/Mermaid.astro';
+import Shot from '~/components/Shot.astro';
+import homeShot from '~/assets/screenshots/home.png';
+import progressShot from '~/assets/screenshots/repository-progress.png';
+import completeShot from '~/assets/screenshots/repository-complete.png';
+import searchShot from '~/assets/screenshots/repository-search.png';
+import dashboardShot from '~/assets/screenshots/dashboard.png';
+
+The dashboard is a React app served by Vite at http://localhost:5173 (or by nginx in the Docker stacks). It has three pages and a 404 page. This guide covers each one, the text you see and what happens behind it.
+
+<Mermaid caption="How you move through the dashboard." code={`flowchart TB
+    home["Home<br/>enter owner/repo"] --> page["Repository page<br/>live progress"]
+    dashboard["Dashboard<br/>all repositories"] --> page
+    dashboard --> delete["Delete"]
+    page --> outcome{"Run ends"}
+    outcome -- "completed or<br/>partially indexed" --> search["Search<br/>with suggestions"]
+    outcome -- "failed, reason shown" --> reprocess["Reprocess"]
+    reprocess --> page
+    search --> github["Open the result at the<br/>exact line on its host"]`} />
+
+The header shows the CodeSage name and two links, **Home** and **Dashboard**. The browser tab title follows the page: `CodeSage - AI-Powered Code Discovery`, `CodeSage - Dashboard` and `CodeSage - Repository <id>`.
+
+## Pages at a glance
+
+| Page | Path | What you can do |
+| --- | --- | --- |
+| Home | `/` | Add a GitHub repository |
+| Repository | `/repository/:id` | Watch progress, search, reprocess, delete |
+| Dashboard | `/dashboard` | See all repositories and delete one |
+| Not found | any other path | "Page not found", with a **Go home** button |
+
+## Home
+
+<Shot src={homeShot} alt="The CodeSage Home page with the Add GitHub Repository form: a github.com/ prefixed repository field, an optional branch field and an optional description field." caption="Home, with the Add GitHub Repository form." />
+
+Home shows the heading "Discover Code with AI", the **Add GitHub Repository** form, a three-step "How it works" strip (Submit Repository, AI Processing, Ask Questions) and two feature cards (Smart Search and Claude Desktop).
+
+### Adding a repository
+
+The form has three fields.
+
+| Field | Label | Required | Notes |
+| --- | --- | --- | --- |
+| Repository | `GitHub repository *`, with a fixed `github.com/` prefix | yes | Type `owner/repo`, or paste a GitHub URL. |
+| Branch | `Branch` (placeholder `Default branch (leave empty)`) | no | Empty means the repository's default branch. |
+| Description | `Description (optional)` | no | A note shown on the repository page and the dashboard card. |
+
+How the repository field reads what you type:
+
+- The leading `https://`, `http://`, `www.` and `github.com/`, a trailing `/` and a trailing `.git` are removed. `https://github.com/pmndrs/zustand.git` becomes `pmndrs/zustand`.
+- What is left must be two parts joined by `/`, each made of letters, digits, `_`, `.` or `-`. If not, the field shows `Enter owner/repo, for example facebook/react` and the button stays disabled.
+- A valid value shows `Repository: owner/repo` under the field.
+- A URL ending in `/tree/<branch>` doesn't pass this check. Use the Branch field. URLs of other hosts (GitLab, Bitbucket) don't pass either, because the dashboard takes github.com only. To add those, ask Claude to call `add_repository` ([Other git hosts](/docs/guides/other-git-hosts/)).
+- Empty Branch and Description fields are not sent.
+
+Press **Add Repository**. While the server checks GitHub the button reads `Checking repository…`. The server checks the repository and branch on GitHub for up to 10 seconds, with one attempt and no retries, before it creates anything. On success you see a green toast, `Repository added` with `Processing has started. Progress appears on this page.`, and land on the repository page. The repository exists with status `pending` and moves to `processing` almost at once.
+
+### When the server refuses a repository
+
+Every refusal appears in red under the repository field. The page stays on Home, nothing is created and your input is kept. Editing the field clears the message. Only a success shows a toast.
+
+| You see | Status | Cause |
+| --- | --- | --- |
+| `Enter owner/repo, for example facebook/react` | none (checked in the browser) | The text isn't `owner/repo`. No request is sent. |
+| `Invalid branch name` | 422 | The branch contains a `..` segment, a NUL character, or starts with `-`. |
+| `String should have at most 100 characters` | 422 | The branch is longer than 100 characters. |
+| `GitHub repository owner/repo was not found. Check the URL; if it's private, the server's GITHUB_TOKEN needs access.` | 422 | The repository doesn't exist, or it's private and the server's token can't read it. |
+| `GitHub denied access to owner/repo.` | 422 | GitHub answered 403 for the repository or branch. |
+| `Branch 'x' does not exist in owner/repo.` | 422 | The branch is missing. |
+| `owner/repo is empty; there is nothing to index.` | 422 | The repository has no content. |
+| `owner/repo has already been added.` plus an **Open it** link | 409 | The same URL already exists, in any letter case. The link opens the existing repository. |
+| `GitHub's API rate limit was reached; try again in about N minutes.` | 503 | GitHub is rate-limiting the server. The response carries `Retry-After`. |
+| `Search indexing is not configured on the server (Algolia credentials are missing).` | 503 | `ALGOLIA_APP_ID` or `ALGOLIA_ADMIN_API_KEY` is unset. |
+| `GitHub rejected the server's GITHUB_TOKEN; check the token configured on the CodeSage server.` | 502 | The token is invalid. |
+| `Could not reach GitHub; try again.` | 502 | GitHub is down, unreachable, or answered an unexpected status. |
+| `GitHub did not respond in time; try again.` | 504 | GitHub took longer than the 10 s check. |
+| `Invalid or missing API key. Set VITE_CODESAGE_API_KEY to the key the server expects.` | 401 | The key in the bundle doesn't match the backend's. A red `API key rejected` toast also appears. |
+| `Too many requests. Please wait a moment and try again.` | 429 | More than 100 creates per minute from one address. |
+| `Server error (request <id>). Please try again later.` | 500 | An unexpected backend error. The ID matches the backend log. |
+| `Cannot reach the CodeSage server. Check that the backend is running.` | none | The browser got no answer. |
+| `The server took too long to respond. Try again.` | none | No answer within the dashboard's 30 s request timeout. |
+| The backend's own text, or `Request failed (403).` | 403 | The request guard refused the `Host` or `Origin`. |
+
+The same checks and wording apply to `POST /api/v1/repositories/` ([REST API](/docs/reference/rest-api/)).
+
+## Repository page
+
+<Shot src={progressShot} alt="The repository page for pmndrs/zustand while it indexes: a Processing badge, a blue progress bar and a disabled search box." caption="Right after adding pmndrs/zustand: the run is processing and search is disabled until it completes." />
+
+<Shot src={completeShot} alt="The repository page for pmndrs/zustand after indexing: 120 of 120 files, 25,117 lines, 1,025 entities broken down by type, and typescript / react as language and framework." caption="The same page when the run completes: 120 files, 25,117 lines and 1,025 entities (22 class, 398 doc_section, 474 function, 131 import)." />
+
+<Shot src={searchShot} alt="Search results for 'create store' in pmndrs/zustand: 186 results over 19 pages, each with entity name, type badge, file path, language, line range and a code snippet." caption="Searching for create store returns 186 results, paged 10 at a time, each with its file, language, line range and snippet." />
+
+The page for `/repository/:id` shows, from top to bottom:
+
+1. A breadcrumb, `Dashboard / owner/repo`. While the live connection is up it adds `Live updates`.
+2. The header: repository name, description, a source link, `Created <date>`, a status badge and a **Delete** button. The source link reads **View on GitHub** for github.com and **View source** for any other host.
+3. Four stat cards.
+4. A status card, which depends on the state (see below).
+5. The search box.
+6. **Back to Dashboard** and the source link again.
+
+### Stat cards
+
+| Card | Shows |
+| --- | --- |
+| Files | `processed / total` files |
+| Lines of Code | Total lines in the stored files |
+| Indexed Entities | Entity count with a breakdown such as `120 function · 14 class · 33 import`. Shows a dash if the stats can't be loaded. |
+| Language / Framework | For example `python / fastapi`, or `Unknown`; below it `Branch: <name>` or `Branch: default` |
+
+### Status badge and card colors
+
+The badge is one of **Pending** (gray), **Processing** (blue), **Completed** (green) and **Failed** (red).
+
+| State | Card | Text |
+| --- | --- | --- |
+| `pending` or `processing` | Blue, "Processing Status" | A progress bar with a percentage and `N / M files`. Until the first batch is stored the bar is indeterminate. A `Live Updates` pill shows while the WebSocket is connected. |
+| `completed` | Green | `Repository analysis complete!` and `Your repository is ready for AI-powered search and exploration.` with a **Reprocess** button |
+| `completed` with a note | Amber | `Repository partially indexed` followed by the stored `error_message`, such as `Partially indexed: 12 files over the 1000-file or 100 MB limit were skipped`, with **Reprocess** |
+| `failed` | Red | `Processing failed`, `There was an error processing this repository. You can try reprocessing it.`, the reason from `error_message`, and **Reprocess** |
+
+<Aside type="note">
+The green, amber and red cards live on the repository page. On the Dashboard page the status badge carries the color, and a card shows its reason only when the repository failed. A partially indexed repository is a plain green **Completed** badge there. Open it to see the amber note.
+</Aside>
+
+### Live progress
+
+Progress reaches the page two ways, and both run at once.
+
+- **WebSocket.** The page subscribes to its repository over `/ws`. The backend pushes a `repository_status` frame at the start of a run, after every batch of 200 files and at the end. The page patches the count in place and refetches the full data when the status changes.
+- **Polling.** While the repository is `pending` or `processing`, the page also reloads the repository, its status and its stats every 3 seconds. Polling stops when the status is `completed` or `failed`, or the repository is gone.
+
+If the WebSocket is unavailable, polling still keeps the page current. See [the connection indicator](#connection-indicator).
+
+### Search
+
+The search card is titled **AI-Powered Code Search**. The text under the title depends on the status:
+
+| Status | Text | Search box |
+| --- | --- | --- |
+| `completed` | `Search functions, classes, imports and docs in this repository` | Enabled |
+| `failed` | `Indexing failed, so search isn't available. Reprocess the repository to try again.` | Disabled |
+| `pending`, `processing` | `Search will be available once processing is complete` | Disabled |
+
+How search behaves:
+
+- **Query.** Type in the box (placeholder `Search your code... (e.g., 'authentication middleware')`) and press **Search**. The button is disabled for an empty query. Search is limited to this repository. There are no filters for language or entity type; ask Claude for those.
+- **Plain words work.** If nothing matches every word, Algolia drops the words that miss, ignores stop words and plurals and returns the best partial matches.
+- **Suggestions.** After you type at least 3 characters and pause for 300 ms, up to 5 entity names appear in a list under the box. Click one to run that search. The list closes when you search or leave the box. Suggestions come from the same Algolia index; if the request fails, no list appears.
+- **Results.** The dashboard asks for 10 results per page. The summary reads `Found N results for "query"`. When there is more than one page you get **Previous**, `Page X of Y` and **Next**. A failed page change keeps the current results.
+- **Each result.** The entity name is a link to the exact lines on the host, for example `https://github.com/owner/repo/blob/main/src/app.py#L10-L25`. After it come a type badge (`function`, `class`, `import`, `doc_section` or `terraform_block`), a description, the file path, the language, `Lines 10-25`, the signature (when the snippet doesn't already start with it) and a snippet. If the host has no known link format, the name is plain text.
+- **No results.** `No results found` and `Try different keywords or a more specific query.`
+- **Loading.** `Searching your codebase...`
+- **Errors.** A red `Connection Error` box means the browser couldn't reach the server. An orange `Search failed` box carries a tool message, such as `Search is unavailable; try again later.` An orange `Service Error` box carries an HTTP error message. The **✕** button (labelled "Dismiss error") closes it.
+
+<Aside type="note">
+Dashboard searches go through the same `search_code` tool endpoint Claude uses, so they share its limit of 30 calls per minute per client address. Suggestions have their own limit of 100 per minute.
+</Aside>
+
+### Reprocess
+
+**Reprocess** appears on the green, amber and red cards. It calls `POST /api/v1/repositories/{id}/process?force_reprocess=true`, which re-fetches the repository, replaces its Algolia records and rows and re-runs indexing. The button reads `Reprocessing...` while the request is in flight. Results:
+
+| Toast | When |
+| --- | --- |
+| Green `Reprocessing started` with `The repository will be re-analyzed and re-indexed.` | The server accepted the request (202). The page switches to the blue card. |
+| Yellow `Reprocessing not started` with the server's message | 409, because a job is already running |
+| Red `Failed to start reprocessing` with the message | Any other error, such as 503 when Algolia isn't configured |
+
+A reprocess replaces the old data only after the new files are fetched, so a transient GitHub error doesn't wipe a working index. If the run fails after the old records were removed, the failure message ends with `The previous index was removed; reprocess to rebuild it.`
+
+### Delete
+
+**Delete** opens a dialog titled **Delete Repository**: `Are you sure you want to delete "owner/repo"? This action cannot be undone and will remove all associated data including search indexes and files.` The buttons are **Cancel** and **Delete Repository** (`Deleting...` while it runs). Escape or a click outside the dialog cancels, unless a delete is in progress.
+
+| Result | Toast |
+| --- | --- |
+| Deleted | Green `Repository deleted`, then you land on the Dashboard |
+| Already deleted elsewhere (404) | Treated as success |
+| 409, a run is in progress | Red `Cannot delete while processing` |
+| 502, Algolia refused the removal | Red `Delete failed; nothing was deleted` |
+| Anything else | Red `Failed to delete repository` |
+
+Error toasts stay for 8 seconds and carry the server's message. A repository can't be deleted while its job runs. The delete returns once Algolia accepts the removal; it doesn't wait for Algolia to finish.
+
+### Page errors
+
+| You see | Cause |
+| --- | --- |
+| `Loading repository details...` | The first load |
+| `Repository not found`, with `The repository you're looking for doesn't exist or you don't have access to it.` and **Back to Dashboard** | A 404, or an ID that isn't all digits (so `/repository/12abc` is not found) |
+| `Couldn't load this repository` with the error text and **Try again** | Any other load error with nothing cached |
+
+If a background refresh fails but data is already on screen, the page keeps the old data.
+
+## Dashboard
+
+<Shot src={dashboardShot} alt="The Repository Dashboard with summary counters (2 total, 1 completed, 0 processing, 1 failed) and two repository cards, one failed with its reason shown and one completed." caption="The Dashboard with one failed and one completed repository. The failed card shows its error_message." />
+
+The Dashboard page lists every repository.
+
+- **Header.** `Repository Dashboard`, `Manage and explore your code repositories with real-time updates`, and an **Add Repository** button that goes to Home.
+- **Four tiles.** `Total Repositories`, `Completed`, `Processing` (pending and processing together) and `Failed`.
+- **The list.** Under `Your Repositories`, one card per repository, with `N repository processing` or `N repositories processing` when runs are active. Each card shows the name, description, status badge, **View Details** and a trash button (labelled `Delete <name>`). The body shows the files, lines, language (`Unknown` if none) and branch (`default` if none). A failed repository shows its reason in red. A processing repository shows a progress bar with `N / M files processed` and a pulsing `Live updates`, or an indeterminate bar before the first batch. At the bottom, a source link reads **View on GitHub →** on every card, whichever host the repository comes from.
+- **Refreshing.** While any repository is `pending` or `processing` the list reloads every 3 seconds, and the page subscribes over the WebSocket to each active repository. Otherwise the list is considered fresh for 30 seconds, which picks up repositories added from another tab or by Claude.
+- **Delete.** The same dialog as on the repository page, ending `...including search indexes.` The same toasts apply. A 404 is treated as success and the list refreshes.
+- **No reprocess here.** Open the repository and use its card.
+
+| State | What you see |
+| --- | --- |
+| Loading | `Loading your repositories...` |
+| No repositories | `No repositories yet`, `Get started by adding your first GitHub repository to analyze with AI-powered search` and **Add Your First Repository** |
+| Load failed, nothing cached | `Failed to load repositories`, the error text and **Try Again** |
+| Refresh failed, data cached | `Couldn't refresh. Showing the last loaded data.` above the tiles |
+
+## Not found and crashes
+
+- An unknown path shows `Page not found` (`The page you're looking for doesn't exist.`) with **Go home**, inside the normal layout.
+- If a page hits a render error, the error boundary shows `Something went wrong` (`This page hit an unexpected error. Reloading usually fixes it.`) with **Reload page**. The navigation stays up, and moving to another page clears the error.
+
+## Connection indicator
+
+A small indicator sits at the bottom right of every page. It tracks the `/ws` connection. The socket opens only while something is subscribed: the repository page always subscribes to its repository, and the Dashboard subscribes to repositories that are still running. About a second after the last subscriber leaves, the socket closes.
+
+| State | What you see |
+| --- | --- |
+| Connected | A small green `Live` pill. Click it for `Real-time updates active` (`WebSocket connection established. You'll receive live updates.`) with a **Hide** button. |
+| Connecting | A yellow `Connecting...` card (`Establishing real-time connection...`) with **Dismiss** |
+| Lost while subscribed | A yellow card, `Live updates unavailable.`, with **Reconnect** and **Dismiss**. It stays through each retry until a connection succeeds. |
+| Idle | Nothing, or after you open details, `No active processing` |
+
+The client treats the socket as connected only after the server's `connected` frame arrives. It sends a ping every 25 seconds and, if nothing came back since the last ping, closes the socket (code 4000) and reconnects. Reconnect delays start at 1 second, double up to 30 seconds and include random jitter; switching back to a hidden tab reconnects at once. The server closes with 1008 for a bad key (or a refused `Host` or `Origin`), and the client stops retrying and shows the `API key rejected` toast. It closes with 1013 when it already holds too many connections (200 in total, or 20 from one address), and the client retries with backoff. Frame details are in the [WebSocket reference](/docs/reference/websocket/).
+
+## Toasts
+
+Toasts appear at the top right, can be dismissed by clicking them or the ✕, and disappear on their own (5 seconds unless noted). Error toasts are announced to screen readers.
+
+| Toast | Type | When |
+| --- | --- | --- |
+| `Repository added` | Green | A repository was created |
+| `Repository analysis complete`, `<name> is ready for search.` | Green, 6 s | A run reached `completed` while you were subscribed. Shown once per change. |
+| `Repository analysis failed` with the reason | Red, 8 s | A run reached `failed` |
+| `API key rejected` | Red, 10 s | HTTP 401 or WebSocket close 1008. It says to set `VITE_CODESAGE_API_KEY` to the key the backend expects, then rebuild or restart the frontend. It fires once, then stays quiet until a request succeeds. |
+| `Reprocessing started`, `Reprocessing not started`, `Failed to start reprocessing` | Green, yellow, red | See [Reprocess](#reprocess) |
+| `Repository deleted`, `Cannot delete while processing`, `Delete failed; nothing was deleted`, `Failed to delete repository` | Green, red | See [Delete](#delete) |
+
+## Troubleshooting the dashboard
+
+- **Every action gives `Invalid or missing API key`.** `frontend/.env` and `backend/.env` hold different keys. Run `make setup`, then restart Vite.
+- **`Cannot reach the CodeSage server`.** Start the backend with `make start-backend`.
+- **No `Live` pill, but progress still moves.** The WebSocket isn't connected and polling is doing the work. Click **Reconnect** if the card shows.
+- **`Cross-origin request refused` or `Host not allowed`.** The page's origin or host isn't allowed. See [Security](/docs/concepts/security/).
+
+More fixes are in [Troubleshooting](/docs/troubleshooting/).
+
+<LinkCard title="Claude Desktop" description="Use the same index from Claude, including other git hosts." href="/docs/guides/claude-desktop/" />
+<LinkCard title="REST API guide" description="Do everything the dashboard does over HTTP." href="/docs/guides/rest-api/" />
+<LinkCard title="WebSocket reference" description="The frames behind live progress." href="/docs/reference/websocket/" />

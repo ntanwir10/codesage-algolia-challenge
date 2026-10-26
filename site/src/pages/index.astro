@@ -1,0 +1,625 @@
+---
+import StarlightPage from '@astrojs/starlight/components/StarlightPage.astro';
+import { Code } from '@astrojs/starlight/components';
+import { Image } from 'astro:assets';
+import searchShot from '../assets/screenshots/repository-search.png';
+
+const tools = [
+	['list_repositories', 'Every indexed repository with status, size and any error.', 'No arguments'],
+	['search_code', 'Ranked matches over functions, classes, imports, doc sections and Terraform blocks, each with a link to the exact lines.', 'Up to 50 per page'],
+	['get_file', 'A file with line numbers, so Claude can read the code around a hit.', '400 lines, 100,000 chars per call'],
+	['list_definitions', 'Definitions by file and line, filtered by path prefix, type or name.', 'Up to 500'],
+	['analyze_repository', 'File, line and entity counts, languages, top directories and largest files.', 'Counts only'],
+	['find_patterns', 'Literal or regex line matches across the repository.', 'Regex stops at 10 s'],
+	['add_repository', 'Adds a repository by https URL, from GitHub or a public GitLab, Bitbucket or self-hosted server, and starts indexing.', 'Needs the API key'],
+];
+
+const pipeline = [
+	['Check', 'The GitHub API (or git ls-remote on other hosts) confirms the repository and branch exist. A refusal creates nothing.', '10 s, one attempt'],
+	['Fetch', 'Lists files through the GitHub trees API or a shallow clone. Vendored and minified files and lockfiles are skipped.', 'under 1 MB each, 1000 files, 100 MB'],
+	['Parse', 'tree-sitter, Python ast and a heading scanner turn each file into named entities with line ranges.', '13 languages'],
+	['Store', 'Files and entities go to SQLite in batches, and a failed batch rolls back on its own.', '200 files per commit'],
+	['Index', 'One Algolia record per entity, ranked classes first, then functions, docs and imports.', '1000 records per request'],
+];
+
+const languages = [
+	['Python', 'ast'],
+	['JavaScript', 'tree-sitter'],
+	['TypeScript', 'tree-sitter'],
+	['Java', 'tree-sitter'],
+	['Go', 'tree-sitter'],
+	['Rust', 'tree-sitter'],
+	['C', 'tree-sitter'],
+	['C++', 'tree-sitter'],
+	['C#', 'tree-sitter'],
+	['PHP', 'tree-sitter'],
+	['Ruby', 'tree-sitter'],
+	['Markdown', 'headings'],
+	['Terraform / HCL', 'tree-sitter'],
+];
+
+const docs = [
+	['Start here', [['Introduction', '/docs/introduction/'], ['Quick start', '/docs/quick-start/'], ['Installation in depth', '/docs/installation/']]],
+	['Guides', [['Web dashboard', '/docs/guides/web-dashboard/'], ['Claude Desktop', '/docs/guides/claude-desktop/'], ['Other git hosts', '/docs/guides/other-git-hosts/'], ['Using the REST API', '/docs/guides/rest-api/'], ['Docker dev stack', '/docs/guides/docker/'], ['Production deployment', '/docs/guides/production/']]],
+	['How it works', [['Architecture', '/docs/concepts/architecture/'], ['Indexing pipeline', '/docs/concepts/indexing-pipeline/'], ['Search and the Algolia index', '/docs/concepts/search/'], ['Data model', '/docs/concepts/data-model/'], ['Security model', '/docs/concepts/security/']]],
+	['Reference', [['MCP tools', '/docs/reference/mcp-tools/'], ['MCP endpoints and errors', '/docs/reference/mcp-endpoints/'], ['REST API', '/docs/reference/rest-api/'], ['WebSocket protocol', '/docs/reference/websocket/'], ['Configuration', '/docs/reference/configuration/'], ['Commands', '/docs/reference/commands/'], ['Supported languages', '/docs/reference/languages/']]],
+	['Help', [['Troubleshooting', '/docs/troubleshooting/'], ['Known limitations', '/docs/limitations/'], ['FAQ', '/docs/faq/'], ['Development', '/docs/development/']]],
+] as const;
+
+const quickstart = `make setup            # .venv, npm ci, backend/.env and a generated API key
+$EDITOR backend/.env  # ALGOLIA_APP_ID, ALGOLIA_ADMIN_API_KEY, GITHUB_TOKEN
+make start            # backend on :8001, dashboard on :5173
+make install-claude   # add CodeSage to Claude Desktop, then restart it`;
+---
+
+<StarlightPage
+	frontmatter={{
+		title: 'CodeSage: search your codebase from Claude',
+		description:
+			'CodeSage indexes a repository into Algolia and serves it to Claude Desktop as seven MCP tools, with a live web dashboard. Self-hosted and open source.',
+		template: 'splash',
+		hero: { title: 'CodeSage' },
+		tableOfContents: false,
+		editUrl: false,
+		prev: false,
+		next: false,
+	}}
+>
+	<section class="cs-section not-content" aria-labelledby="what">
+		<p class="cs-kicker">What it does</p>
+		<h2 id="what">Your repository, as something Claude can query</h2>
+		<p class="cs-intro">
+			Claude can't open your repository on its own. CodeSage indexes the repository ahead of time and
+			answers Claude's questions from that index, so Claude cites real files and line numbers instead
+			of guessing.
+		</p>
+		<div class="cs-three">
+			<div>
+				<h3><span>01</span>Index</h3>
+				<p>
+					Add a GitHub repository in the dashboard, or ask Claude to add one from GitLab, Bitbucket or a
+					self-hosted server. A background job fetches, parses and indexes it while the dashboard shows
+					progress after every batch.
+				</p>
+			</div>
+			<div>
+				<h3><span>02</span>Search</h3>
+				<p>
+					Every function, class, import, Markdown heading and Terraform block becomes an Algolia record.
+					A question in plain words still returns the best partial matches, and each hit links to the
+					exact lines on its host.
+				</p>
+			</div>
+			<div>
+				<h3><span>03</span>Read</h3>
+				<p>
+					Claude reads files with line numbers, lists definitions, gets language and directory
+					breakdowns, and runs literal or regex searches, all from the copy of your code that CodeSage
+					keeps in SQLite.
+				</p>
+			</div>
+		</div>
+	</section>
+
+	<section class="cs-section not-content" aria-labelledby="pipeline">
+		<p class="cs-kicker">Indexing</p>
+		<h2 id="pipeline">From a URL to a searchable index in one background job</h2>
+		<ol class="cs-pipeline">
+			{
+				pipeline.map(([name, text, limit], i) => (
+					<li>
+						<span class="cs-step">{String(i + 1).padStart(2, '0')}</span>
+						<h3>{name}</h3>
+						<p>{text}</p>
+						<code>{limit}</code>
+					</li>
+				))
+			}
+		</ol>
+		<div class="cs-status" aria-label="Repository status lifecycle">
+			<span class="cs-pill">pending</span>
+			<span aria-hidden="true">→</span>
+			<span class="cs-pill cs-pill-run">processing</span>
+			<span aria-hidden="true">→</span>
+			<span class="cs-pill cs-pill-ok">completed</span>
+			<span class="cs-or">or</span>
+			<span class="cs-pill cs-pill-bad">failed</span>
+			<p>
+				Two runs at a time. A run that skips files still completes and is flagged as partially indexed.
+				A server restart marks interrupted runs failed, and you can reprocess them.{' '}
+				<a href="/docs/concepts/indexing-pipeline/">Read the full pipeline</a>
+			</p>
+		</div>
+	</section>
+
+	<section class="cs-section not-content" aria-labelledby="tools">
+		<p class="cs-kicker">For Claude</p>
+		<h2 id="tools">Seven MCP tools</h2>
+		<p class="cs-intro">
+			Claude Desktop starts a small stdio bridge that turns each tool call into an HTTP request to the
+			backend. The bridge answers <code>tools/list</code> itself, so the tools show up even while the
+			backend is down.
+		</p>
+		<div class="cs-tools" role="table" aria-label="CodeSage MCP tools">
+			{
+				tools.map(([name, text, limit]) => (
+					<div class="cs-tool-row" role="row">
+						<a role="cell" href={`/docs/reference/mcp-tools/#${name}`}>
+							<code>{name}</code>
+						</a>
+						<span role="cell">{text}</span>
+						<span role="cell" class="cs-limit">
+							{limit}
+						</span>
+					</div>
+				))
+			}
+		</div>
+	</section>
+
+	<section class="cs-section cs-split not-content" aria-labelledby="ways">
+		<div>
+			<p class="cs-kicker">Two ways in</p>
+			<h2 id="ways">A dashboard for people, an MCP server for Claude</h2>
+			<p>
+				The React dashboard adds GitHub repositories, follows indexing over a WebSocket (and polls every
+				3 seconds as a fallback), searches with suggestions and opens each result at its line on GitHub.
+			</p>
+			<p>
+				Claude Desktop reaches the same backend through the MCP bridge. One command merges CodeSage into
+				your Claude Desktop config, backs up the old file and keeps the key out of sight.
+			</p>
+			<Code lang="bash" wrap code={`make install-claude                 # merge CodeSage into the Claude Desktop config
+make install-claude ARGS=--dry-run  # preview first, with the key masked`} />
+			<p class="cs-links">
+				<a href="/docs/guides/web-dashboard/">Dashboard guide</a>
+				<a href="/docs/guides/claude-desktop/">Claude Desktop guide</a>
+			</p>
+		</div>
+		<figure class="cs-shot-hero">
+			<Image
+				src={searchShot}
+				alt="The CodeSage repository page for pmndrs/zustand, showing 186 search results for 'create store' with file paths, line ranges and code snippets."
+				widths={[720, 1200, 1600]}
+				sizes="(min-width: 64rem) 36rem, 100vw"
+			/>
+			<figcaption>Searching pmndrs/zustand in the dashboard. A real screenshot from a local run.</figcaption>
+		</figure>
+	</section>
+
+	<section class="cs-section not-content" aria-labelledby="langs">
+		<p class="cs-kicker">Languages</p>
+		<h2 id="langs">What gets parsed</h2>
+		<ul class="cs-langs">
+			{
+				languages.map(([name, parser]) => (
+					<li>
+						<b>{name}</b>
+						<span>{parser}</span>
+					</li>
+				))
+			}
+		</ul>
+		<p class="cs-note">
+			CSS, SCSS, HTML, JSON, YAML, XML and SQL files are stored and readable with <code>get_file</code>,
+			but they yield no entities. C and C++ cover <code>.c</code> and <code>.cpp</code> only, so headers
+			are not indexed. <a href="/docs/reference/languages/">Languages reference</a>
+		</p>
+	</section>
+
+	<section class="cs-section cs-split not-content" aria-labelledby="start">
+		<div>
+			<p class="cs-kicker">Quick start</p>
+			<h2 id="start">Running in four commands</h2>
+			<p>
+				You need Python 3.13 with <code>uv</code>, Node.js 22, and an Algolia application ID and Admin API
+				key. A GitHub token is optional but raises GitHub's rate limit and lets the server read your
+				private github.com repositories.
+			</p>
+			<p class="cs-links">
+				<a href="/docs/quick-start/">Quick start</a>
+				<a href="/docs/installation/">Installation in depth</a>
+			</p>
+		</div>
+		<div class="cs-code-wrap">
+			<Code lang="bash" title="Terminal" wrap code={quickstart} />
+			<p class="cs-note">
+				Then open <code>http://localhost:5173</code>, enter <code>owner/repo</code>, and ask Claude:
+				<em>"Search the zustand repository for where the store is created."</em>
+			</p>
+		</div>
+	</section>
+
+	<section class="cs-section not-content" aria-labelledby="security">
+		<p class="cs-kicker">Security</p>
+		<h2 id="security">Safe defaults on localhost, a locked-down stack for servers</h2>
+		<ul class="cs-sec">
+			<li>
+				<h3>The API key guards writes</h3>
+				<p>
+					Creating, editing, deleting and reprocessing repositories, tool calls, suggestions and the
+					WebSocket all need <code>X-API-Key</code> once a key is set. <code>make setup</code> generates one.
+				</p>
+			</li>
+			<li>
+				<h3>Loopback only without a key</h3>
+				<p>
+					The backend refuses to start on a non-loopback address without a key, and it checks{' '}
+					<code>Host</code> and <code>Origin</code> headers to block DNS rebinding and cross-site writes.
+				</p>
+			</li>
+			<li>
+				<h3>nginx holds the key in prod</h3>
+				<p>
+					The Docker prod stack terminates TLS, asks for a basic-auth login and adds the key itself, so
+					the browser bundle never contains it.
+				</p>
+			</li>
+			<li>
+				<h3>The bridge refuses plain HTTP</h3>
+				<p>
+					The MCP bridge won't send a key or login over <code>http://</code> to a remote host. Other git
+					hosts are cloned without a shell, credentials or prompts, over https only.
+				</p>
+			</li>
+		</ul>
+		<p class="cs-note"><a href="/docs/concepts/security/">Security model in full</a></p>
+	</section>
+
+	<section class="cs-section not-content" aria-labelledby="docs">
+		<p class="cs-kicker">Documentation</p>
+		<h2 id="docs">Everything else</h2>
+		<nav class="cs-docmap" aria-label="Documentation map">
+			{
+				docs.map(([group, links]) => (
+					<div>
+						<h3>{group}</h3>
+						<ul>
+							{links.map(([label, href]) => (
+								<li>
+									<a href={href}>{label}</a>
+								</li>
+							))}
+						</ul>
+					</div>
+				))
+			}
+		</nav>
+		<p class="cs-fine">
+			CodeSage is self-hosted: you run the backend, the dashboard and the MCP bridge on your own machine
+			or server, with your own Algolia account. This site documents it and doesn't run it. Built for the{' '}
+			<a href="https://dev.to/challenges/algolia-2025-07-09">Algolia MCP Server Challenge</a>.
+		</p>
+	</section>
+</StarlightPage>
+
+<style>
+	.cs-section {
+		padding-block: 3.5rem;
+		border-top: 1px solid var(--cs-line);
+	}
+	.cs-kicker {
+		font-family: var(--sl-font-mono);
+		font-size: var(--sl-text-xs);
+		text-transform: uppercase;
+		letter-spacing: 0.06em;
+		color: var(--sl-color-accent);
+	}
+	h2 {
+		margin-top: 0.5rem;
+		font-size: clamp(1.6rem, 1.2rem + 1.4vw, 2.3rem);
+		line-height: 1.15;
+		letter-spacing: -0.02em;
+		color: var(--sl-color-white);
+		max-width: 44rem;
+	}
+	h3 {
+		font-size: var(--sl-text-lg);
+		color: var(--sl-color-white);
+	}
+	p {
+		color: var(--sl-color-gray-2);
+		line-height: 1.65;
+	}
+	code {
+		font-family: var(--sl-font-mono);
+		font-size: 0.9em;
+	}
+	.cs-intro {
+		margin-top: 1rem;
+		max-width: 46rem;
+		font-size: var(--sl-text-lg);
+	}
+	.cs-note {
+		margin-top: 1.25rem;
+		font-size: var(--sl-text-sm);
+		color: var(--sl-color-gray-3);
+	}
+
+	.cs-three {
+		display: grid;
+		gap: 2rem;
+		margin-top: 2.5rem;
+	}
+	@media (min-width: 50rem) {
+		.cs-three {
+			grid-template-columns: repeat(3, minmax(0, 1fr));
+		}
+	}
+	.cs-three > div {
+		padding-top: 1rem;
+		border-top: 2px solid var(--sl-color-white);
+	}
+	.cs-three h3 span {
+		margin-right: 0.6rem;
+		font-family: var(--sl-font-mono);
+		font-size: var(--sl-text-sm);
+		font-weight: 400;
+		color: var(--sl-color-gray-3);
+	}
+	.cs-three p {
+		margin-top: 0.6rem;
+	}
+
+	.cs-pipeline {
+		list-style: none;
+		margin: 2.5rem 0 0;
+		padding: 0;
+		display: grid;
+		gap: 1px;
+		background: var(--cs-line);
+		border: 1px solid var(--cs-line);
+		border-radius: 0.5rem;
+		overflow: hidden;
+	}
+	@media (min-width: 40rem) {
+		.cs-pipeline {
+			grid-template-columns: repeat(2, minmax(0, 1fr));
+		}
+	}
+	@media (min-width: 64rem) {
+		.cs-pipeline {
+			grid-template-columns: repeat(5, minmax(0, 1fr));
+		}
+	}
+	.cs-pipeline li {
+		display: flex;
+		flex-direction: column;
+		gap: 0.5rem;
+		margin: 0;
+		padding: 1.25rem;
+		background: var(--sl-color-black);
+	}
+	.cs-step {
+		font-family: var(--sl-font-mono);
+		font-size: var(--sl-text-xs);
+		color: var(--sl-color-gray-3);
+	}
+	.cs-pipeline p {
+		flex: 1;
+		font-size: var(--sl-text-sm);
+	}
+	.cs-pipeline code {
+		align-self: flex-start;
+		padding: 0.15rem 0.45rem;
+		border-radius: 0.25rem;
+		background: var(--cs-mark-soft);
+		color: var(--sl-color-white);
+		font-size: var(--sl-text-xs);
+	}
+	.cs-status {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: center;
+		gap: 0.5rem 0.65rem;
+		margin-top: 1.5rem;
+		font-family: var(--sl-font-mono);
+		font-size: var(--sl-text-sm);
+		color: var(--sl-color-gray-3);
+	}
+	.cs-status p {
+		flex-basis: 100%;
+		margin-top: 0.5rem;
+		font-family: var(--sl-font);
+	}
+	.cs-pill {
+		padding: 0.1rem 0.6rem;
+		border-radius: 999px;
+		border: 1px solid var(--sl-color-gray-5);
+		color: var(--sl-color-gray-2);
+	}
+	.cs-pill-run {
+		border-color: var(--sl-color-accent);
+		color: var(--sl-color-accent-high);
+	}
+	.cs-pill-ok {
+		border-color: var(--cs-ok);
+		color: var(--cs-ok);
+	}
+	.cs-pill-bad {
+		border-color: var(--cs-bad);
+		color: var(--cs-bad);
+	}
+
+	.cs-tools {
+		margin-top: 2rem;
+		border-top: 1px solid var(--cs-line);
+	}
+	.cs-tool-row {
+		display: grid;
+		gap: 0.35rem 1.5rem;
+		padding: 1rem 0;
+		border-bottom: 1px solid var(--cs-line);
+	}
+	@media (min-width: 50rem) {
+		.cs-tool-row {
+			grid-template-columns: 13rem minmax(0, 1fr) 14rem;
+			align-items: baseline;
+		}
+	}
+	.cs-tool-row a {
+		text-decoration: none;
+	}
+	.cs-tool-row a code {
+		font-weight: 500;
+		color: var(--sl-color-accent-high);
+	}
+	.cs-tool-row a:hover code {
+		text-decoration: underline;
+	}
+	.cs-tool-row span {
+		color: var(--sl-color-gray-2);
+	}
+	.cs-limit {
+		font-family: var(--sl-font-mono);
+		font-size: var(--sl-text-xs);
+		color: var(--sl-color-gray-3) !important;
+	}
+	@media (min-width: 50rem) {
+		.cs-limit {
+			text-align: right;
+		}
+	}
+
+	.cs-split {
+		display: grid;
+		gap: 2.5rem;
+		align-items: start;
+	}
+	@media (min-width: 64rem) {
+		.cs-split {
+			grid-template-columns: minmax(0, 5fr) minmax(0, 6fr);
+			gap: 3.5rem;
+		}
+	}
+	.cs-split > div > p {
+		margin-top: 1rem;
+	}
+	.cs-split :global(.expressive-code) {
+		margin-top: 1.25rem;
+	}
+	.cs-links {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 1.25rem;
+	}
+	.cs-links a,
+	.cs-note a,
+	.cs-status a {
+		font-weight: 600;
+	}
+	.cs-links a::after,
+	.cs-note a::after,
+	.cs-status a::after {
+		content: ' →';
+	}
+	.cs-shot-hero {
+		margin: 0;
+	}
+	.cs-shot-hero :global(img) {
+		display: block;
+		width: 100%;
+		height: auto;
+		border: 1px solid var(--cs-line);
+		border-radius: 0.6rem;
+		box-shadow: 0 30px 60px -35px rgba(0, 0, 0, 0.55);
+	}
+	.cs-shot-hero figcaption {
+		margin-top: 0.75rem;
+		font-size: var(--sl-text-xs);
+		color: var(--sl-color-gray-3);
+	}
+
+	.cs-langs {
+		list-style: none;
+		margin: 2rem 0 0;
+		padding: 0;
+		display: grid;
+		grid-template-columns: repeat(auto-fill, minmax(11.5rem, 1fr));
+		gap: 0.6rem;
+	}
+	.cs-langs li {
+		display: flex;
+		justify-content: space-between;
+		align-items: baseline;
+		gap: 0.5rem;
+		margin: 0;
+		padding: 0.6rem 0.8rem;
+		border: 1px solid var(--cs-line);
+		border-radius: 0.4rem;
+	}
+	.cs-langs b {
+		font-weight: 600;
+		color: var(--sl-color-white);
+	}
+	.cs-langs span {
+		white-space: nowrap;
+		font-family: var(--sl-font-mono);
+		font-size: 0.68rem;
+		color: var(--sl-color-gray-3);
+	}
+
+	.cs-code-wrap :global(.expressive-code) {
+		margin-top: 0;
+	}
+
+	.cs-sec {
+		list-style: none;
+		margin: 2rem 0 0;
+		padding: 0;
+		display: grid;
+		gap: 1.75rem 2.5rem;
+	}
+	@media (min-width: 50rem) {
+		.cs-sec {
+			grid-template-columns: repeat(2, minmax(0, 1fr));
+		}
+	}
+	.cs-sec li {
+		margin: 0;
+		padding-left: 1rem;
+		border-left: 3px solid var(--cs-mark);
+	}
+	.cs-sec p {
+		margin-top: 0.4rem;
+		font-size: var(--sl-text-sm);
+	}
+
+	.cs-docmap {
+		display: grid;
+		gap: 2rem;
+		margin-top: 2rem;
+		grid-template-columns: repeat(auto-fill, minmax(11rem, 1fr));
+	}
+	.cs-docmap h3 {
+		font-size: var(--sl-text-sm);
+		font-family: var(--sl-font-mono);
+		text-transform: uppercase;
+		letter-spacing: 0.05em;
+		color: var(--sl-color-gray-3);
+	}
+	.cs-docmap ul {
+		list-style: none;
+		margin: 0.6rem 0 0;
+		padding: 0;
+	}
+	.cs-docmap li {
+		margin: 0.35rem 0 0;
+	}
+	.cs-docmap a {
+		color: var(--sl-color-white);
+		text-decoration: none;
+	}
+	.cs-docmap a:hover {
+		color: var(--sl-color-accent);
+		text-decoration: underline;
+	}
+	.cs-fine {
+		margin-top: 3rem;
+		padding-top: 1.5rem;
+		border-top: 1px solid var(--cs-line);
+		font-size: var(--sl-text-sm);
+		color: var(--sl-color-gray-3);
+		max-width: 52rem;
+	}
+</style>

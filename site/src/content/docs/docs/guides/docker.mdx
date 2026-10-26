@@ -1,0 +1,185 @@
+---
+title: Docker dev stack
+description: Run CodeSage in Docker on localhost with the dashboard behind nginx, hot reload for the backend, and a clear picture of what each container does.
+---
+
+import { Aside, Steps, FileTree } from '@astrojs/starlight/components';
+import Mermaid from '~/components/Mermaid.astro';
+
+The dev stack is for one user on one machine. It builds the dashboard into a static bundle, serves it through nginx on `http://localhost`, and runs the backend with hot reload. It is the quickest way to try CodeSage without installing Python and Node, but it is not for sharing: the bundle contains your API key, so every port binds to `127.0.0.1`.
+
+If you want HTTPS, a login and a bundle without a key, use [Production deployment](/docs/guides/production/). The files for this page are [`deployment/docker-compose.yml`](https://github.com/ntanwir10/codesage-algolia-challenge/blob/master/deployment/docker-compose.yml) and [`deployment/nginx.conf`](https://github.com/ntanwir10/codesage-algolia-challenge/blob/master/deployment/nginx.conf). The longer reference is [`deployment/DOCKER.md`](https://github.com/ntanwir10/codesage-algolia-challenge/blob/master/deployment/DOCKER.md).
+
+<Mermaid caption="The dev stack. Both ports are bound to 127.0.0.1, and nginx drops any request whose Host is not localhost or 127.0.0.1." code={`flowchart TB
+    you(["Your browser"]) --> nginx["codesage_nginx<br/>127.0.0.1:80, plain HTTP"]
+    nginx -- "static files" --> spa["Built dashboard<br/>API key inside the bundle"]
+    nginx -- "/api, /ws, /health" --> backend["codesage_mcp_server<br/>127.0.0.1:8001<br/>uvicorn --reload, one worker"]
+    bridge(["Claude Desktop bridge"]) --> backend
+    backend --> vol[("backend_data volume<br/>/app/data/codesage.db")]
+    backend --> algolia[("Algolia<br/>codesage_code_entities_docker")]
+    other(["Any other Host header"]) -. "closed with 444" .-> nginx
+`} />
+
+## What you need
+
+- Docker with Compose v2 (`docker compose`).
+- An Algolia application ID and Admin API key. Without them the stack starts, but `/health` reports `degraded` and adding a repository returns `503`.
+- A GitHub token is optional. It raises GitHub rate limits and lets you read private github.com repositories.
+
+## Start it
+
+<Steps>
+
+1. **Create the env file.**
+
+   ```bash
+   cp .env.example backend/.env   # or run `make setup`
+   ```
+
+   Fill in `ALGOLIA_APP_ID`, `ALGOLIA_ADMIN_API_KEY` and, if you want it, `GITHUB_TOKEN`. The backend container reads this file through `env_file`. A value left empty, or left as a `your-...-here` placeholder, counts as unset.
+
+2. **Make a key and export it.** The backend refuses to start without `CODESAGE_API_KEY`, because the container listens on `0.0.0.0`. The dashboard build also needs the same value.
+
+   ```bash
+   python -c "import secrets; print(secrets.token_urlsafe(32))"   # put this in backend/.env
+   export CODESAGE_API_KEY=<the same key>                         # used at build time
+   ```
+
+   If you ran `make setup`, the key is already in `backend/.env`. Export it from there:
+
+   ```bash
+   export CODESAGE_API_KEY=$(sed -n 's/^CODESAGE_API_KEY=//p' backend/.env)
+   ```
+
+3. **Build and start.**
+
+   ```bash
+   make build   # docker compose -f deployment/docker-compose.yml build
+   make up      # same file, up -d
+   ```
+
+4. **Open it.** The app is at `http://localhost`. The backend is at `http://127.0.0.1:8001`, with API docs at `/docs`.
+
+5. **Check it.**
+
+   ```bash
+   make health   # curls /health and the MCP capabilities; needs jq
+   ```
+
+</Steps>
+
+To connect Claude Desktop to this stack, run `make install-claude`. It points the bridge at `http://127.0.0.1:8001`, which the stack publishes. See [Claude Desktop](/docs/guides/claude-desktop/).
+
+## What each container does
+
+| | `codesage_mcp_server` (backend) | `codesage_nginx` (nginx) |
+| --- | --- | --- |
+| Image | Built from `backend/Dockerfile` (`python:3.13-slim` with `build-essential`, `curl`, `gcc` and `git`, running as a non-root `appuser`) | Built from `frontend/Dockerfile`: a `node:22-alpine` stage runs the Vite build, then `nginx:alpine` serves the result |
+| Job | FastAPI: REST, WebSocket, MCP tools and the indexing jobs | Serves the built dashboard, and proxies `/api/`, `/ws` and `/health` to the backend |
+| Published port | `127.0.0.1:8001` | `127.0.0.1:80` |
+| Config | `deployment/docker-compose.yml` and `backend/.env` | `deployment/nginx.conf` mounted read-only over `/etc/nginx/nginx.conf` |
+| Health check | `curl -f http://localhost:8001/health` every 30 s, 10 s timeout, 3 retries | None. It only waits for the backend container to start |
+| Restart | `unless-stopped` | `unless-stopped` |
+
+The backend starts with `uvicorn app.main:app --host 0.0.0.0 --port 8001 --reload --reload-dir app`. It has no `--workers` option, which means exactly one worker. Job state, WebSocket subscriptions and rate-limit counters live in the process, and SQLite allows one writer. See [Architecture](/docs/concepts/architecture/#process-model-one-worker-on-purpose).
+
+### The nginx image build
+
+`VITE_API_BASE_URL` is set to `/api/v1` and `VITE_CODESAGE_API_KEY` to your exported `CODESAGE_API_KEY`. Vite inlines both into the JavaScript at build time. The WebSocket URL is not a build setting: the dashboard builds it from the page's own address (`ws://` or `wss://`), so it works behind any host.
+
+<Aside type="caution">
+The API key is inside the JavaScript. Anyone who can load the page can read it and call the write endpoints. That is why both ports are loopback-only. Rebuild after you change the key (`make build && make up`), or the dashboard shows `401` errors.
+</Aside>
+
+## Ports and who can reach them
+
+Both published ports bind to `127.0.0.1`:
+
+| Port | Service | Reachable from |
+| --- | --- | --- |
+| `127.0.0.1:80` | nginx, plain HTTP | Your machine only |
+| `127.0.0.1:8001` | The backend: REST, WebSocket, `/docs` | Your machine only |
+| 443 | Not published | Nobody. There is no TLS in the dev stack |
+
+The dev nginx has two `server` blocks on port 80. The first is the `default_server`, with `server_name _`, and it does one thing: `return 444`, which closes the connection with no reply. The second answers only for `localhost` and `127.0.0.1`. So a request with any other `Host` header gets an empty reply.
+
+This protects the key. A hostile web page can re-point its own domain at `127.0.0.1` (DNS rebinding). That page keeps its own `Host`, so it lands in the first block and never receives the bundle. The backend repeats the check for its own port: with a key set, it answers only to loopback hosts and to the hosts named in `CORS_ORIGINS`. See [Security model](/docs/concepts/security/#why-the-host-check-exists).
+
+### nginx behaviour worth knowing
+
+- `/ws` keeps `Host` with its port (`$http_host`), because the backend compares it with the browser's `Origin`. A remapped port must still match.
+- `/ws` allows idle connections for an hour (`proxy_read_timeout` and `proxy_send_timeout` of 3600 s). `/api/` times out after 60 s.
+- Request bodies are capped at 2 MB. The API only takes small JSON, so there are no uploads.
+- Responses are gzipped above 1 KB.
+- Everything else falls back to `index.html`, so a refresh on `/repository/3` works.
+
+## Settings the Compose file overrides
+
+The `environment` block wins over `backend/.env`. These come from the Compose file:
+
+| Variable | Value | Why |
+| --- | --- | --- |
+| `MCP_SERVER_HOST` | `0.0.0.0` | Docker publishes the port, so the process must listen on all interfaces |
+| `MCP_SERVER_PORT` | `8001` | Matches the published port and nginx's upstream |
+| `DATABASE_URL` | `sqlite:///./data/codesage.db` | Puts the database in the named volume |
+| `ALGOLIA_INDEX_NAME` | `${DOCKER_ALGOLIA_INDEX_NAME:-codesage_code_entities_docker}` | A separate index from a local run. Records are keyed by repository ID, so two databases on one index would delete each other's records |
+| `CORS_ORIGINS` | `http://localhost`, `http://localhost:3000`, `http://localhost:5173` | The origins allowed to write. Edit the file to change it |
+
+Not overridden: `CODESAGE_API_KEY`, `ALGOLIA_APP_ID`, `ALGOLIA_ADMIN_API_KEY` and `GITHUB_TOKEN` come from `backend/.env`. `ENVIRONMENT` stays `development`, so `/docs` is on.
+
+To use a different Algolia index, `export DOCKER_ALGOLIA_INDEX_NAME=your_index` before `make up`.
+
+## Hot reload
+
+`backend/` is bind-mounted at `/app`, and uvicorn runs with `--reload --reload-dir app`. Edit a file under `backend/app/` and uvicorn restarts the server within a moment.
+
+<Aside type="note">
+A reload is a server restart. A repository that is indexing at that moment stops, and the new process marks it `failed` with "Processing was interrupted by a server restart". Reprocess it after your edit. Avoid saving files while a run is in progress.
+</Aside>
+
+The dashboard has no hot reload in this stack, because the bundle is built into the nginx image. For front-end work, run the dev servers directly with `make start` instead. See [Installation](/docs/installation/).
+
+## Make targets
+
+| Target | What it does |
+| --- | --- |
+| `make build` | `docker compose -f deployment/docker-compose.yml build` |
+| `make up` | Start the stack detached (`up -d`) |
+| `make down` | Stop the stack. Data is kept |
+| `make restart` | Restart both containers |
+| `make logs` | Follow the logs of both containers |
+| `make logs-backend` | Follow the backend's logs only |
+| `make status` | `docker compose ps` for the dev stack |
+| `make shell` | Open `bash` in the backend container |
+| `make health` | Curl `http://127.0.0.1:8001/health` and the MCP capabilities. Needs `jq`. Prints "Backend not responding" if the backend is down |
+| `make clean` | `down -v --remove-orphans`: delete the dev containers, network and volume |
+| `make clean-all` | Same as `clean`, plus `--rmi local`: also remove the locally built images |
+
+`make db-reset`, `make db-migrate` and `make db-migration` act on the local `backend/codesage.db`, not on the containers. `make prod-build` and `make prod-up` are for the prod stack.
+
+## Data and cleanup
+
+- **Where the data is.** The SQLite file is in the named volume `backend_data`, mounted at `/app/data`. It survives `make down` and rebuilds. The image makes `/app/data` writable by `appuser`, and a new named volume inherits that.
+- **`make clean`** deletes the volume, so the dev database is gone. Repositories must be added again.
+- **`make clean-all`** also removes the images this stack built.
+- **Scoped to this project.** Neither target runs a host-wide `docker system prune`, so other projects' containers, images and volumes are untouched. Neither touches the prod stack.
+- **Algolia is not cleaned.** The index keeps its records. Delete repositories in the dashboard before `make clean`, or remove the index in Algolia.
+
+## Dev and prod do not run together
+
+Both stacks publish port 80, so start only one. Stop the other with `docker compose -f <file> down`.
+
+## What CI checks
+
+CI validates the dev Compose file with `docker compose config -q` and the dev nginx config with `nginx -t`. It builds the frontend image. It does not build the dev backend image (`backend/Dockerfile`) and never starts a container, so expect to fix small runtime problems yourself.
+
+## When something goes wrong
+
+| Symptom | Fix |
+| --- | --- |
+| Backend exits immediately | `CODESAGE_API_KEY` is empty and the container binds `0.0.0.0`. Set the key and run `make logs-backend` |
+| Dashboard shows `401`, or the WebSocket is rejected | The key in the bundle differs from the backend's. Re-export `CODESAGE_API_KEY`, then `make build && make up` |
+| Empty reply on another hostname | The dev nginx drops unknown hosts. Use `localhost` or `127.0.0.1` |
+| Port 80 already in use | The prod stack or another service holds it |
+
+The full list is in [Troubleshooting](/docs/troubleshooting/#docker-dev).

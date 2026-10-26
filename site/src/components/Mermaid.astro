@@ -1,0 +1,80 @@
+---
+interface Props {
+	code: string;
+	caption?: string;
+}
+const { code, caption } = Astro.props;
+---
+
+<figure class="cs-diagram not-content">
+	<pre class="mermaid" data-source={code.trim()}>{code.trim()}</pre>
+	{caption && <figcaption>{caption}</figcaption>}
+</figure>
+
+<script>
+	import mermaid from 'mermaid';
+
+	const nodes = [...document.querySelectorAll<HTMLElement>('pre.mermaid')];
+
+	// Mermaid bakes colors into the SVG, so redraw when Starlight's theme toggle flips data-theme.
+	async function render() {
+		const dark = document.documentElement.dataset.theme === 'dark';
+		mermaid.initialize({
+			startOnLoad: false,
+			securityLevel: 'strict',
+			theme: 'base',
+			fontFamily: '"IBM Plex Sans", system-ui, sans-serif',
+			themeVariables: dark
+				? {
+						darkMode: true,
+						background: '#10151d',
+						primaryColor: '#18202b',
+						primaryBorderColor: '#4d7cff',
+						primaryTextColor: '#e8ecf2',
+						secondaryColor: '#221d10',
+						tertiaryColor: '#141a23',
+						lineColor: '#7d8aa0',
+						textColor: '#e8ecf2',
+						noteBkgColor: '#2a2410',
+						noteTextColor: '#f4e7b8',
+						noteBorderColor: '#c9a227',
+						actorBkg: '#18202b',
+						actorBorder: '#4d7cff',
+						actorTextColor: '#e8ecf2',
+						signalColor: '#c4ccd8',
+						signalTextColor: '#e8ecf2',
+					}
+				: {
+						background: '#ffffff',
+						primaryColor: '#eef3ff',
+						primaryBorderColor: '#2952e3',
+						primaryTextColor: '#0f1722',
+						secondaryColor: '#fff6d6',
+						tertiaryColor: '#f6f7f9',
+						lineColor: '#5b6576',
+						textColor: '#0f1722',
+						noteBkgColor: '#fff6d6',
+						noteTextColor: '#3b3000',
+						noteBorderColor: '#c9a227',
+						actorBkg: '#eef3ff',
+						actorBorder: '#2952e3',
+						actorTextColor: '#0f1722',
+						signalColor: '#333c4a',
+						signalTextColor: '#0f1722',
+					},
+		});
+		for (const node of nodes) {
+			node.removeAttribute('data-processed');
+			node.textContent = node.dataset.source ?? '';
+		}
+		await mermaid.run({ nodes });
+	}
+
+	if (nodes.length) {
+		render();
+		new MutationObserver(render).observe(document.documentElement, {
+			attributes: true,
+			attributeFilter: ['data-theme'],
+		});
+	}
+</script>

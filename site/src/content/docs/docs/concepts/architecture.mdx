@@ -1,0 +1,269 @@
+---
+title: Architecture
+description: How the CodeSage backend, bridge, dashboard and proxies fit together, and how a request, a tool call and a server start-up move through them.
+---
+
+import { Aside, Badge, FileTree } from '@astrojs/starlight/components';
+import Mermaid from '~/components/Mermaid.astro';
+
+CodeSage is a self-hosted tool. There is no hosted demo: you run the backend on your own machine or server, with your own Algolia account. Everything that does work runs inside one FastAPI process. The other parts are clients (the dashboard, the Claude Desktop bridge) or proxies (nginx) that talk to that process.
+
+This page explains what each part is, why it was built that way, and what happens in order when the server starts, when a request arrives and when Claude calls a tool. For the numbers behind indexing, read [the indexing pipeline](/docs/concepts/indexing-pipeline/). For the index itself, read [search](/docs/concepts/search/).
+
+## The big picture
+
+<Mermaid caption="The whole system. In development there is no nginx: the dashboard and the bridge call the backend directly." code={`flowchart TB
+    you(["You"]) --> browser["Web dashboard<br/>React + Vite"]
+    you --> claude["Claude Desktop"]
+    claude -- "tools/call over stdio" --> bridge["MCP bridge"]
+    browser -- "REST and WebSocket" --> nginx["nginx, prod only<br/>HTTPS, login, adds the API key"]
+    bridge -- "HTTP with the API key" --> nginx
+    nginx --> api["CodeSage backend<br/>FastAPI: REST, WebSocket, MCP tools"]
+    api -- "starts" --> job["Indexing job"]
+    job -- "fetch files" --> github["GitHub API,<br/>or git clone"]
+    job -- "store" --> db[("SQLite<br/>files and entities")]
+    job -- "index" --> algolia[("Algolia<br/>search index")]
+    api -- "search" --> algolia
+    api -- "read files" --> db
+`} />
+
+The split of work follows one rule: Algolia answers questions about meaning (which function matches these words), and SQLite answers questions about exact content (give me lines 40 to 80 of this file). Searching goes to Algolia. Reading a file, listing definitions, analysing a repository and finding patterns go to SQLite. That is why every repository is stored twice: once as full file text in SQLite, once as small records in Algolia.
+
+## Components
+
+| Component | Path | Role |
+| --- | --- | --- |
+| App entry | [`backend/app/main.py`](https://github.com/ntanwir10/codesage-algolia-challenge/blob/master/backend/app/main.py) | Builds the FastAPI app, validates settings, runs migrations and crash recovery at start-up, and serves `/health`, `/` and `/ws`. Adds the request guard, CORS and an `X-Request-ID` header. |
+| REST API | [`backend/app/api/v1/endpoints/`](https://github.com/ntanwir10/codesage-algolia-challenge/tree/master/backend/app/api/v1/endpoints) | `repositories.py` (create, update, delete, status, stats, process), `ai.py` (MCP tool calls, resources, search suggestions) and `performance.py` (metrics). Mounted under `/api/v1`. |
+| Core | [`backend/app/core/`](https://github.com/ntanwir10/codesage-algolia-challenge/tree/master/backend/app/core) | `config.py` (settings and start-up validation), `security.py` (API key, request guard, rate limiter, failure messages), `database.py` (engine and session) and `migrations.py` (Alembic at start-up). |
+| Models | [`backend/app/models/`](https://github.com/ntanwir10/codesage-algolia-challenge/tree/master/backend/app/models) | SQLAlchemy tables `Repository`, `CodeFile` and `CodeEntity`. See [the data model](/docs/concepts/data-model/). |
+| Services | [`backend/app/services/`](https://github.com/ntanwir10/codesage-algolia-challenge/tree/master/backend/app/services) | `repository_service.py` (job lifecycle), `github_service.py` (listing and download), `git_source.py` (public repositories on other hosts, read with git), `code_parser.py` (entities), `algolia_service.py` (index and search), `mcp_tools.py` (the seven tools), `websocket_service.py` (live status) and `performance_monitor.py` (metrics). |
+| MCP bridge | [`backend/codesage_mcp/`](https://github.com/ntanwir10/codesage-algolia-challenge/tree/master/backend/codesage_mcp) | The stdio MCP server that Claude Desktop runs. It holds no data. It turns `tools/list`, `tools/call`, `resources/list` and `resources/read` into HTTP calls to `/api/v1/ai`. |
+| Dashboard | [`frontend/`](https://github.com/ntanwir10/codesage-algolia-challenge/tree/master/frontend) | React and Vite. `services/api.ts` and `services/websocket.ts` are the REST and WebSocket clients. |
+| nginx | [`deployment/nginx.conf`](https://github.com/ntanwir10/codesage-algolia-challenge/blob/master/deployment/nginx.conf), [`deployment/nginx.prod.conf.template`](https://github.com/ntanwir10/codesage-algolia-challenge/blob/master/deployment/nginx.prod.conf.template) | Dev: a plain HTTP proxy that drops requests for any `Host` except `localhost` and `127.0.0.1`. Prod: TLS, basic auth and API-key injection. See [Production deployment](/docs/guides/production/). |
+| Launcher | [`mcp_launcher.sh`](https://github.com/ntanwir10/codesage-algolia-challenge/blob/master/mcp_launcher.sh) | What Claude Desktop starts. It checks `.venv/bin/python`, reads a basic-auth password from the macOS Keychain if needed, then runs `python -m codesage_mcp` from `backend/`. |
+
+### Why the bridge is a separate process
+
+Claude Desktop starts MCP servers as child processes and talks to them over stdin and stdout. The bridge is that child. It does not import the backend, open the database or hold an Algolia key. Two benefits follow:
+
+- **The backend can run anywhere.** The bridge only needs a URL (`MCP_SERVER_URL`), so the backend can live on another machine behind nginx.
+- **`tools/list` works with the backend down.** Tool names and argument models live in [`backend/codesage_mcp/schemas.py`](https://github.com/ntanwir10/codesage-algolia-challenge/blob/master/backend/codesage_mcp/schemas.py), which the backend imports too. That file may not import app, database, Algolia or settings code, so it loads anywhere. Only tool calls and resource reads need the backend.
+
+The bridge validates arguments first (unknown arguments are rejected), then the backend validates them again. Requests time out after 30 s, and a connection attempt after 5 s. A failed connection is retried once. stdout carries the protocol only, and all logging goes to stderr.
+
+## Two entry points, one backend
+
+There are two ways in, and both end at the same FastAPI backend.
+
+- **Web dashboard.** You add a GitHub repository, watch it index over a WebSocket (with 3-second polling as a fallback), and search it. The dashboard and the `POST /api/v1/repositories/` endpoint take github.com only.
+- **Claude Desktop.** Claude calls the seven tools through the bridge. Claude can also add public repositories from GitLab, Bitbucket and other git hosts with the `add_repository` tool.
+
+Both entry points reach the same indexing service, so a repository added from Claude shows up in the dashboard and the other way round.
+
+## Inside the backend
+
+<Mermaid caption="Every request passes the request guard first. Indexing runs as a background job that reports progress to the WebSocket." code={`flowchart TB
+    request["HTTP request or WebSocket"] --> guard["Request guard<br/>origin and host checks"]
+    guard --> repos["/repositories<br/>create, reprocess, delete"]
+    guard --> mcp["/ai/mcp<br/>tool calls, resources"]
+    guard --> ws["/ws<br/>live status"]
+    repos -- "schedules" --> job["Indexing job<br/>at most 2 at once"]
+    job --> github["Fetch<br/>GitHub API or git clone"]
+    job --> parser["Code parser<br/>tree-sitter, Python ast"]
+    job --> db[("SQLite")]
+    job --> algolia[("Algolia")]
+    job -- "progress" --> ws
+    mcp --> tools["MCP tools"]
+    tools -- "search_code" --> algolia
+    tools -- "file and definition tools" --> db
+`} />
+
+### Middleware order
+
+Starlette wraps middleware so that the last one added is the outermost. `main.py` adds them in this order, so a request meets them from the outside in:
+
+1. **CORS.** Added last, so it is outermost. Because it wraps everything below it, even a `403` from the guard carries CORS headers that a browser can read.
+2. **Request ID.** Reuses an incoming `X-Request-ID` or makes a new one, binds it to the log context and echoes it in the response.
+3. **Request guard.** `BrowserRequestGuard` checks the `Host` and, for writes and WebSocket handshakes, the `Origin`. It was added first on purpose: the request-ID middleware wraps it, so the guard's `403` responses carry an `X-Request-ID` too. See [the security model](/docs/concepts/security/).
+4. **Routes.** Per-route dependencies check the API key and the rate limiter.
+
+The catch-all `500` handler is different. It sits in Starlette's outermost error layer, outside CORS. It adds the CORS headers itself for an allowed origin, so a browser can still read `{detail, request_id}` when something breaks.
+
+## One tool call, step by step
+
+<Mermaid caption="A tool call from Claude to an answer. The key, origin and rate limit are checked before any data is touched." code={`sequenceDiagram
+    actor You
+    participant Claude as Claude Desktop
+    participant Bridge as MCP bridge
+    participant API as Backend
+    participant Data as Algolia or SQLite
+    You->>Claude: ask a question
+    Claude->>Bridge: tools/call
+    Bridge->>API: POST /ai/mcp/tools/call
+    Note over API: checks key,<br/>origin, rate limit
+    API->>Data: query
+    Data-->>API: matches
+    API-->>Bridge: result or error
+    Bridge-->>Claude: tool result
+    Claude-->>You: answer with code
+`} />
+
+- **Bridge.** It checks the arguments with the same models the backend uses, refuses to send the key over plain `http://` to a remote host, and posts `{tool_name, arguments}` to `/api/v1/ai/mcp/tools/call`.
+- **nginx (prod).** The request goes through nginx, which checks your login and adds the API key. The bridge sends a basic-auth login instead of a key in this case.
+- **Backend.** The guard checks the `Host`. The route checks the key and the 30-per-minute limit. `search_code` queries Algolia. The other tools read SQLite. Every tool except `list_repositories` and `add_repository` refuses a repository that is not `completed`, and says why or how far along it is.
+- **Errors.** A tool failure such as an unknown repository comes back as HTTP `200` with `is_error: true`, so Claude sees the message. A rejected key (`401`), a refused host (`403`), a wrong URL (`404`), bad arguments (`422`), a rate limit (`429`), a backend error (`5xx`), a timeout or an unreachable backend all become a tool error that says what to fix. The full table is in [MCP endpoints and errors](/docs/reference/mcp-endpoints/).
+
+## The request path: dev versus prod
+
+The same backend sits behind three different front doors, depending on how you run it.
+
+| | Local (`make start`) | Docker dev (`make up`) | Docker prod (`make prod-up`) |
+| --- | --- | --- | --- |
+| Dashboard served by | Vite dev server on `localhost:5173` | nginx on `127.0.0.1:80`, built bundle | nginx on 443, built bundle |
+| Browser to API | Vite proxies `/api`, `/ws` and `/health` to `127.0.0.1:8001` | nginx proxies `/api/`, `/ws` and `/health` to `backend:8001` | nginx proxies `/api/` and `/ws` to `backend:8001`. `/health` is open |
+| Where the API key comes from | `VITE_CODESAGE_API_KEY` in the bundle, copied from `backend/.env` | Same, baked in at build time | nginx adds `X-API-Key`. The bundle has no key |
+| Login | none | none | basic auth in nginx |
+| Bridge connects to | `http://127.0.0.1:8001` | `http://127.0.0.1:8001` | `https://your-host` through nginx |
+| Backend reachable from outside | bound to `127.0.0.1` | published on `127.0.0.1:8001` only | not published at all |
+
+<Mermaid caption="The production request path. Only nginx is published. The backend trusts the headers nginx sets because nothing else can reach it." code={`flowchart TB
+    browser(["Browser"]) --> https["nginx :443<br/>HTTPS, basic auth"]
+    https -- "static files" --> spa["Built dashboard"]
+    https -- "/api and /ws<br/>adds X-API-Key" --> backend["backend :8001<br/>one uvicorn worker"]
+    backend --> db[("SQLite volume")]
+    backend --> algolia[("Algolia")]
+    browser -. "plain HTTP" .-> http["nginx :80<br/>/health and a redirect"]
+    http -. "/health" .-> backend
+`} />
+
+Why the two Docker stacks differ: in the dev stack the dashboard is a static bundle that has to authenticate itself, so the key goes into the bundle and the ports are limited to loopback. In the prod stack the human authenticates to nginx, and nginx authenticates to the backend. The browser never holds the key. The trade-off is that prod needs a certificate and a password file. The details are in [Docker dev stack](/docs/guides/docker/) and [Production deployment](/docs/guides/production/).
+
+## Process model: one worker, on purpose
+
+Both stacks run exactly one uvicorn worker (`--workers 1` in `backend/Dockerfile.prod`, no `--workers` in dev). This is a design constraint, not a default you can raise. Four things live in the process:
+
+| State | Where it lives | What breaks with two workers |
+| --- | --- | --- |
+| Job table (`_jobs`) | A module-level dict of asyncio tasks in `repository_service.py` | Two workers could index the same repository at once, or one would not see the other's job |
+| Run slots | An `asyncio.Semaphore(2)` per event loop | The limit of 2 runs would become 2 per worker |
+| WebSocket subscribers | `WebSocketManager` in `websocket_service.py` | A client subscribed on worker A never hears a broadcast made on worker B |
+| Rate-limit counters | slowapi in-memory storage | Each worker would count separately, so the real limit would be a multiple |
+
+SQLite adds a fifth reason: it allows one writer at a time. WAL mode lets readers work during a write, but it does not allow two writers.
+
+Inside that one process, blocking work is moved off the event loop so the API, WebSocket and tool calls stay responsive while a repository indexes:
+
+- Parsing runs in a worker thread (`asyncio.to_thread`).
+- The Algolia client (v3) is synchronous, so each call runs in a worker thread too.
+- Database commits for a batch and the bulk delete before a reprocess run in worker threads.
+- `find_patterns` regex scans run in a thread with a per-file and a per-call time budget.
+
+<Aside type="caution">
+Do not add `--workers`. Moving to more than one worker needs job state, subscriptions and rate limits to move out of process first, and a database that accepts concurrent writers. See [Known limitations](/docs/limitations/).
+</Aside>
+
+The prod image also starts uvicorn with `--forwarded-allow-ips "*"`. That makes uvicorn trust `X-Forwarded-For` and `X-Forwarded-Proto` from any peer. It is safe only because the backend has no published port and nginx overwrites both headers. If you ever publish the backend port, remove that flag.
+
+## Start-up sequence
+
+When uvicorn imports `app.main`, some work happens at import time and the rest in the FastAPI lifespan.
+
+<Mermaid caption="What happens from process start to the first request. Settings errors stop the process; a missing Algolia key does not." code={`flowchart TD
+    start(["uvicorn imports app.main"]) --> env["load_dotenv, build Settings<br/>configure JSON logging"]
+    env --> engine["Create the SQLAlchemy engine<br/>no connection yet"]
+    engine --> app["Create the FastAPI app,<br/>middleware, routes, /ws"]
+    app --> life["Lifespan starts"]
+    life --> validate{"validate_runtime_settings<br/>CORS has *? No key on a<br/>non-loopback host?"}
+    validate -- "yes" --> stop["RuntimeError, process exits"]
+    validate -- "no" --> migrate["upgrade_database<br/>stamp if pre-Alembic, then upgrade head"]
+    migrate --> recover["recover_interrupted_jobs<br/>pending or processing becomes failed"]
+    recover --> algolia{"Algolia credentials set?"}
+    algolia -- "no" --> warn["Log an error and keep running<br/>health reports degraded"]
+    algolia -- "yes" --> ready["Log ready"]
+    warn --> serve(["Serve requests"])
+    ready --> serve
+`} />
+
+1. **Settings.** `Settings` reads environment variables and `backend/.env`. An `ALGOLIA_APP_ID`, `ALGOLIA_ADMIN_API_KEY` or `GITHUB_TOKEN` that is empty or looks like `your-...-here` counts as unset.
+2. **Logging.** structlog is set up once with a JSON renderer. Each line carries a timestamp, a level, the logger name and any bound context such as `request_id`.
+3. **Settings validation.** `validate_runtime_settings` refuses to start when `CORS_ORIGINS` contains `*` (credentials are allowed, so a wildcard would be unsafe) or when `CODESAGE_API_KEY` is unset and `MCP_SERVER_HOST` is not a loopback address. With no key on loopback it logs a warning instead. With a key, an `ALLOWED_HOSTS` of `*` logs a warning.
+4. **Migrations.** `upgrade_database` brings the schema to the latest Alembic revision. A database that has the app tables but no `alembic_version` table is stamped at `baseline` first. In-memory SQLite skips Alembic and is created from the models. See [the data model](/docs/concepts/data-model/).
+5. **Crash recovery.** Jobs run inside the process, so a run left open by a previous process died with it. `recover_interrupted_jobs` sets every repository still `pending` or `processing` to `failed` with "Processing was interrupted by a server restart; reprocess the repository". Nothing retries on its own.
+6. **Algolia check.** Missing credentials log an error but do not stop the server. `/health` then reports `degraded`, and adding a repository returns `503`.
+
+`/health` runs a database `SELECT 1` and, at most once every 30 seconds, an Algolia `list_indices` call with a 5 s limit. A database failure gives `503 unhealthy`. Algolia down or not configured gives `200 degraded`, so a container health check stays green while you finish configuring Algolia.
+
+## Tech stack
+
+Backend versions are pinned in [`backend/requirements.txt`](https://github.com/ntanwir10/codesage-algolia-challenge/blob/master/backend/requirements.txt). Frontend versions are the ranges in [`frontend/package.json`](https://github.com/ntanwir10/codesage-algolia-challenge/blob/master/frontend/package.json).
+
+| Layer | Technology | Version |
+| --- | --- | --- |
+| Language | Python | 3.13 |
+| Web framework | FastAPI | 0.161.1 |
+| Server | uvicorn (standard extras) | 0.54.0 |
+| Database | SQLite through SQLAlchemy | 2.1.6 |
+| Migrations | Alembic | 1.20.1 |
+| Search | Algolia (`algoliasearch`, v3 client) | 3.0.0 |
+| GitHub client | aiohttp | 3.14.5 |
+| Settings | pydantic and pydantic-settings | 2.14.1 and 2.16.1 |
+| Logging | structlog | 26.1.0 |
+| Rate limiting | slowapi | 0.1.10 |
+| Metrics | psutil | 7.2.2 |
+| Parsing | tree-sitter-language-pack, plus Python `ast` | 1.22.1 |
+| Regex search | `regex` (supports timeouts) | 2026.9.29 |
+| MCP | `mcp` SDK and `httpx2` for the bridge | 2.3.0 and 2.16.0 |
+| Tests and lint | pytest, pytest-asyncio, ruff | 9.1.1, 1.4.0 and 0.17.2 |
+| Dashboard | React and React DOM | `^19.1.0` |
+| Build tool | Vite | `^7.0.4` |
+| Types | TypeScript | `~5.8.3` |
+| Data fetching | TanStack Query and axios | `^5.83.0` and `^1.10.0` |
+| Routing and forms | react-router-dom, react-hook-form, zod | `^7.7.0`, `^7.60.0` and `^4.0.5` |
+| Styling | Tailwind CSS | `^3.4.17` |
+| Frontend tests | Vitest, Testing Library, jsdom | `^5.0.5`, `^16.3.3` and `^30.1.3` |
+| Container base | `python:3.13-slim`, `node:22-alpine`, `nginx:alpine` | |
+
+## Repository layout
+
+<FileTree>
+
+- backend/
+  - app/ FastAPI app
+    - api/v1/endpoints/ repositories.py, ai.py, performance.py
+    - core/ config.py, security.py, database.py, migrations.py
+    - models/ repository.py, code_file.py, code_entity.py
+    - schemas/ pydantic request and response models
+    - services/ the job, fetch, parse, index and tool code
+    - main.py
+  - codesage_mcp/ stdio MCP bridge (server.py, schemas.py)
+  - alembic/versions/ baseline.py, cleanup.py, drop_unused_columns.py
+  - tests/ pytest suite
+  - Dockerfile
+  - Dockerfile.prod
+  - requirements.txt
+  - requirements-dev.txt
+- frontend/
+  - src/
+    - pages/ Home, Repository, Dashboard
+    - components/
+    - services/ api.ts, websocket.ts
+    - hooks/
+    - lib/
+  - Dockerfile
+- deployment/
+  - docker-compose.yml
+  - docker-compose.prod.yml
+  - nginx.conf
+  - nginx.prod.conf.template
+  - DOCKER.md
+- docs/ architecture notes and the MCP guide
+- scripts/ ensure_api_key.py, install_claude_desktop.py
+- site/ this documentation site
+- mcp_launcher.sh
+- Makefile
+- .env.example
+
+</FileTree>
+
+<Badge text="Next" variant="note" /> Follow a repository through the system in [the indexing pipeline](/docs/concepts/indexing-pipeline/), or read how it is protected in [the security model](/docs/concepts/security/).

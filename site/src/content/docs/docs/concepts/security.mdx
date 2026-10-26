@@ -1,0 +1,238 @@
+---
+title: Security model
+description: What CodeSage protects, which requests need the API key, how the request guard blocks browser attacks, and what the production nginx adds.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+import Mermaid from '~/components/Mermaid.astro';
+
+CodeSage holds your source code, your Algolia admin key and optionally a GitHub token, and it can start work that costs GitHub and Algolia quota. It is built for one trusted user on one machine first, and for a small trusted team on a network second. It is not a multi-tenant service: there are no user accounts, no per-repository permissions and no audit trail. Anyone who passes the checks below can see every repository you indexed.
+
+The code lives in [`backend/app/core/security.py`](https://github.com/ntanwir10/codesage-algolia-challenge/blob/master/backend/app/core/security.py) and [`backend/app/core/config.py`](https://github.com/ntanwir10/codesage-algolia-challenge/blob/master/backend/app/core/config.py).
+
+## Threat model
+
+Two postures cover almost every setup.
+
+| | Local, single user | Networked |
+| --- | --- | --- |
+| Example | `make start` on your laptop, or the Docker dev stack | The Docker prod stack on a server |
+| Who can reach the backend | Only processes on your machine | Anyone who can reach nginx on 443 |
+| Main risks | A web page you visit tries to reach the backend (DNS rebinding, cross-site writes). Another local program reads the key from a file | Stolen or guessed login, a hostile page riding your logged-in browser, key leaking from the bundle, abuse of quota |
+| What stops them | Loopback-only binding, the `Host` check, the `Origin` check, the API key | TLS, basic auth, the API key held by nginx, the `Host` and `Origin` checks, rate limits |
+| What you must do | Keep the key in `backend/.env` private | Choose a strong login, use a real certificate, set `CORS_ORIGINS` and `ALLOWED_HOSTS` exactly |
+
+The attacks the design answers, and the control for each:
+
+| Attack | Control |
+| --- | --- |
+| A web page re-points its own DNS name at `127.0.0.1` and reads or writes the API (DNS rebinding) | `Host` must be on an allow list. The dev nginx drops unknown hosts with `444` |
+| A web page you visit sends a cross-site `POST` or opens a WebSocket | `Origin` must be in `CORS_ORIGINS` or equal to the API's own origin |
+| A LAN client talks to a backend that was bound to `0.0.0.0` by hand | With no key, the TCP peer must be a loopback address |
+| Someone calls a write endpoint directly | The API key (`X-API-Key`), compared in constant time |
+| The key leaks through a URL or access log | WebSocket keys travel in a subprotocol, never in the URL |
+| An error message leaks SQL, file contents or the Algolia host | Errors are replaced by fixed or short messages. Details go to the log |
+| A repository URL points the server at an internal address | URL validation refuses credentials, ports, `localhost` and non-public IP literals |
+| A cloned repository contains a symlink to a file on the server | The tree walk never lists or follows symlinks |
+| A flood of requests or WebSocket connections | Per-client rate limits, connection caps and a 2 MB request body limit in nginx |
+
+## Where the API key is required
+
+When `CODESAGE_API_KEY` is set, requests must carry it as an `X-API-Key` header. A missing or wrong key gets `401` with "Invalid or missing API key". The comparison uses `secrets.compare_digest`, so its timing does not reveal how many characters matched.
+
+| Needs the key | Public read |
+| --- | --- |
+| Repository create, update, delete and process | Repository list, detail, status and stats |
+| Everything under `/api/v1/performance` | MCP tool listing and capabilities (`/api/v1/ai/mcp/tools`, `/api/v1/ai/mcp/capabilities`) |
+| `POST /api/v1/ai/mcp/tools/call`, which includes the `add_repository` tool | MCP resource listing (`/api/v1/ai/mcp/resources`) |
+| `GET /api/v1/ai/mcp/resources/read` | `/` and `/health` |
+| `GET /api/v1/ai/search/suggestions` | |
+| The `/ws` WebSocket | |
+
+Why those splits:
+
+- **Writes** change data and cost quota, so they need the key.
+- **Tool calls, resource reads and suggestions** read file paths and code that no public GET exposes, so they take the key too. Suggestions search every repository, just like `search_code`.
+- **Repository list, status and stats** are metadata the dashboard needs before it can do anything else, and they hold no code.
+- **`/health`** has to work for load balancers and uptime checks that cannot send a key. It reveals only component status.
+
+With no key configured, `api_key_is_valid` accepts every request. That is allowed on loopback only. The guard below is what keeps it safe.
+
+## BrowserRequestGuard
+
+`BrowserRequestGuard` is ASGI middleware that runs `request_refusal` on every HTTP request and every WebSocket handshake. A refusal is `403` with `{"detail": ...}` for HTTP, and a close with code 1008 for a WebSocket.
+
+<Mermaid caption="The checks in the order the guard applies them." code={`flowchart TD
+    req["HTTP request or WebSocket handshake"] --> host{"Host on the allow list?<br/>/health is exempt"}
+    host -- "no" --> r1["403 Host not allowed"]
+    host -- "yes" --> key{"API key configured?"}
+    key -- "no" --> peer{"TCP peer is loopback?"}
+    peer -- "no" --> r2["403 Only local clients are served without an API key"]
+    peer -- "yes" --> safe
+    key -- "yes" --> safe{"Safe method, e.g. GET?"}
+    safe -- "yes" --> ok["Pass to the route"]
+    safe -- "no, a write or a WebSocket" --> origin{"Origin header?"}
+    origin -- "absent" --> ok
+    origin -- "in CORS_ORIGINS, or equal to<br/>the API's own origin" --> ok
+    origin -- "anything else" --> r3["403 Cross-origin request refused"]
+`} />
+
+| Condition | Check |
+| --- | --- |
+| No key configured | The `Host` must be `localhost`, `127.0.0.1` or `[::1]`, and the TCP peer must be a loopback address. This blocks DNS rebinding and LAN clients when the server was bound to `0.0.0.0` by hand |
+| Key configured | The `Host` must be loopback, a host named in `CORS_ORIGINS`, or listed in `ALLOWED_HOSTS` (`*.example.com` allows subdomains, `*` allows any host and logs a warning) |
+| Request without a `Host` header | Allowed when a key is set, since browsers always send one (an HTTP/1.0 client, for example). Refused when no key is set |
+| `/health` | Exempt from the `Host` check, because load balancers often address it by IP |
+| Writes (`POST`, `PUT`, `PATCH`, `DELETE`) and WebSocket handshakes | If an `Origin` header is present, it must be in `CORS_ORIGINS` or equal to the API's own scheme and host. A request with no `Origin` passes |
+
+How the checks are written:
+
+- **The `Host` is parsed by hand.** `host_without_port` strips the port and handles `[IPv6]:port`. A URL parser would also accept user information, so `evil.com@localhost` could read as `localhost`. The hand-written parser does not.
+- **The scheme counts.** `http://host` is a different origin from `https://host`. The scheme comes from the connection, which uvicorn changes from `X-Forwarded-Proto` only for proxies it trusts. In prod that proxy is nginx.
+- **Responses are readable.** The guard sits inside the CORS middleware, so even its `403` carries CORS headers and a browser can show the message.
+- **The WebSocket closes before accept.** A guard refusal sends the close frame before the handshake completes. The endpoint's own key check does it the other way round. See [Key transport](#key-transport).
+
+### Why the origin check exists
+
+The key alone cannot tell a hostile page from your dashboard. In production nginx adds the API key to every request that carries your cached basic-auth login. A hostile page can make your browser send a cross-site `POST` to your server, and the browser attaches the login it already cached for that host. nginx would then add the key and the write would succeed. The `Origin` check refuses it, because browsers always send `Origin` on cross-site writes and WebSocket handshakes, and a hostile page cannot change it.
+
+Safe methods are not origin-checked. Reads are public or need the key anyway, and the browser's CORS rules stop a hostile page from reading the response.
+
+### Why the host check exists
+
+DNS rebinding re-points a hostile page's domain at your machine after the page has loaded. The page is then same-origin with your backend but keeps its own `Host` value. With a key set, the check still matters: the dev bundle embeds the key, and such a page could fetch the bundle and read it. Matching `Host` against an allow list defeats this, as does the dev nginx dropping unknown hosts with `444`.
+
+## Startup validation
+
+`validate_runtime_settings` runs when the app starts and refuses to start (a `RuntimeError`, so the process exits) if:
+
+- `CORS_ORIGINS` contains `*`. Credentials are allowed, so a wildcard origin would let any site make credentialed requests.
+- `CODESAGE_API_KEY` is unset and `MCP_SERVER_HOST` is not a loopback address. This is why the containers, which bind `0.0.0.0`, cannot start without a key.
+
+It only warns when:
+
+- There is no key on loopback ("write endpoints are unauthenticated (acceptable on loopback only)").
+- A key is set and `ALLOWED_HOSTS` contains `*`, because any `Host` is then served and DNS rebinding is no longer blocked.
+
+`make setup`, `make start` and `make install-claude` generate a key into `backend/.env` when it is missing and copy it to `frontend/.env`. A value left empty, or left as a `your-...-here` placeholder, counts as unset.
+
+## Rate limits
+
+Limits come from slowapi, per client address, and are held in memory. Set `ENABLE_RATE_LIMITING=false` to turn them off. The two values are `RATE_LIMIT_DEFAULT` (100 per minute) and `RATE_LIMIT_AI` (30 per minute).
+
+| Endpoints | Limit |
+| --- | --- |
+| Repository create, repository process, search suggestions | 100 per minute |
+| MCP tool calls, MCP resource reads | 30 per minute |
+
+Other endpoints have no limit. A request over the limit gets `429` with `{"detail": "Too many requests; try again in N seconds."}` and a `Retry-After` header.
+
+The client address is the TCP peer. Behind the prod nginx, uvicorn takes it from `X-Forwarded-For`, which nginx overwrites with the real client address. Without that overwrite, a client could pick its own address and dodge the limit. Everything behind one address (for example several Claude Desktop users on one office IP) shares one bucket.
+
+The WebSocket has its own caps. See [Connection caps](#websocket-caps).
+
+### WebSocket caps
+
+| Cap | Value | What happens past it |
+| --- | --- | --- |
+| Open connections, total | 200 | Accepted and closed with code 1013 and "Too many connections; try again later" |
+| Open connections from one client address | 20 | Same |
+| Subscriptions on one connection | 100 | An `error` frame |
+| Time to deliver one frame | 5 s | The client is dropped and closed |
+
+Code 1013 means "try again later", so the dashboard's reconnect backoff applies. A code 1008 tells the dashboard that retrying cannot help.
+
+## Secrets in errors and logs
+
+- **Unhandled exceptions.** The client gets `500` with `{detail, request_id}` and an `X-Request-ID` header. The traceback goes to the log under that ID. The text of the exception is never sent.
+- **Recorded failures.** `failure_message` writes `error_message`, WebSocket frames, metrics and parse logs. A SQLAlchemy error becomes the fixed text "Database error while storing the repository", because its text carries SQL and file contents. Errors written for people are kept. Other errors are truncated to 500 characters.
+- **Tool errors.** A failed Algolia query reaches Claude as "Search is unavailable; try again later", and the health check says only "Algolia is unreachable". Client errors can name the Algolia host or app ID, so they stay in the log.
+- **The bridge.** Messages and logs show the backend URL without any `user:password@`. The start-up line records only whether a key is set, never its value.
+- **The installer.** `make install-claude ARGS=--dry-run` masks the key. `ensure_api_key.py` never prints it.
+- **Validation errors.** A `422` carries the field name and reason. The database session handler does not log the body of a rejected request.
+- **API docs.** `/docs` and `/redoc` are off when `ENVIRONMENT=production`.
+
+<Aside type="caution">
+Search queries are written to the backend log (the "Code search performed" line includes the query text). Do not send secrets as search queries, and treat the log as sensitive if people search for sensitive strings.
+</Aside>
+
+## Key transport
+
+- **HTTP.** The key goes in an `X-API-Key` header.
+- **WebSocket from a browser.** Browsers cannot set headers on a WebSocket. Putting the key in the URL would leave it in access logs. So the dashboard offers two subprotocols: `codesage` and `codesage.key.<hex>`, where the hex is the UTF-8 bytes of the key. The server decodes the key from the second, and answers with `codesage` only. The key is never echoed back.
+- **WebSocket through nginx.** The prod nginx sends the `X-API-Key` header, and the server accepts that too.
+- **A bad key.** The server accepts the handshake first, then closes with code 1008 and the reason "Invalid or missing API key". A close before accept reaches a browser as code 1006, which looks like a network error, and only 1008 tells the client that retrying cannot help.
+
+## The key in the bundle
+
+The dashboard reads `VITE_CODESAGE_API_KEY` at build time, and Vite inlines every `VITE_*` variable into the JavaScript. Anyone who can load the dashboard can read the key from it. This is the reason for the local-only rule on the dev setup:
+
+- The Docker dev stack publishes its ports on `127.0.0.1` only.
+- The dev nginx closes the connection (`444`) for any `Host` other than `localhost` or `127.0.0.1`.
+- The `Host` check applies even with a key set, so a rebinding page cannot fetch the bundle.
+
+Do not expose the dev stack to a network. If you must serve the dashboard to other people, use the prod stack, where the bundle is built without a key. To rotate a key, delete the `CODESAGE_API_KEY` line in `backend/.env`, run `make setup` and `make install-claude`, then restart Claude Desktop and the dev server.
+
+## The prod nginx role
+
+[`deployment/nginx.prod.conf.template`](https://github.com/ntanwir10/codesage-algolia-challenge/blob/master/deployment/nginx.prod.conf.template) is the only place that holds the key in production.
+
+| Role | What it does |
+| --- | --- |
+| TLS | Port 443 only serves TLS 1.2 and 1.3, using `deployment/ssl/cert.pem` and `key.pem`. Port 80 answers `/health` and redirects everything else to HTTPS with `301`, so a password never crosses plain HTTP |
+| Basic auth | Port 443 requires a login from `deployment/htpasswd`. `/health` is the one exception |
+| Key injection | Sets `X-API-Key` itself on every `/api/` and `/ws` request, and clears `Authorization`. The browser never holds the key, and the backend never sees the login |
+| Forwarded headers | Overwrites `X-Forwarded-For` with the real client address and sets `X-Forwarded-Proto` to `https`. It passes `Host` with its port (`$http_host`), which the origin check compares with the browser's `Origin` |
+| Response headers | `Strict-Transport-Security` (`max-age=63072000`, two years), `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `Content-Security-Policy: frame-ancestors 'none'` and `Referrer-Policy: same-origin` |
+| Limits | `client_max_body_size 2M`. `/ws` idle connections last up to an hour |
+| Health | `/health` skips basic auth, so uptime checks need no login |
+
+Only `${CODESAGE_API_KEY}` is substituted into the template (`NGINX_ENVSUBST_FILTER`). nginx's own variables such as `$host` are left alone.
+
+uvicorn trusts forwarded headers from any peer (`--forwarded-allow-ips "*"`). That is safe only because the backend has no published port and nginx is the only peer that can reach it.
+
+For setup steps see [Production deployment](/docs/guides/production/).
+
+## The bridge refuses plain http
+
+If a key, a basic-auth login or a `user:password@` in the URL would go over `http://` to a host that is not `127.0.0.1`, `localhost` or `::1`, the bridge returns an error and sends nothing. It says to use an `https://` URL, or to set `CODESAGE_ALLOW_INSECURE_AUTH=1` on a trusted network. The same rule covers resource reads.
+
+The basic-auth password lives in the macOS Keychain (service `codesage-mcp`), not in the Claude Desktop config. The launcher reads it and passes it to the bridge. If you cannot use the Keychain, setting `CODESAGE_BASIC_AUTH_PASSWORD` in the config stores it in plain text, in a file the installer keeps at mode 600. The installer also writes the Claude Desktop config and its backup at mode 600, because they can hold the API key.
+
+## Git sandboxing and URL validation
+
+A repository URL is the one piece of input that makes the server contact somewhere else, so it gets the strictest checks.
+
+**URL validation** (`parse_repository_url`). A URL is refused unless all of these hold:
+
+- The scheme is `https`. The schema first rewrites `http://` and `git@host:path` forms to https, so those are accepted as a convenience.
+- It has a host, and no username or password.
+- It has no port, query or fragment.
+- The host is not `localhost`, not a name ending in `.localhost`, and not an IP literal that is non-public (private, loopback, link-local or reserved).
+- The path has an owner and a repository, each made only of letters, digits, `_`, `.` and `-`. `.` and `..` are refused, because `..` as an owner would turn `api.github.com/users/<owner>` into `api.github.com/user`.
+- A branch has no `..` segment, no NUL character and does not start with `-`, so it can never read as an option to git or step out of an API path.
+
+The validator reads the URL text. It does not resolve DNS, so it cannot see where a public-looking hostname points.
+
+**Git sandbox** (hosts other than github.com):
+
+- Git runs through `create_subprocess_exec`, so no shell parses the URL or branch. The URL follows a `--` separator.
+- The environment is rebuilt from scratch: `HOME` and the global config point at `/dev/null`, system config is off, `GIT_TERMINAL_PROMPT=0`, and stdin is closed. Only `PATH` and a few TLS and proxy variables (`SSL_CERT_FILE`, `SSL_CERT_DIR`, `GIT_SSL_CAINFO`, `HTTPS_PROXY`, `https_proxy`, `NO_PROXY`) are passed through.
+- The credential helper is blanked and only https is allowed (`protocol.allow=never`, then https allowed), whatever the user's git config says.
+- A check is killed after 10 s and a clone after 120 s.
+- Only public repositories work. A `401`, `403` or `404` is reported as "not found or is private".
+- A clone keeps symlinks as real links. The tree walk skips every symlink without following or listing it, and does not descend into `.git` or denied directories. A repository cannot make the server read a file outside the clone.
+- The clone goes into a temporary directory that is always removed.
+
+**GitHub** uses the REST API. Each owner, repository and branch is percent-encoded when it goes into a URL, and downloads come from `raw.githubusercontent.com`.
+
+## Hardening checklist
+
+- Keep `backend/.env` and `frontend/.env` out of version control (the repository ignores `.env` files).
+- Keep the Docker dev stack on `127.0.0.1`. Use the prod stack for anything shared.
+- Use a real certificate and a strong, unique login for prod.
+- Set `CORS_ORIGINS` to the exact origins people use, and `ALLOWED_HOSTS` only for extra names. Avoid `*`.
+- Give the Algolia admin key only to the backend. Use a separate index per stack.
+- Run one worker. The in-process limits assume it.
+
+Related: [Production deployment](/docs/guides/production/), [Configuration](/docs/reference/configuration/) and [Known limitations](/docs/limitations/).

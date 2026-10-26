@@ -1,0 +1,197 @@
+---
+title: Data model
+description: The three SQLite tables CodeSage stores, every column, how deletes cascade, how migrations run and how the connection is configured.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+import Mermaid from '~/components/Mermaid.astro';
+
+SQLite holds three things: the repositories you added, the full text of every indexed file, and the entities parsed from those files. Algolia holds a searchable copy of the entities, but not the files. Every tool that needs exact content (`get_file`, `list_definitions`, `analyze_repository`, `find_patterns`) reads SQLite.
+
+The models are in [`backend/app/models/`](https://github.com/ntanwir10/codesage-algolia-challenge/tree/master/backend/app/models). The schema history is in [`backend/alembic/versions/`](https://github.com/ntanwir10/codesage-algolia-challenge/tree/master/backend/alembic/versions).
+
+<Mermaid caption="The three tables. code_entities points at both its file and its repository, so counting entities per repository needs no join." code={`erDiagram
+    repositories ||--o{ code_files : has
+    code_files ||--o{ code_entities : has
+    repositories ||--o{ code_entities : "repository_id"
+    repositories {
+        int id PK
+        string name
+        string url UK
+        string branch
+        string status
+        text error_message
+        int total_files
+        int processed_files
+        int total_lines
+        datetime processed_at
+    }
+    code_files {
+        int id PK
+        int repository_id FK
+        string file_path
+        text content
+        string language
+        int line_count
+    }
+    code_entities {
+        int id PK
+        int file_id FK
+        int repository_id FK
+        string entity_type
+        string entity_name
+        int start_line
+        int end_line
+        text signature
+        text docstring
+        json entity_metadata
+    }
+`} />
+
+## Tables and columns
+
+Column sizes are the SQLAlchemy `String` lengths. SQLite does not enforce them, so they are limits the application keeps, not limits the database checks.
+
+### `repositories`
+
+One row per repository you add.
+
+| Column | Type | Null | Notes |
+| --- | --- | --- | --- |
+| `id` | integer, primary key | no | Indexed. The REST API accepts IDs from 1 to 2^63 - 1 |
+| `name` | string(255) | no | Indexed. `owner/repo` for github.com, `<host>/<path>` for other hosts |
+| `description` | text | yes | Optional note |
+| `url` | string(500) | yes | Unique. Stored as `https://<host>/<path>`, without a branch, a trailing `.git` or a slash |
+| `branch` | string(100) | yes | `null` means the repository's default branch |
+| `language` | string(50) | yes | Indexed. Set at the end of a run to the most common programming language |
+| `framework` | string(100) | yes | Indexed. Set at the end of a run when one is detected |
+| `status` | string(50) | yes | Indexed. `pending`, `processing`, `completed` or `failed`. Defaults to `pending` |
+| `error_message` | text | yes | Why the last run failed, or what a `completed` run left out (it starts with `Partially indexed:`) |
+| `total_files` | integer | yes | Files downloaded by the last run. Defaults to 0 |
+| `processed_files` | integer | yes | Files stored so far. Defaults to 0 |
+| `total_lines` | integer | yes | Sum of line counts across the downloaded files. Defaults to 0 |
+| `created_at` | datetime | yes | Set by the database when the row is inserted |
+| `updated_at` | datetime | yes | Set on every update |
+| `processed_at` | datetime | yes | Set when a run completes |
+
+The model has a computed `processing_progress`: `processed_files / total_files * 100`, or 0 when `total_files` is 0. The status endpoint returns it as `progress`.
+
+The `status` column has no database check constraint. The values are kept by the code that writes them, and the REST response model only accepts those four.
+
+### `code_files`
+
+One row per indexed file, with its full text.
+
+| Column | Type | Null | Notes |
+| --- | --- | --- | --- |
+| `id` | integer, primary key | no | Indexed |
+| `repository_id` | integer, foreign key to `repositories.id` | no | Indexed |
+| `file_path` | string(1000) | no | Indexed. Path inside the repository, with `/` separators |
+| `content` | text | no | The decoded file text. Files with a NUL byte or no content are never stored |
+| `language` | string(50) | yes | Indexed. From the file extension, such as `python`, `markdown` or `terraform` |
+| `line_count` | integer | yes | `len(content.splitlines())`. Defaults to 0 |
+| `created_at` | datetime | yes | Set on insert |
+| `updated_at` | datetime | yes | Set on update |
+
+Because `content` holds every indexed file in full, the database grows with the size of the repositories you add. A file is at most 1 MB, and a run is at most 1000 files and 100 MB, so one repository adds at most about 100 MB of text.
+
+### `code_entities`
+
+One row per function, class, import, doc section or Terraform block.
+
+| Column | Type | Null | Notes |
+| --- | --- | --- | --- |
+| `id` | integer, primary key | no | Indexed |
+| `file_id` | integer, foreign key to `code_files.id` | no | Indexed |
+| `repository_id` | integer, foreign key to `repositories.id` | no | Indexed |
+| `entity_type` | string(50) | no | Indexed. `function` (methods are stored as functions), `class`, `import`, `doc_section` or `terraform_block` |
+| `entity_name` | string(255) | no | Indexed. Cut to 255 characters on insert |
+| `start_line` | integer | yes | 1-based |
+| `end_line` | integer | yes | 1-based, inclusive |
+| `signature` | text | yes | The definition line, such as `def refresh_token(session, token: str) -> str:` |
+| `docstring` | text | yes | The parser's description (the docstring's first line where there is one) |
+| `entity_metadata` | JSON | yes | `{"parameters": [...], "return_type": ...}` |
+| `created_at` | datetime | yes | Set on insert |
+| `updated_at` | datetime | yes | Set on update |
+
+`repository_id` is stored on the entity as well as on its file. That duplication lets `list_repositories` count entities per repository with one `GROUP BY` on a single table.
+
+## Relationships
+
+The ORM maps `Repository.code_files` and `CodeFile.entities` with `cascade="all, delete-orphan"`. `CodeEntity` has a relationship back to its file and to its repository, but `Repository` has no relationship to entities.
+
+### Cascades and delete order
+
+The ORM cascades, but the foreign keys in the database carry no `ON DELETE` clause. SQLite also runs with `foreign_keys=ON`, so deleting a parent row first would fail while children still exist. The service therefore deletes in a fixed order with bulk queries, which are far faster than loading thousands of ORM objects:
+
+1. Delete the repository's Algolia records (`delete_by` on the repository ID). On a plain delete this is sent and not awaited, so the delete does not hold up the request.
+2. Delete `code_entities` where `repository_id` matches.
+3. Delete `code_files` where `repository_id` matches.
+4. Commit, then delete the `repositories` row and commit again.
+
+The bulk deletes run in a worker thread, because a large repository has thousands of rows. When the final ORM delete runs, the cascade finds no children to load.
+
+If Algolia refuses the removal, nothing is deleted from SQLite and the API returns `502`. That ordering is deliberate: it is better to keep a repository whose records still exist than to leave orphaned records in Algolia.
+
+A reprocess uses the same two bulk deletes (steps 2 and 3) after a successful fetch, but it waits for the Algolia delete to finish first. See [the indexing pipeline](/docs/concepts/indexing-pipeline/#the-11-steps).
+
+## Connection settings
+
+`backend/app/core/database.py` creates one engine for the process.
+
+| Setting | Value | Why |
+| --- | --- | --- |
+| `check_same_thread` | `False` for SQLite | Sessions cross threads: FastAPI's threadpool and the background jobs' worker threads |
+| `pool_pre_ping` | on | A dead connection is replaced before use |
+| `pool_recycle` | 300 s | Connections older than five minutes are replaced |
+| Journal mode | `WAL` | Readers do not block the single writer, so the dashboard stays responsive during a run |
+| `PRAGMA foreign_keys` | `ON` | SQLite ignores foreign keys unless asked |
+| Sessions | `autocommit=False`, `autoflush=False` | Work commits when the code says so |
+
+The two pragmas run on every new connection, for file-based SQLite only. An in-memory database gets neither, which is acceptable because only the tests use it.
+
+Each indexing job opens its own `SessionLocal()` and does not share it with request handlers. Request handlers get a session from `get_db`, which rolls back on any error and always closes the session. A deliberate `4xx` (an `HTTPException` or a validation error) rolls back without logging a database error.
+
+SQLite allows one writer at a time. That is one of the reasons the backend runs a single worker. See [the process model](/docs/concepts/architecture/#process-model-one-worker-on-purpose).
+
+### Where the file lives
+
+| How you run it | `DATABASE_URL` | File |
+| --- | --- | --- |
+| Local | `sqlite:///./codesage.db` (default) | `backend/codesage.db`, plus `-wal` and `-shm` files while it runs |
+| Docker dev and prod | `sqlite:///./data/codesage.db` (set in the Compose file) | `/app/data/codesage.db` in a named volume |
+
+`make db-reset` deletes the local file and its `-journal`, `-wal` and `-shm` companions. It does not touch Docker volumes. Only SQLite is supported.
+
+## Migrations
+
+Alembic migrations run at every start-up through `app/core/migrations.py`, so you never run them by hand to start the server. The revision IDs are short names instead of hashes.
+
+| Revision | Follows | What it does |
+| --- | --- | --- |
+| `baseline` | none | Creates `repositories`, `code_files` and `code_entities`, plus `sessions` and `search_indexes`, which later revisions drop. Also creates the indexes and the extra columns that `drop_unused_columns` later removes |
+| `cleanup` | `baseline` | Drops `sessions` and `search_indexes` (with `DROP TABLE IF EXISTS`, since a stamped database may never have had them). Removes duplicate repository URLs, keeping the row with the highest `id` and deleting the duplicates' entities and files first. Adds the unique constraint `uq_repositories_url` |
+| `drop_unused_columns` | `cleanup` | Drops the indexes on `full_name` and `file_name`, then drops these columns. On `code_entities`: `full_name`, `start_column`, `end_column`, `complexity_score`, `is_public`, `is_async`. On `code_files`: `file_name`, `is_analyzed`, `size_bytes`. On `repositories`: `repo_metadata`, `security_score`, `vulnerability_count` |
+
+Notes on how they are written:
+
+- **Batch mode.** SQLite cannot drop a column or add a constraint in place, so the migrations use Alembic's batch mode, which rebuilds the table. `alembic/env.py` also sets `render_as_batch=True` so autogenerated migrations use it from the start.
+- **Downgrades exist.** `cleanup` and `drop_unused_columns` can go back. A downgrade of `cleanup` recreates the two dropped tables, but not their rows.
+- **Types are compared.** The Alembic environment sets `compare_type=True`, so autogenerate notices column type changes.
+- **Database URL.** `env.py` reads `sqlalchemy.url` from the programmatic config, falling back to `DATABASE_URL`.
+
+To add a migration, see [Development](/docs/development/#add-a-database-migration).
+
+### Pre-Alembic databases
+
+Earlier versions created tables straight from the models. If the app tables exist but there is no `alembic_version` table, `upgrade_database` stamps the database at `baseline`, then upgrades to the latest revision. Stamping records the revision without running it, so the existing tables are kept and only `cleanup` and `drop_unused_columns` actually change them. That is why `cleanup` uses `IF EXISTS`.
+
+### In-memory SQLite
+
+`sqlite://` and `sqlite:///:memory:` skip Alembic. The tables are created directly from the models with `Base.metadata.create_all`, because a separate Alembic connection would see a different, empty in-memory database. The tests use this mode.
+
+<Aside type="caution">
+Back up `backend/codesage.db` before an upgrade if you want to keep it. Almost nothing in it is unique (only edits you made with the update endpoint are): reprocessing a repository rebuilds both its rows and its Algolia records from the source host. A backup only saves you the download and the parse.
+</Aside>
+
+Next: [how the records reach Algolia](/docs/concepts/search/), or [the security model](/docs/concepts/security/).

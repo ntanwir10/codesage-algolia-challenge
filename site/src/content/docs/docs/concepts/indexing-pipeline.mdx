@@ -1,0 +1,316 @@
+---
+title: Indexing pipeline
+description: How CodeSage turns a git repository into stored files, parsed entities and Algolia records, with every limit, step and failure mode.
+---
+
+import { Aside, Steps } from '@astrojs/starlight/components';
+import Mermaid from '~/components/Mermaid.astro';
+
+An indexing run turns a repository into three things: file text in SQLite, parsed entities in SQLite, and one searchable record per entity in Algolia. A run is a background job inside the backend process. It always ends in `completed` or `failed`, and it always records a reason when something was left out or went wrong.
+
+This page covers the full path: how a repository gets added, what the run does in order, the limits it enforces, how it reads files from GitHub and from other hosts, and what happens when any step fails.
+
+## Adding a repository
+
+Nothing is created until the repository has passed a pre-flight check. The check runs before the database row exists, so a typo in a URL never leaves a half-made repository behind.
+
+<Mermaid caption="From the create request to a scheduled job. Every refusal happens before a row exists." code={`flowchart TD
+    add["POST /api/v1/repositories/"] --> valid{"Valid GitHub URL<br/>and branch?"}
+    valid -- "no" --> bad["422"]
+    valid -- "yes" --> known{"Already added?"}
+    known -- "yes" --> dup["409"]
+    known -- "no" --> ready{"Algolia set up and<br/>repo and branch on GitHub?"}
+    ready -- "no" --> refused["422, 502, 503 or 504<br/>nothing created"]
+    ready -- "yes" --> create["Create the row<br/>status pending"]
+    create --> created["201 with the repository"]
+    create --> schedule["Start a background job"]
+    again["POST /api/v1/repositories/{id}/process"] --> busy{"Job running, or completed<br/>without force_reprocess?"}
+    busy -- "yes" --> conflict["409"]
+    busy -- "no" --> schedule
+    schedule --> processing["Mark it processing<br/>progress back to 0"]
+    processing --> slot["Wait for a run slot"]
+    slot --> run["Indexing run"]
+`} />
+
+The dashboard shows every refusal under the repository field and stays on the Home page. The REST endpoint and the dashboard take github.com only. The `add_repository` tool runs the same checks for other hosts.
+
+| You see | Status | Cause |
+| --- | --- | --- |
+| A message about the URL or branch | 422 | Not a GitHub repository URL, or an invalid branch name |
+| "GitHub repository owner/repo was not found" | 422 | The repository does not exist, or it is private and the server's `GITHUB_TOKEN` cannot read it |
+| "Branch 'x' does not exist", "owner/repo is empty" or "GitHub denied access" | 422 | The branch is missing, the repository has no content, or GitHub refused access |
+| "owner/repo has already been added", with an "Open it" link | 409 | Same URL as an existing repository. Case does not matter. The body also has `repository_id` |
+| "GitHub's API rate limit was reached; try again in about N minutes" | 503 | GitHub is rate-limiting the server. `Retry-After` says how long |
+| "GitHub rejected the server's GITHUB_TOKEN" or "Could not reach GitHub; try again" | 502 | The token is invalid, or GitHub is down or unreachable |
+| "GitHub did not respond in time; try again" | 504 | A check request took longer than 10 s |
+| "Search indexing is not configured on the server" | 503 | `ALGOLIA_APP_ID` or `ALGOLIA_ADMIN_API_KEY` is unset |
+
+The check makes one attempt per call. It has no retries and no rate-limit sleeps, because the caller is an HTTP request that is waiting. A repository that passes can still fail later, during the run. The dashboard then shows the reason on its card.
+
+## The indexing run
+
+<Mermaid caption="One run, start to finish. A parse failure is counted but does not stop the run." code={`flowchart TD
+    start(["Run starts"]) --> configured{"Algolia<br/>configured?"}
+    configured -- "yes" --> fetch["List the repository<br/>GitHub API, or a shallow clone<br/>skip vendored and minified files, lockfiles"]
+    fetch --> select["Keep files under 1 MB<br/>at most 1000 files and 100 MB"]
+    select --> download["Download the files"]
+    download --> clear["Clear the previous index<br/>Algolia records and rows"]
+    clear --> batch["Next batch of 200 files"]
+    batch --> parse["Parse each file<br/>a parse failure is counted"]
+    parse --> store["Store files and entities<br/>a failed batch is rolled back"]
+    store --> more{"More files?"}
+    more -- "yes" --> batch
+    more -- "no" --> index["Index the entities in Algolia"]
+    index --> skipped{"Anything left out?"}
+    skipped -- "no" --> completed["completed"]
+    skipped -- "yes" --> partial["completed<br/>error_message: Partially indexed"]
+    configured -- "no" --> failed["failed<br/>error_message says why"]
+    fetch -. "GitHub or clone error" .-> failed
+    index -. "nothing indexed,<br/>or Algolia rejects it" .-> failed
+`} />
+
+## Repository status
+
+<Mermaid caption="The four statuses and what moves a repository between them." code={`stateDiagram-v2
+    [*] --> pending: repository added
+    pending --> processing: job starts
+    processing --> completed: indexed
+    processing --> failed: error or crash
+    completed --> processing: reprocess with force_reprocess
+    failed --> processing: reprocess
+    pending --> failed: server restart
+    processing --> failed: server restart
+    completed --> [*]: deleted
+    failed --> [*]: deleted
+    note right of completed: a partial index is noted in error_message
+`} />
+
+A repository cannot be deleted while its job is running. Delete returns as soon as Algolia accepts the removal. It does not wait for Algolia to finish.
+
+## Limits
+
+Every limit below was checked against the code. File selection limits live in `FileSelector` and are shared by the GitHub source and the git-clone source, so they are identical for every host.
+
+| Limit | Value | Where |
+| --- | --- | --- |
+| Largest file | Under 1 MB (1,048,576 bytes). A file of exactly 1 MB or more is skipped. The size used is the one the listing reports | `FileSelector.max_file_size` in `github_service.py` |
+| Files per run | 1000 | `FileSelector.max_files` |
+| Bytes per run | 100 MB (104,857,600), summed from listed sizes | `FileSelector.max_total_bytes` |
+| Contents-API walk | 300 directory requests, breadth-first | `MAX_WALK_REQUESTS` |
+| Concurrent GitHub downloads | 5 | `MAX_CONCURRENT_REQUESTS` |
+| GitHub request timeout during a run | 30 s per request, 10 s to connect | `_new_session` |
+| GitHub request timeout during the add check | 10 s per request | `check_repository` |
+| Retry attempts | 3 attempts per request, waiting 1 s and then 2 s between them | `MAX_RETRIES`, `RETRY_BACKOFF_BASE` |
+| Rate-limit wait | Once per request, until the reset time plus 1 s, capped at 60 s | `MAX_RATE_LIMIT_WAIT` |
+| Remote check on other hosts (`git ls-remote`) | 10 s | `CHECK_TIMEOUT` in `git_source.py` |
+| Clone on other hosts (`git clone --depth 1`) | 120 s | `CLONE_TIMEOUT` |
+| Files per database commit | 200 | `DB_BATCH_SIZE` in `repository_service.py` |
+| Concurrent runs | 2 | `MAX_CONCURRENT_RUNS` |
+| Parsed body per entity | 60 lines and 2000 characters | `BODY_MAX_LINES`, `BODY_MAX_CHARS` in `code_parser.py` |
+| Records per Algolia request | 1000 | `INDEX_BATCH_SIZE` in `algolia_service.py` |
+| Wait for Algolia to publish an index task | 300 s | `INDEX_WAIT_SECONDS` |
+| Wait for Algolia to publish a delete | 120 s | `DELETE_WAIT_SECONDS` |
+| Recorded error message | 500 characters | `failure_message` in `security.py` |
+
+Why these numbers:
+
+- **1000 files, 100 MB, 1 MB per file.** A run holds every downloaded file in memory at once, so the cap protects the process. Two runs at a time means the worst case is about 200 MB of file text, plus parsed entities.
+- **Two concurrent runs.** The limit bounds memory and keeps GitHub and Algolia calls from piling up. A third run still shows `processing` while it waits for a slot.
+- **300 walk requests.** The contents walk only runs for repositories too big for one tree call. A token has 5000 API requests an hour, so an unbounded walk could use the whole quota on one repository.
+- **200 files per commit.** One commit per batch bounds how much work a failure can lose and gives the dashboard a progress update at a steady rhythm.
+- **1000 records per Algolia request.** This is Algolia's recommended batch size.
+
+## The 11 steps
+
+<Steps>
+
+1. **Check and schedule.** `POST /repositories/` rejects a duplicate URL first (`409`, matched regardless of case). Then it requires Algolia to be configured (`503`). Then it checks the remote. For github.com that is `GitHubService.check_repository`: one GET for the repository and one for its branch. For any other host it is `git ls-remote`. A problem maps to a status without creating a row. Then the create endpoint (`201`) or `POST /repositories/{id}/process` (`202`) starts an asyncio task. The task is refused with `409` if one already runs for that repository. `/process` sets the repository to `processing` before it returns, so a client polling `/status` never reads the old `failed`.
+
+2. **Mark and wait.** The run sets the status to `processing`, sets `processed_files` back to 0 (the previous run's count would look like progress), clears `error_message` and broadcasts the status. `total_files` is not reset, so the first frames can still show the previous run's total. The run then waits for one of two slots while already showing `processing`.
+
+3. **Check Algolia.** The endpoints already refuse a missing configuration, so this only fails a run when the credentials went away after it was scheduled. The run fails with "Algolia credentials not configured. Set ALGOLIA_APP_ID and ALGOLIA_ADMIN_API_KEY." A repository without a URL fails with "Repository URL is required for processing".
+
+4. **List.** The branch is the repository's own, or the one in the URL, or the default branch the GitHub API reports. For github.com, one recursive git trees call lists the files. For other hosts a shallow clone is walked instead, and step 6 does not apply.
+
+5. **Select.** The deny list, the extension filter and the size filter run first. The survivors are sorted by path and kept in order until the file count or byte cap is reached. The rest count as skipped. See [File selection rules](#file-selection-rules).
+
+6. **Truncated trees.** If GitHub marks the tree as truncated, the contents API is walked instead. See [The truncated-tree walk](#the-truncated-tree-walk).
+
+7. **Download.** Files download five at a time from `raw.githubusercontent.com`. Other hosts read them from the clone. Empty files and binary files (any file containing a NUL byte) are skipped. One failed download fails the whole run, because skipping it would let a reprocess replace a complete index with a partial one. A run with no files at all fails with "No supported code files found in repository".
+
+8. **Clear.** Only after a successful fetch does the run apply the index settings and delete the repository's old Algolia records, then its old rows. This order means a transient GitHub error never wipes a working index. The Algolia delete is awaited for up to 120 s, and if it fails the run fails with "Could not remove previously indexed records from Algolia". A plain repository delete does not wait for this step.
+
+9. **Parse and store.** Files are handled in batches of 200. For each file the run parses entities in a worker thread, builds a `CodeFile` row with its `CodeEntity` rows, and builds the Algolia records. The batch is committed in a worker thread, then `processed_files` is updated and progress is broadcast.
+
+10. **Index.** All records go to Algolia in requests of 1000. The run fails if there are no records ("No code entities were indexed from N files") or if Algolia rejects a request ("Algolia rejected the indexing request").
+
+11. **Finish.** The run sets the primary language and the framework, adds a `Partially indexed:` note if something was left out, sets `completed` and `processed_at`, and broadcasts the final frame. See [How language and framework are detected](#how-language-and-framework-are-detected).
+
+</Steps>
+
+<Aside type="note">
+A repository made only of CSS, HTML, JSON, YAML, XML or SQL files fails at step 10. Those languages are stored and readable, but they produce no entities, so there is nothing to index. The error is "No code entities were indexed from N files".
+</Aside>
+
+## Fetching by host
+
+The service picks the source from the URL's host. `GitHubService` and `GitSource` both inherit from one `FileSelector`, so they share the deny list, the extension map and the size and count limits.
+
+| Host | Check before the row exists | Fetch during the run |
+| --- | --- | --- |
+| github.com | REST API (`check_repository`). Private repositories are readable when `GITHUB_TOKEN` has access | Trees API to list, then `raw.githubusercontent.com` to download |
+| Any other host | `git ls-remote --heads --symref`, 10 s | `git clone --depth 1 --single-branch --no-tags`, 120 s, into a temporary directory that is always removed |
+
+### GitHub
+
+- The token, when set, is sent as `Authorization: token ...`. Without a token, GitHub's low unauthenticated rate limit applies and private repositories cannot be read.
+- The listing keeps only entries of type `blob` whose mode is not `120000`. Mode `120000` is a symlink, so symlinks are never listed.
+- A 404 on the trees call triggers one more request for the repository itself, to tell a missing repository from a missing branch. The error says which: "Branch 'x' not found in owner/repo".
+- Download retries cover timeouts, connection errors, `429` and `5xx`. A `404` or `403` on a file fails immediately.
+- A rate-limited `403` or `429` (with `X-RateLimit-Remaining: 0`) makes the API call wait for the reset time, capped at 60 s, and retry once.
+
+### Other hosts
+
+- **Public only.** Git cannot ask for credentials, so a repository that answers `401`, `403` or `404` is reported as "not found or is private; only public repositories are supported on the host". That is `422` at the check and `404` during a run.
+- **No shell, no config.** Git runs through `create_subprocess_exec` with an empty `HOME`, no user or system config, no credential helper, `GIT_TERMINAL_PROMPT=0`, and only https allowed. It is killed on timeout.
+- **Symlinks are skipped.** A clone keeps symlinks as real links, so the tree walk checks every entry. It never follows a link and never lists one, and it does not descend into denied directories or `.git`.
+- **What is passed through.** Only `PATH`, `SSL_CERT_FILE`, `SSL_CERT_DIR`, `GIT_SSL_CAINFO`, `HTTPS_PROXY`, `https_proxy` and `NO_PROXY` reach git from your environment.
+- **Errors.** `504` for a timeout, `503` if git cannot start, `404` for a missing branch or repository, `502` for any other clone failure.
+- **Names.** Other hosts are named `<host>/<path>`. The REST endpoint takes github.com only. The `add_repository` tool takes any host through the same service function.
+- **Image.** Both backend images install `git`.
+
+The security side of this (URL validation, sandboxing) is in [the security model](/docs/concepts/security/#git-sandboxing-and-url-validation). The user-facing guide is [Other git hosts](/docs/guides/other-git-hosts/).
+
+## File selection rules
+
+`FileSelector._select_candidates` applies these filters in order to every listed `(path, size)` pair:
+
+1. **Denied directories.** A file is dropped if any parent folder in its path is named `node_modules`, `dist`, `build`, `vendor`, `third_party`, `.git`, `__pycache__`, `.next` or `coverage`. Matching is by whole path segment, so a folder called `distribution` is kept.
+2. **Denied file names**, matched case-insensitively: `*.min.js`, `*.min.css`, `*.bundle.js`, `*.map`, `package-lock.json`, `yarn.lock`, `pnpm-lock.yaml`, `poetry.lock` and `cargo.lock`.
+3. **Unknown extensions.** A file is indexed only if its extension is in the map below. Anything else maps to `text` and is dropped.
+4. **Size.** A file whose listed size is 1 MB or more is dropped.
+5. **Sort and cap.** The rest are sorted by path and kept in order until 1000 files or 100 MB. The loop stops at the first file that would not fit. Everything after it counts as skipped.
+
+| Extension | Language |
+| --- | --- |
+| `py` | python |
+| `js`, `jsx` | javascript |
+| `ts`, `tsx` | typescript |
+| `java` | java |
+| `go` | go |
+| `rs` | rust |
+| `cpp` | cpp |
+| `c` | c |
+| `cs` | csharp |
+| `php` | php |
+| `rb` | ruby |
+| `html` | html |
+| `css` | css |
+| `scss` | scss |
+| `sql` | sql |
+| `json` | json |
+| `yaml`, `yml` | yaml |
+| `xml` | xml |
+| `md` | markdown |
+| `tf`, `tfvars` | terraform |
+| `hcl` | hcl |
+
+Three consequences are worth knowing:
+
+- **C and C++ headers are not indexed.** The map has `c` and `cpp` only. Files ending in `.h`, `.hpp` or `.cc` map to `text` and are dropped.
+- **Sorting by path decides who is dropped.** When a repository is over the cap, the files that sort last by path are the ones left out. A repository with a large `src/` and a `tests/` folder keeps `src/` and loses the end of the alphabet first.
+- **Only cap overflow is reported.** Files removed by the deny list, the extension filter or the size filter are dropped silently. Only files dropped because of the 1000-file or 100 MB cap are counted in the `Partially indexed` note.
+
+## The truncated-tree walk
+
+GitHub's trees API returns at most a fixed number of entries per call and sets `truncated: true` when a repository is bigger. When that happens:
+
+1. The run logs a warning and starts a breadth-first walk of the contents API from the repository root, one request per directory.
+2. Directories whose path contains a denied folder are pruned and never requested.
+3. After 300 requests the walk stops and flags the listing as truncated.
+4. The result is merged with the entries the truncated tree did return. If both list the same path, the walk's size wins.
+
+Breadth-first order is deliberate. When the 300 requests run out, it is the deepest directories that go unlisted, not whole top-level folders that happen to come late in the order. Merging with the truncated tree means a walk cut short never indexes fewer files than the tree alone would have.
+
+When the cap is hit, the run still completes. The final message says "the repository is too large to list in full, so some directories were not indexed".
+
+## Parsing
+
+Each file is parsed in a worker thread so the event loop stays free. The parser is chosen by language:
+
+| Language | Parser | Entities |
+| --- | --- | --- |
+| python | Python `ast`. If `ast` cannot parse the file (Python 2 code, templates, very deep nesting), a line scanner takes over | function (methods count as functions), class, import |
+| javascript, typescript, java, go, rust, cpp, c, csharp, php, ruby | tree-sitter, driven by a `LanguageSpec` per language | function, class, import |
+| markdown | ATX heading scanner that ignores fenced code | `doc_section`, one per heading with content |
+| terraform, hcl | tree-sitter HCL grammar | `terraform_block`, one per top-level block |
+| css, html, scss, sql, json, yaml, xml | none | none |
+
+A file that parses to nothing is still stored. See [Supported languages](/docs/reference/languages/) for details per language, and [Development](/docs/development/#add-a-language-parser) to add one.
+
+## How language and framework are detected
+
+**Per file.** The language comes from the file extension (the map above).
+
+**Primary language of the repository.** The run counts files per language, ignoring `text`, `markdown`, `json`, `yaml`, `xml`, `css`, `scss` and `html`. The most common language wins. A tie goes to the language that appears first in path order. Terraform, HCL and SQL do count as programming languages. If no programming file exists, the field keeps its earlier value.
+
+**Framework.** Detection is best effort and uses two sources:
+
+1. **`package.json` files.** Every file named `package.json`, at any depth, is parsed. `dependencies` and `devDependencies` are merged. The first match in this order wins: `next` gives `nextjs`, `@angular/core` gives `angular`, `vue` gives `vue`, `svelte` gives `svelte`, `react` gives `react`, `express` gives `express`. A file that is not a JSON object is skipped.
+2. **Python imports.** If no `package.json` matched, the text of all Python files is searched for `import django` or `from django`, then `fastapi`, then `flask`. This is a substring search, so a comment containing the text also matches.
+
+If neither finds anything, the framework stays empty. Because the search order follows path order and `node_modules` is excluded, a vendored `package.json` never decides the result.
+
+## Failure handling
+
+| Event | What the code does | What you see |
+| --- | --- | --- |
+| **Parse failure** | The file is still stored, without entities, and counted as unparsed | `Partially indexed: N files could not be parsed` |
+| **Store failure** | A failed batch commit is rolled back, its files are counted as failed, its records are not indexed, and the run continues with the next batch | `Partially indexed: N of M files could not be stored` |
+| **Run failure** | Any other exception rolls back and sets `failed` with a message of at most 500 characters, then broadcasts it | Red card with the reason |
+| **Partial index** | The run still ends `completed` and `error_message` starts with `Partially indexed:` | Amber card |
+| **Job crash** | If the task itself dies, the row is set to `failed` so it does not stay `processing` | "Processing stopped unexpectedly; reprocess the repository" |
+| **Server restart** | At start-up, every repository left `pending` or `processing` is set to `failed` | "Processing was interrupted by a server restart; reprocess the repository" |
+| **Delete during a run** | Refused | `409` |
+
+How a failure message is written (`failure_message` in `security.py`):
+
+- A SQLAlchemy error becomes the fixed text "Database error while storing the repository". The real text carries SQL and file contents, so it goes to the log only.
+- An error marked `user_facing` (GitHub errors and ingestion errors) is recorded as its own sentence, such as the rate-limit message with the wait.
+- Anything else is recorded as `ClassName: message`.
+- All messages are cut to 500 characters.
+
+If a reprocess had already cleared the old index before it failed, the message ends with " The previous index was removed; reprocess to rebuild it." That tells you the repository has nothing searchable until it is reprocessed.
+
+A `Partially indexed` note joins one or more of these causes with semicolons:
+
+- `N of M files could not be stored`
+- `N files could not be parsed`
+- `N files over the 1000-file or 100 MB limit were skipped`
+- `the repository is too large to list in full, so some directories were not indexed`
+
+The Algolia wait is forgiving in one place. If Algolia accepted the records but a task is not published after 300 s, the run logs a warning and carries on, because the records will become searchable shortly. A timeout on the delete before a reprocess is not forgiven: it fails the run, to avoid leaving stale records.
+
+Nothing retries a failed run by itself. Fix the cause (set `GITHUB_TOKEN`, repair the Algolia credentials, wait out a rate limit), then reprocess.
+
+## Delete and reprocess
+
+- **Delete.** A delete holds the repository's job slot while it works, so no run can start in the middle. It sends `delete_by` to Algolia and does not poll. That is safe because Algolia applies an index's tasks in order, so records indexed later under a reused id still land after the delete. If Algolia refuses the request, nothing is deleted and the API returns `502`.
+- **Delete order.** The service deletes entities, then files, with bulk queries, then the repository row. See [the data model](/docs/concepts/data-model/#cascades-and-delete-order).
+- **Reprocess.** A reprocess waits for the Algolia delete to finish before it indexes, so the delete cannot land after the new records.
+- **Editing.** `PUT /repositories/{id}` returns `409` if it would change `branch`, `language` or `framework` while a job or a delete holds the repository.
+
+## Progress broadcasting
+
+The run pushes a `repository_status` frame to every WebSocket client subscribed to that repository:
+
+| When | Status | `processed_files` and `total_files` |
+| --- | --- | --- |
+| Run starts | `processing` | `processed_files` is 0. `total_files` is the previous value until the first batch |
+| After each batch of 200 files that stores successfully | `processing` | Files stored so far, and the count of downloaded files |
+| Run ends well | `completed` | Final counts. `message` is the partial-index note, or "Processing completed successfully" |
+| Run fails | `failed` | `error` has the reason, `message` is "Processing failed" |
+
+A batch that fails to store sends no frame of its own. Each send has a 5-second timeout, and a client that stalls is dropped, so a stuck browser tab cannot slow a run down. The dashboard also polls the status endpoint every 3 seconds while a repository is in progress, so a missed frame never leaves the page stale. The frame format is in [the WebSocket reference](/docs/reference/websocket/).
+
+Next: [how the records are searched](/docs/concepts/search/), or [the tables the run writes](/docs/concepts/data-model/).

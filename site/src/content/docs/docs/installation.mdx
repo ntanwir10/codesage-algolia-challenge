@@ -1,0 +1,189 @@
+---
+title: Installation
+description: Prerequisites, credentials, what make setup does, ports, upgrades and every file CodeSage creates.
+---
+
+import { Aside, FileTree, LinkCard, Steps } from '@astrojs/starlight/components';
+
+This page explains each part of the install. If you only want the shortest path, use the [Quick start](/docs/quick-start/). For Docker, see [Docker](/docs/guides/docker/).
+
+## Prerequisites
+
+| Tool | Version | Used for |
+| --- | --- | --- |
+| Python | 3.13 | The backend and the MCP bridge. `make setup` builds `.venv` at the repository root. |
+| `uv` | optional | Creates the virtualenv and installs packages. Optional if `python3.13` is on your `PATH`. |
+| Node.js and npm | Node 22 or newer | The React dashboard. `make setup` runs `npm ci`. |
+| `git` | any | Only on the machine that runs the backend, and only for the `add_repository` tool on hosts other than github.com. The backend runs `git ls-remote` and `git clone`. |
+| `curl` | any | `make start` and `make health` use it. |
+| `jq` | any | `make health` and `make test-mcp` print JSON with it. |
+| `lsof` | any | `make stop` finds the processes listening on ports 8001 and 5173. |
+| Docker | Compose v2 | Only for the Docker stacks. Not needed for a local install. |
+
+### How `make setup` finds Python and Node
+
+- **Python.** If `.venv/bin/python` already exists, `make setup` does not check Python again. Otherwise it needs `uv` or `python3.13`, and stops with `Python 3.13 (or uv) is required` if it finds neither. With `uv` it runs `uv venv --python 3.13 .venv`. Without it, `python3.13 -m venv .venv`.
+- **Node.** It reads the major version from `node` and stops with `Node.js 22 or newer is required` if it is below 22 or missing.
+
+## Get Algolia credentials
+
+CodeSage stores one record per code entity in an Algolia index. You need an Algolia account of your own.
+
+1. Sign in at https://www.algolia.com/.
+2. Open your application's **Settings**, then **API Keys**.
+3. Copy the **Application ID** into `ALGOLIA_APP_ID`.
+4. Copy the **Admin API Key** into `ALGOLIA_ADMIN_API_KEY`.
+
+<Aside type="caution">
+The backend needs the **Admin** API key, not the search-only key. It writes records, changes the index settings, deletes records by filter and lists indexes for the health check. The backend also runs every search with this key. Keep it in `backend/.env`. Never put it in `frontend/.env`, the Claude Desktop config or a screenshot.
+</Aside>
+
+You don't create the index yourself. The first indexing run creates it (named by `ALGOLIA_INDEX_NAME`, default `codesage_code_entities`) and applies the settings. Records are keyed by repository ID, so two CodeSage databases must not share one index; the Docker stacks use their own index names for that reason. What you spend is governed by your own Algolia plan.
+
+A value that is empty, or that matches `your-...-here` after trimming (for example a leftover placeholder from an old example file), counts as **unset** for `ALGOLIA_APP_ID`, `ALGOLIA_ADMIN_API_KEY` and `GITHUB_TOKEN`. With either Algolia value unset:
+
+- the backend still starts and logs `Algolia credentials not configured - MCP server cannot function properly`;
+- `/health` reports `degraded`;
+- adding or reprocessing a repository returns `503` with `Search indexing is not configured on the server (Algolia credentials are missing).`;
+- the `search_code` tool returns `Search is not configured on the server (ALGOLIA_APP_ID / ALGOLIA_ADMIN_API_KEY are missing).`
+
+## Create a GitHub token
+
+`GITHUB_TOKEN` is optional. The backend sends it as an `Authorization: token ...` header to `api.github.com` and to `raw.githubusercontent.com`. It does two things:
+
+- **Higher rate limits.** Without a token, GitHub's low unauthenticated limit applies. A large repository needs many requests, and the run can fail with a rate-limit message.
+- **Private github.com repositories.** A repository the token can read can be indexed. Without a token, a private repository looks like a missing one.
+
+Create the token at https://github.com/settings/tokens. For public repositories it needs no special access. For private ones it must be able to read the repository's contents and metadata; the project sources don't name exact scopes.
+
+If GitHub rejects the token, adding a repository returns `502` with `GitHub rejected the server's GITHUB_TOKEN; check the token configured on the CodeSage server.` Anyone who can use your CodeSage can index and search every repository the token can read. Other git hosts never use the token; they are public-only.
+
+## What `make setup` does
+
+```bash
+make setup
+```
+
+The target runs these steps in order. It prints a header line first, and each status line has an emoji prefix that this page leaves out.
+
+<Steps>
+
+1. **Create `backend/.env`.** `test -f backend/.env || cp .env.example backend/.env`. An existing file is never overwritten.
+2. **Create `.venv`.** Only if `.venv/bin/python` is missing, as described above.
+3. **Install backend packages.** `uv pip install --python .venv/bin/python -r backend/requirements-dev.txt`, or `.venv/bin/python -m pip install -r backend/requirements-dev.txt` without `uv`. This includes the runtime packages (`backend/requirements.txt`) and the test tools.
+4. **Check Node.** Fails with `Node.js 22 or newer is required` below 22.
+5. **Install frontend packages.** `cd frontend && npm ci`, which installs exactly what `package-lock.json` lists.
+6. **Ensure the API key.** `.venv/bin/python scripts/ensure_api_key.py`, described next.
+7. **Print the next steps.** The values to edit in `backend/.env`, and `Next: 'make start', then 'make install-claude' for Claude Desktop`.
+
+</Steps>
+
+Running `make setup` again is safe. It skips the files that exist and only re-installs packages.
+
+### The API key
+
+`CODESAGE_API_KEY` protects the write endpoints, the MCP tool endpoints and the WebSocket. You never have to invent it. `scripts/ensure_api_key.py` runs from `make setup`, `make start` and `make install-claude`, and does this:
+
+1. Stops with `error: backend/.env not found; run 'make setup' first` if `backend/.env` is missing (exit code 1).
+2. Reads `CODESAGE_API_KEY` from `backend/.env`. If it is missing or empty, it generates one with Python's `secrets.token_urlsafe(32)`, removes the empty line and appends `CODESAGE_API_KEY=<key>`. It prints `Generated a CodeSage API key in backend/.env`. A non-empty key is **never changed**.
+3. Compares `VITE_CODESAGE_API_KEY` in `frontend/.env` with the key. If they differ, or `frontend/.env` doesn't exist, it removes every `VITE_CODESAGE_API_KEY` line there and appends the current key. It prints `Copied it to frontend/.env (restart Vite to pick it up)`.
+4. Sets both files to mode 600 if they were not.
+5. If it generated a key, prints `Run 'make install-claude' and restart Claude Desktop so Claude uses it.`
+
+The script never prints the key. Writes are atomic: it writes a temporary file in the same folder, sets mode 600 and renames it over the target.
+
+<Aside type="note" title="What counts as unset">
+For `CODESAGE_API_KEY` only an **empty** value (`CODESAGE_API_KEY=`, `""` or `''`, optionally followed by a comment) is regenerated. The `your-...-here` placeholder rule applies to the Algolia values and `GITHUB_TOKEN`, not to the API key, so a leftover placeholder in that line would be used as a real key.
+</Aside>
+
+#### Why the key ends up in the frontend
+
+The dashboard sends the key as an `X-API-Key` header. Vite inlines every `VITE_*` variable into the JavaScript bundle, so in the local setup anyone who can load the dashboard can read the key. That is acceptable for one user on localhost. The prod Docker stack avoids it by keeping the key in nginx. See [Security](/docs/concepts/security/).
+
+#### Rotate the key
+
+1. Delete the `CODESAGE_API_KEY` line in `backend/.env`.
+2. Run `make setup`. It generates a new key and updates `frontend/.env`.
+3. Run `make install-claude`. It rewrites the CodeSage entry in the Claude Desktop config (and writes a new backup).
+4. Restart the backend, Vite and Claude Desktop. The backend reads `backend/.env` only at startup.
+
+## Ports
+
+| Port | Used by | Set in |
+| --- | --- | --- |
+| 8001 | Backend (`127.0.0.1`) | `Makefile` (`make start-backend`) and the Vite proxy in `frontend/vite.config.ts` |
+| 5173 | Dashboard dev server | Vite, with `strictPort` on |
+
+- **8001 is taken.** `make start` first calls `http://127.0.0.1:8001/health`. If that succeeds, it exits with `A backend is already running on port 8001. Stop it with 'make stop', or run 'make start-frontend' to use it.` If something else holds the port and doesn't answer `/health`, the backend fails to bind. After 15 one-second checks, or as soon as the backend process exits, `make start` prints `The backend did not start; see its output above.` and exits with an error.
+- **5173 is taken.** Vite exits with a port-in-use error instead of moving to 5174, because the example `CORS_ORIGINS` allows only ports 3000 and 5173.
+- **Other ports.** `make start-backend` always binds `127.0.0.1:8001`. `MCP_SERVER_HOST` and `MCP_SERVER_PORT` in `backend/.env` don't change that; they affect startup validation (a non-loopback host requires a key), the OpenAPI server URL and `python -m app.main`. To use another frontend port, run Vite yourself with `--port` and add that origin to `CORS_ORIGINS`, or the backend refuses browser writes with `Cross-origin request refused`.
+
+<Aside type="caution">
+`make stop` kills **whatever** listens on ports 8001 and 5173, not only CodeSage. It prints `Backend not running` or `Frontend not running` for a port with no listener, and `Servers stopped` at the end.
+</Aside>
+
+## Run the backend and frontend
+
+`make start` runs both. It generates the key if needed, refuses to start if a backend already answers on 8001, starts the backend in the background, waits for `/health`, then runs the frontend in the foreground. Press Ctrl+C to stop the frontend, and `make stop` to stop everything.
+
+To run them separately, use two terminals:
+
+```bash
+make start-backend    # cd backend && uvicorn app.main:app --reload --host 127.0.0.1 --port 8001
+make start-frontend   # cd frontend && npm run dev
+```
+
+`make start-frontend` doesn't run `ensure_api_key.py`. Run `make setup` once first so `frontend/.env` holds the key. The Vite dev server proxies `/api`, `/ws` and `/health` to `127.0.0.1:8001`, so the dashboard needs no `VITE_API_BASE_URL`.
+
+## Upgrade and migrations
+
+```bash
+git pull
+make setup      # re-installs packages; keeps your .env files and your key
+# then restart the backend
+```
+
+- **Migrations run at startup.** The backend applies `alembic upgrade head` every time it starts. A database from before Alembic (tables present, no `alembic_version`) is stamped at `baseline` first. You normally never run a migration by hand. `make db-migrate` runs the same upgrade manually.
+- **In-memory databases** are created from the models directly and skip Alembic.
+- **Back up first.** Copy `backend/codesage.db` before an upgrade if the data matters. While the backend runs, SQLite also keeps `codesage.db-wal` and `codesage.db-shm` next to it.
+- **Reset.** `make db-reset` deletes `backend/codesage.db` and its `-journal`, `-wal` and `-shm` files. It does not touch Algolia, so the old records stay in the index. A search across all repositories can still return them, without a link.
+- **Restart behavior.** A server restart marks any repository left `pending` or `processing` as `failed` with `Processing was interrupted by a server restart; reprocess the repository`.
+
+## Files CodeSage creates
+
+<FileTree>
+
+- codesage-algolia-challenge/
+  - .venv/ Python virtualenv, created by `make setup`
+  - backend/
+    - .env your settings and the API key, mode 600
+    - codesage.db SQLite database, created at first start
+    - codesage.db-wal present while the backend runs
+    - codesage.db-shm present while the backend runs
+  - frontend/
+    - .env VITE_CODESAGE_API_KEY, mode 600
+    - node_modules/ installed by `npm ci`
+
+</FileTree>
+
+Outside the repository:
+
+| File | Created by | Notes |
+| --- | --- | --- |
+| Claude Desktop config (`claude_desktop_config.json`) | `make install-claude` | Merged, never replaced. Mode 600. Paths per OS are in [Claude Desktop](/docs/guides/claude-desktop/#config-file-locations). |
+| `claude_desktop_config.json.bak-<YYYYMMDD-HHMMSS>-<pid>` | `make install-claude` | A byte-for-byte backup next to the config, mode 600. A `-1`, `-2` suffix is added if the name exists. |
+| `codesage-clone-*` temporary folder | `add_repository` on non-GitHub hosts | A shallow clone, always removed when the run ends. |
+| Keychain item `codesage-mcp` | `--basic-auth` (macOS) | The proxy password. Only for the prod stack. |
+
+The backend logs go to the terminal as JSON lines. The bridge logs to stderr, which Claude Desktop keeps in its MCP log.
+
+## Stop and clean up
+
+- Stop: Ctrl+C, or `make stop`.
+- Remove local data: `make db-reset`.
+- Remove everything for good: delete each repository in the dashboard first (this removes its Algolia records), then `make db-reset`, then delete the Algolia index in your Algolia dashboard if you no longer need it. See the [FAQ](/docs/faq/#how-do-i-delete-everything).
+
+<LinkCard title="Quick start" description="The five-step version of this page." href="/docs/quick-start/" />
+<LinkCard title="Configuration reference" description="Every environment variable, default and limit." href="/docs/reference/configuration/" />
+<LinkCard title="Commands reference" description="Every make target." href="/docs/reference/commands/" />
+<LinkCard title="Claude Desktop guide" description="Connect Claude after the install." href="/docs/guides/claude-desktop/" />

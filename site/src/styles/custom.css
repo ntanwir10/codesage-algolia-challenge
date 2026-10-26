@@ -1,0 +1,117 @@
+/* CodeSage site theme. Ink and paper, an Algolia-like blue, and search-highlight yellow. */
+
+:root {
+	--sl-font: 'IBM Plex Sans', system-ui, -apple-system, 'Segoe UI', sans-serif;
+	--sl-font-mono: 'IBM Plex Mono', ui-monospace, 'SFMono-Regular', Menlo, monospace;
+
+	/* Dark (Starlight's default) */
+	--sl-color-accent-low: #121f45;
+	--sl-color-accent: #5b86ff;
+	--sl-color-accent-high: #c9d6ff;
+	--sl-color-white: #ffffff;
+	--sl-color-gray-1: #e8ecf2;
+	--sl-color-gray-2: #c4ccd8;
+	--sl-color-gray-3: #8d99ab;
+	--sl-color-gray-4: #566275;
+	--sl-color-gray-5: #2c3644;
+	--sl-color-gray-6: #18202b;
+	--sl-color-black: #0e131a;
+
+	--cs-mark: #ffd23f;
+	--cs-mark-ink: #1d1600;
+	--cs-mark-soft: rgba(255, 210, 63, 0.16);
+	--cs-ok: #3ccf8e;
+	--cs-warn: #f5b638;
+	--cs-bad: #ff6b6b;
+	--cs-panel: #121922;
+	--cs-line: #263040;
+}
+
+:root[data-theme='light'] {
+	--sl-color-accent-low: #dfe7ff;
+	--sl-color-accent: #2952e3;
+	--sl-color-accent-high: #142a73;
+	--sl-color-white: #0f1722;
+	--sl-color-gray-1: #1d2633;
+	--sl-color-gray-2: #333c4a;
+	--sl-color-gray-3: #5b6576;
+	--sl-color-gray-4: #8a93a3;
+	--sl-color-gray-5: #c9cfd8;
+	--sl-color-gray-6: #eef1f5;
+	--sl-color-gray-7: #f6f7f9;
+	--sl-color-black: #ffffff;
+
+	--cs-mark-soft: rgba(255, 196, 0, 0.18);
+	--cs-ok: #128a55;
+	--cs-warn: #a86a00;
+	--cs-bad: #c62828;
+	--cs-panel: #f6f7f9;
+	--cs-line: #dde2ea;
+}
+
+/* Algolia wraps search hits in <mark>; the site uses the same highlight everywhere. */
+mark {
+	background: var(--cs-mark);
+	color: var(--cs-mark-ink);
+	padding: 0 0.15em;
+	border-radius: 0.15em;
+}
+
+.sl-markdown-content table {
+	font-size: var(--sl-text-sm);
+}
+
+/* Mermaid figures */
+.cs-diagram {
+	margin-block: 1.5rem;
+	padding: 1.25rem;
+	border: 1px solid var(--cs-line);
+	border-radius: 0.5rem;
+	background: var(--cs-panel);
+	overflow-x: auto;
+}
+
+.cs-diagram pre.mermaid {
+	margin: 0;
+	background: transparent;
+	display: flex;
+	justify-content: center;
+	font-family: var(--sl-font);
+	color: transparent; /* hide the raw source until Mermaid has drawn it */
+}
+
+.cs-diagram pre.mermaid[data-processed] {
+	color: inherit;
+}
+
+.cs-diagram svg {
+	max-width: 100%;
+	height: auto;
+}
+
+.cs-diagram figcaption,
+.cs-shot figcaption {
+	margin-top: 0.75rem;
+	font-size: var(--sl-text-sm);
+	color: var(--sl-color-gray-3);
+	text-align: center;
+}
+
+/* Screenshots */
+.cs-shot {
+	margin-block: 1.5rem;
+}
+
+.cs-shot img {
+	display: block;
+	width: 100%;
+	height: auto;
+	border: 1px solid var(--cs-line);
+	border-radius: 0.5rem;
+	box-shadow: 0 12px 32px -18px rgba(0, 0, 0, 0.45);
+}
+
+/* The landing page (the only page with a hero) gets a wider column than the docs. */
+html[data-has-hero]:not([data-has-sidebar]) {
+	--sl-content-width: 76rem;
+}

@@ -1,0 +1,151 @@
+---
+title: Quick start
+description: Install CodeSage, run it, index a repository and connect Claude Desktop in five steps.
+---
+
+import { Steps, Aside, LinkCard } from '@astrojs/starlight/components';
+
+This page gets you from a fresh clone to a working Claude Desktop connection. Each step names the exact command and what you should see. For the reasoning behind each step, see [Installation](/docs/installation/).
+
+## Requirements
+
+- **Python 3.13** and [`uv`](https://docs.astral.sh/uv/). Any way to create a `.venv` at the repository root also works, but `make setup` looks for `uv` or `python3.13`.
+- **Node.js 22 or newer** and npm.
+- **An Algolia application ID and Admin API key.** Without them the backend still starts, but adding a repository returns `503` and `/health` reports `degraded`.
+- **A GitHub token** (optional but recommended). Without one, GitHub's low unauthenticated rate limit applies and private repositories can't be read.
+- **Claude Desktop**, for step 5.
+- `curl` (used by `make start` and `make health`) and `jq` (used by `make health`).
+
+You also need a clone of the repository:
+
+```bash
+git clone https://github.com/ntanwir10/codesage-algolia-challenge.git
+cd codesage-algolia-challenge
+```
+
+## The five steps
+
+<Steps>
+
+1. **Install.**
+
+   ```bash
+   make setup
+   ```
+
+   This copies `.env.example` to `backend/.env` if it is missing, creates `.venv` and installs the backend dependencies into it, runs `npm ci` in `frontend/` and generates your CodeSage API key. It stops with `Python 3.13 (or uv) is required` or `Node.js 22 or newer is required` if a prerequisite is missing. When it finishes it prints what to edit next, ending with `Next: 'make start', then 'make install-claude' for Claude Desktop`.
+
+   On a first run you also see:
+
+   ```text
+   Generated a CodeSage API key in backend/.env
+   Copied it to frontend/.env (restart Vite to pick it up)
+   Run 'make install-claude' and restart Claude Desktop so Claude uses it.
+   ```
+
+2. **Configure.** Open `backend/.env` and fill in these three values:
+
+   ```dotenv title="backend/.env"
+   ALGOLIA_APP_ID=...
+   ALGOLIA_ADMIN_API_KEY=...
+   GITHUB_TOKEN=...
+   ```
+
+   Leave `CODESAGE_API_KEY` alone. `make setup`, `make start` and `make install-claude` generate it and keep `frontend/.env` in sync. Get the Algolia values from your Algolia dashboard under Settings, then API Keys. Create the GitHub token at https://github.com/settings/tokens. See [Installation](/docs/installation/) for details.
+
+3. **Run.**
+
+   ```bash
+   make start
+   ```
+
+   This starts the backend on `http://127.0.0.1:8001`, waits up to 15 seconds for `/health` to answer, then starts the dashboard on `http://localhost:5173`. Keep this terminal open. The backend logs JSON lines; look for `Database schema up to date` and, if your Algolia values are set, `Algolia credentials configured - MCP server ready`. Vite then prints its `Local` URL.
+
+   If a backend already answers on port 8001, `make start` stops with `A backend is already running on port 8001. Stop it with 'make stop', or run 'make start-frontend' to use it.` If port 5173 is taken, Vite exits instead of choosing another port.
+
+4. **Index a repository.** Open http://localhost:5173. In the field with the fixed `github.com/` prefix, type `owner/repo` (for example `pmndrs/zustand`) or paste a GitHub URL, then press **Add Repository**. You land on the repository page, which shows progress live. When the badge turns **Completed**, the repository is searchable. If GitHub or Algolia refuses the repository, the form shows the reason under the field and stays on the Home page. All the messages are in [the dashboard guide](/docs/guides/web-dashboard/#adding-a-repository).
+
+5. **Connect Claude Desktop.**
+
+   ```bash
+   make install-claude                 # add CodeSage to the Claude Desktop config
+   make install-claude ARGS=--dry-run  # preview first; the key is masked
+   ```
+
+   Expected output of the real run (the backup line appears only if a config file already existed):
+
+   ```text
+   backup: /Users/<you>/Library/Application Support/Claude/claude_desktop_config.json.bak-20261026-101500-4242
+   updated /Users/<you>/Library/Application Support/Claude/claude_desktop_config.json: mcpServers.codesage -> /path/to/codesage-algolia-challenge/mcp_launcher.sh
+   Restart Claude Desktop to pick it up.
+   ```
+
+   Fully quit and reopen Claude Desktop, and keep the backend running. Then ask Claude something like *"Search the zustand repository for where the store is created."*
+
+</Steps>
+
+<Aside type="note" title="A dry run through make is not fully read-only">
+`make install-claude` first runs `scripts/ensure_api_key.py`, which can create the API key in `backend/.env` and `frontend/.env` even when you pass `--dry-run`. The installer script itself writes nothing in a dry run.
+</Aside>
+
+## Verify it works
+
+### Check the backend
+
+```bash
+make health
+```
+
+`make health` calls `/health`, then prints the MCP tool names. It needs `jq`; without it, the target prints `Backend not responding` even when the backend is up. A healthy answer looks like this:
+
+```json
+{
+  "status": "healthy",
+  "timestamp": "2026-10-26T10:15:00.123456+00:00",
+  "version": "1.0.0",
+  "components": {
+    "database": { "status": "healthy" },
+    "algolia": { "status": "healthy" }
+  }
+}
+```
+
+Then the seven tool names:
+
+```json
+[
+  "list_repositories",
+  "search_code",
+  "get_file",
+  "list_definitions",
+  "analyze_repository",
+  "find_patterns",
+  "add_repository"
+]
+```
+
+| `status` | HTTP | Meaning |
+| --- | --- | --- |
+| `healthy` | 200 | Database and Algolia both answer |
+| `degraded` | 200 | Algolia is unreachable (`"message": "Algolia is unreachable"`) or not configured (`"status": "not_configured"`) |
+| `unhealthy` | 503 | The database check failed |
+
+The Algolia result is cached for 30 seconds, so a fix may take that long to show.
+
+### Open the API docs
+
+Visit http://127.0.0.1:8001/docs for the interactive OpenAPI page. It is hidden when `ENVIRONMENT=production`.
+
+### Ask Claude a first question
+
+In Claude Desktop, ask:
+
+> List the repositories in CodeSage.
+
+Claude should call `list_repositories` and show the repository you added, with `status: completed`. Then try a search, such as *"Search the zustand repository for where the store is created."* If Claude reports an error instead, the message says what to fix; the common ones are in [Troubleshooting](/docs/troubleshooting/).
+
+## Next steps
+
+<LinkCard title="Installation in depth" description="Credentials, what make setup does, ports, upgrades and the files CodeSage creates." href="/docs/installation/" />
+<LinkCard title="Web dashboard guide" description="Every page, status color and message in the dashboard." href="/docs/guides/web-dashboard/" />
+<LinkCard title="Claude Desktop guide" description="Installer options, bridge settings, example prompts and error messages." href="/docs/guides/claude-desktop/" />

@@ -1,0 +1,236 @@
+---
+title: Search and the Algolia index
+description: How CodeSage builds Algolia records, configures the index, ranks results and turns hits into snippets and source links.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+import Mermaid from '~/components/Mermaid.astro';
+
+CodeSage searches with Algolia. You bring your own Algolia application: there is no shared or hosted index. Each parsed entity (a function, a class, an import, a Markdown section or a Terraform block) becomes one Algolia record. The `search_code` tool queries those records. Every other tool reads SQLite, because they need exact file text and Algolia only holds short summaries.
+
+`AlgoliaService` in [`backend/app/services/algolia_service.py`](https://github.com/ntanwir10/codesage-algolia-challenge/blob/master/backend/app/services/algolia_service.py) builds the records and applies the settings. The tool code in [`backend/app/services/mcp_tools.py`](https://github.com/ntanwir10/codesage-algolia-challenge/blob/master/backend/app/services/mcp_tools.py) shapes the results.
+
+<Mermaid caption="One search_code call. Algolia ranks; SQLite is only asked for repository details such as the URL and branch used to build links." code={`flowchart TD
+    call["search_code(query, repository, language, entity_type, limit, page)"] --> repo{"repository given?"}
+    repo -- "yes" --> ready{"status completed?"}
+    ready -- "no" --> refuse["Tool error: failed reason<br/>or indexing progress"]
+    ready -- "yes" --> cfg
+    repo -- "no" --> cfg{"Algolia configured?"}
+    cfg -- "no" --> notcfg["Tool error: search not configured"]
+    cfg -- "yes" --> query["Algolia query in a worker thread<br/>filters AND-ed, partial matches allowed"]
+    query -- "fails" --> unavailable["Tool error: Search is unavailable"]
+    query -- "hits" --> shape["Trim fields, build source links"]
+    shape --> out["query, repository, total_hits, page, pages, results"]
+`} />
+
+## Record fields
+
+`build_documents` returns one record per entity.
+
+| Field | Content |
+| --- | --- |
+| `objectID` | `<repository_id>_<sha1 of path:type:name:line>`. See [the objectID scheme](#the-objectid-scheme) |
+| `repository_id` | The numeric repository ID. Every query filters on it |
+| `file_path` | Path inside the repository |
+| `language` | The file's language, such as `python` or `terraform` |
+| `entity_type` | `function`, `class`, `import`, `doc_section` or `terraform_block` |
+| `entity_name` | Name, capped at 500 characters |
+| `description` | Docstring or summary, capped at 500 characters |
+| `parameters` | List of parameter names (for a class, its parent classes) |
+| `return_type` | Return type, capped at 500 characters, or `null` |
+| `line_start`, `line_end` | 1-based line range, used for source links |
+| `signature` | The definition line, capped at 500 characters |
+| `content` | Signature plus the body, with at most 2000 characters of body |
+| `rank_weight` | A number used to break ties. See [Ranking](#ranking) |
+| `parameter_count` | `len(parameters)`, or 0 |
+| `lines_of_code` | `line_end - line_start + 1`, never below 1 |
+
+### The objectID scheme
+
+The ID is `<repository_id>_<sha1>`. The hash input is `file_path:entity_type:entity_name:line_start`. For example `src/auth/tokens.py:function:refresh_token:42` in repository 12 gives `12_07946c80715046c23e5533f046a8e8b6c92231e5`.
+
+The ID is stable on purpose. Indexing the same entity again overwrites its record instead of duplicating it. A change to the entity's line number gives it a new ID, which is why a reprocess deletes the repository's old records first. The leading repository ID is what lets `delete_by` and the `repository_id` filter act on one repository.
+
+### How `content` is built
+
+The parser gives the record a signature (the definition line) and a body (the source text, at most 60 lines and 2000 characters). `content` is the signature followed by a newline and the body, unless the body already starts with the signature. Python and most tree-sitter bodies start with the definition line, so for them `content` is just the body. Imports have no body, so their `content` is the import statement.
+
+### The 9000-byte trim
+
+Algolia rejects a whole batch if a single record is over 10 KB. One oversized record would fail an entire 1000-record request, so `_fit_record` keeps each record under 9000 bytes of UTF-8 JSON, leaving headroom below the limit:
+
+1. If the record is too big, `content` is cut by the excess number of bytes (a cut in the middle of a multi-byte character is dropped cleanly).
+2. If `content` is empty and the record is still too big, `parameters` is cleared.
+3. If neither helps, only the capped text fields are left and the record is sent as it is.
+
+Cutting by the excess bytes is enough in one pass, because removing n source bytes removes at least n JSON bytes. The 500-character caps on names, descriptions and signatures mean the first two steps almost always suffice.
+
+### A worked example
+
+This is a function record for an illustrative Python function at lines 42 to 48 of `src/auth/tokens.py` in repository 12:
+
+```json title="One Algolia record"
+{
+  "objectID": "12_07946c80715046c23e5533f046a8e8b6c92231e5",
+  "repository_id": 12,
+  "file_path": "src/auth/tokens.py",
+  "entity_type": "function",
+  "entity_name": "refresh_token",
+  "description": "Python function: refresh_token \u2014 Return a new access token for a refresh token.",
+  "parameters": ["session", "token: str"],
+  "return_type": "str",
+  "line_start": 42,
+  "line_end": 48,
+  "language": "python",
+  "signature": "def refresh_token(session, token: str) -> str:",
+  "content": "def refresh_token(session, token: str) -> str:\n    \"\"\"Return a new access token for a refresh token.\"\"\"\n    record = session.get(RefreshToken, token)\n    if record is None or record.expired:\n        raise InvalidToken(\"refresh token is not valid\")\n    record.rotate()\n    return record.access_token",
+  "rank_weight": 2,
+  "parameter_count": 2,
+  "lines_of_code": 7
+}
+```
+
+Reading it field by field:
+
+- `description` is the parser's label (`Python function: refresh_token`) plus the first line of the docstring. A method gets `Python method: Class.name`.
+- `parameters` and `return_type` come from Python's `ast`. Other languages take them from the tree-sitter parameter list and return field.
+- `rank_weight` is 2 because the type is `function`.
+- `lines_of_code` is 48 - 42 + 1 = 7, and `parameter_count` is the length of `parameters`.
+- `content` repeats the signature only once, because the body already starts with it.
+
+## Index settings
+
+`setup_index_settings` writes these settings. It runs at the start of each run, but only writes once per process, and only when the live settings differ. A missing index (`404`) is treated as empty, and `set_settings` creates it.
+
+| Setting | Value | Why |
+| --- | --- | --- |
+| `searchableAttributes` | `entity_name`, `description`, `content`, `parameters`, `file_path`, in that order | Order sets priority. A match in the name beats a match in the body |
+| `attributesForFaceting` | `filterOnly(repository_id)`, `entity_type`, `language`, `file_path` | Lets the filters in a query work. `filterOnly` skips facet counts for the ID |
+| `customRanking` | `desc(rank_weight)` | Breaks relevance ties, classes first |
+| `highlightPreTag`, `highlightPostTag` | `<mark>` and `</mark>` | Highlight markers in Algolia's highlight output |
+| `hitsPerPage` | 20 | Index default. `search_code` sends its own value |
+| `maxValuesPerFacet` | 100 | Cap on facet values returned |
+
+The settings task is not waited on. Algolia applies an index's tasks in order, and an unchanged settings task may never be reported as published, so waiting could hang.
+
+## Ranking
+
+Algolia ranks hits by its built-in relevance criteria first (typos, words matched, proximity, which attribute matched and exactness). `customRanking` only breaks ties between hits that are otherwise equal, which is why `rank_weight` is a tie-breaker and not a boost.
+
+| `entity_type` | `rank_weight` |
+| --- | --- |
+| `class` | 3 |
+| `function` | 2 |
+| `terraform_block` | 2 |
+| `doc_section` | 1 |
+| `import` | 0 |
+
+On a tie, a class beats a function or a Terraform block, a doc section comes next and an import comes last. The reasoning: if you search `UserService`, the class definition should come before every `import UserService` line that matches equally well.
+
+<Aside type="note">
+The relevance order described here is Algolia's own behaviour. CodeSage only sets `searchableAttributes` and `customRanking`. The search code does not change the other ranking criteria.
+</Aside>
+
+## Query parameters
+
+Every `search_code` query sends these parameters:
+
+| Parameter | Value | Effect |
+| --- | --- | --- |
+| `hitsPerPage` | The tool's `limit`: 1 to 50, default 10 | Results per page |
+| `page` | The tool's `page`: 0 or more, default 0 | Zero-based page |
+| `highlightPreTag`, `highlightPostTag` | `<mark>`, `</mark>` | Same markers as the settings |
+| `removeWordsIfNoResults` | `allOptional` | If nothing matches every word, Algolia drops the words that miss and returns the best partial matches |
+| `removeStopWords` | `true` | Ignores filler words such as "the" and "where" |
+| `ignorePlurals` | `true` | `parsers` matches `parser` |
+| `queryLanguages` | `["en"]` | The stop-word and plural rules are English |
+
+These five exist for one reason: Claude often sends a question in plain words, such as "where is the store created". A strict full-text match would return nothing for that. With `allOptional`, the query degrades gracefully into a keyword search.
+
+### Filters
+
+Filters are joined with `AND`. All three are optional.
+
+| Filter | Form | Notes |
+| --- | --- | --- |
+| Repository | `repository_id=12` | A numeric comparison. In a filters string, the facet form `repository_id:12` matches nothing, because the value is numeric |
+| Language | `language:"python"` | Value is quoted |
+| Entity type | `entity_type:"function"` | Value is quoted |
+
+The language and entity type values go through `_escape_filter_value`, which escapes backslashes and double quotes. A value cannot close the quote and add a filter clause of its own.
+
+Without a repository, `search_code` searches every repository. That includes repositories being reprocessed, since the filter only knows about the ID. See [Known limitations](/docs/limitations/).
+
+## Results and source links
+
+Each hit becomes a result with these fields: `entity_name`, `entity_type`, `file_path`, `line_start`, `line_end`, `language`, `signature`, `snippet`, `description` and `url`. The response also carries `query`, `repository`, `total_hits`, `page` and `pages`.
+
+| Field | Limit |
+| --- | --- |
+| `snippet` | First 600 characters of `content` |
+| `signature` | 300 characters, or `null` |
+| `description` | 300 characters, or `null` |
+
+The `url` is a permalink built from the repository's stored URL, the branch (or `HEAD` when none is set), the file path and the line range. Each path segment is percent-encoded.
+
+| Host | Link format |
+| --- | --- |
+| github.com | `https://github.com/<path>/blob/<ref>/<file>#L<start>-L<end>` |
+| gitlab.com, or any host starting with `gitlab.` | `https://<host>/<path>/-/blob/<ref>/<file>#L<start>-<end>` |
+| bitbucket.org | `https://<host>/<path>/src/<ref>/<file>#lines-<start>:<end>` |
+| Any other host | `null`. No link is built, because the link format is not known |
+
+Without a start line, the link points at the file with no line anchor. The dashboard labels the link "View on GitHub", or "View source" for another host.
+
+## Suggestions
+
+`GET /api/v1/ai/search/suggestions` drives the dashboard's auto-complete. It needs the API key (it searches all repositories, like `search_code`) and is limited to 100 requests a minute.
+
+- A query shorter than 2 characters (after trimming) returns an empty list.
+- It asks Algolia for twice the requested limit (the limit is 1 to 20, default 10) and returns the distinct `entity_name` values in rank order.
+- Any failure returns an empty list, because a broken suggestion box should never break the page.
+
+## Waits and timeouts
+
+Indexing and deleting return a task ID. The Algolia v3 client's `wait()` polls forever, and Algolia can leave a task unpublished indefinitely, so CodeSage polls `get_task` itself with a deadline.
+
+| Operation | Behaviour | Deadline |
+| --- | --- | --- |
+| Index records | Waits for each batch's task to be published | 300 s. On timeout it logs a warning and the run continues, because the records were accepted |
+| Delete before a reprocess | Waits for the `delete_by` task | 120 s. On timeout the run fails, to avoid stale records |
+| Plain repository delete | Sends `delete_by` and does not poll | None. Algolia applies an index's tasks in order |
+| Index settings | Not waited on | None |
+| `/health` Algolia probe | `list_indices` in a worker thread | 5 s, and the result is cached for 30 s |
+
+The poll starts at 0.1 s and doubles up to 2 s between calls.
+
+## Threads and clients
+
+The v3 `algoliasearch` client is synchronous. Calling it directly from an async handler would freeze the event loop, and with it the API, the WebSocket and every tool call, for the length of an Algolia round trip. Each call therefore runs in a worker thread through `asyncio.to_thread`.
+
+`AlgoliaService` is built per request, but the client is not. `_client_for` keeps one client per `(app_id, api_key)` pair, because each client owns an HTTP connection pool and a fresh client on every request would never reuse a connection.
+
+## One index per stack
+
+Records are keyed by repository ID, and each database numbers its repositories from 1. If a local database and a Docker database shared an index, repository 1 in each would write the same `1_<hash>` IDs when paths and lines match, and a delete of repository 1 in one would remove the other's records through `repository_id=1`.
+
+That is why each stack has its own index name:
+
+| Stack | Index | Override |
+| --- | --- | --- |
+| Local | `codesage_code_entities` | `ALGOLIA_INDEX_NAME` |
+| Docker dev | `codesage_code_entities_docker` | `DOCKER_ALGOLIA_INDEX_NAME` |
+| Docker prod | `codesage_code_entities_prod` | `PROD_ALGOLIA_INDEX_NAME` |
+
+If you need two databases, give each its own index name.
+
+## Failure behaviour
+
+| Situation | What Claude or the dashboard gets |
+| --- | --- |
+| Algolia credentials missing | "Search is not configured on the server (ALGOLIA_APP_ID / ALGOLIA_ADMIN_API_KEY are missing)." |
+| Any Algolia error during `search_code` | "Search is unavailable; try again later." The real error goes to the backend log, because the client's text can name the Algolia host or app ID |
+| Suggestions fail | An empty list |
+| Repository `failed`, `pending` or `processing` | A tool error with the reason or progress |
+
+See [MCP tools](/docs/reference/mcp-tools/) for the full argument list, and [Troubleshooting](/docs/troubleshooting/#algolia) for fixes.

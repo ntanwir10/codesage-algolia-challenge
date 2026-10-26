@@ -1,0 +1,319 @@
+---
+title: Claude Desktop
+description: Connect Claude Desktop to CodeSage with the installer or by hand, tune the bridge and see what each tool does.
+---
+
+import { Aside, LinkCard, Steps, TabItem, Tabs } from '@astrojs/starlight/components';
+import Mermaid from '~/components/Mermaid.astro';
+
+Claude Desktop talks to CodeSage through a small stdio program called the MCP bridge. Claude Desktop starts it, the bridge checks each tool call and forwards it to the backend over HTTP. This guide covers the installer, the manual setup, the bridge settings and how to check that everything works.
+
+<Mermaid caption="One tool call, end to end." code={`sequenceDiagram
+    actor You
+    participant Claude as Claude Desktop
+    participant Bridge as MCP bridge
+    participant API as Backend
+    participant Data as Algolia or SQLite
+    You->>Claude: ask a question
+    Claude->>Bridge: tools/call
+    Bridge->>API: POST /ai/mcp/tools/call
+    Note over API: checks key,<br/>origin, rate limit
+    API->>Data: query
+    Data-->>API: matches
+    API-->>Bridge: result or error
+    Bridge-->>Claude: tool result
+    Claude-->>You: answer with code`} />
+
+Two facts shape everything below:
+
+- **Schemas live in the bridge.** `tools/list` is answered from `backend/codesage_mcp/schemas.py`, so Claude sees the seven tools even when the backend is down. Only tool calls and resource reads need the backend.
+- **Arguments are checked twice.** The bridge validates them first, then the backend does again. Unknown arguments are rejected in both places, so a typo can't silently widen a query.
+
+## Before you start
+
+- `.venv` exists at the repository root (`make setup`).
+- `backend/.env` holds your Algolia credentials. `CODESAGE_API_KEY` is generated for you.
+- The backend is running (`make start-backend`) and at least one repository has status `completed`.
+
+## Install with the installer
+
+```bash
+make install-claude                 # merge CodeSage into the Claude Desktop config
+make install-claude ARGS=--dry-run  # print the merged config with the key masked; write nothing
+```
+
+`make install-claude` runs `scripts/ensure_api_key.py` and then `scripts/install_claude_desktop.py $(ARGS)`. The installer uses only the Python standard library. Restart Claude Desktop afterwards.
+
+<Aside type="note">
+Through `make`, even `--dry-run` runs `ensure_api_key.py` first, which can create the API key in `backend/.env` and `frontend/.env`. To avoid every write, call the installer directly: `.venv/bin/python scripts/install_claude_desktop.py --dry-run`.
+</Aside>
+
+### Options
+
+| Option | Default | Notes |
+| --- | --- | --- |
+| `--config PATH` | Per-OS location, see below | The Claude Desktop config file to merge into. Passing it also silences the "Claude Desktop doesn't seem to be installed" warning. |
+| `--name NAME` | `codesage` | Key under `mcpServers`. A second name gives a second entry and its own log file. |
+| `--server-url URL` | `MCP_SERVER_URL` from your shell, else `http://127.0.0.1:8001` | Backend base URL. Must be an `http` or `https` URL with a host. A URL that contains a password is refused. |
+| `--api-key KEY` | `CODESAGE_API_KEY` from `backend/.env` | Written into the entry's `env` block. |
+| `--basic-auth USER` | unset | For the prod stack behind nginx. Prompts for the password and stores it in the macOS Keychain (service `codesage-mcp`). No API key is written. |
+| `--dry-run` | off | Prints the merged config with `CODESAGE_API_KEY` shown as `********` and writes nothing. |
+
+Options go through `ARGS`:
+
+```bash
+make install-claude ARGS="--server-url https://your-host --basic-auth <user>"  # prod behind nginx
+make install-claude ARGS="--name codesage-dev --api-key <key>"                 # a second entry with an explicit key
+```
+
+`make` splits `ARGS` on spaces, so for a `--config` path that contains a space, run the script directly.
+
+### Dry run
+
+```bash
+make install-claude ARGS=--dry-run
+```
+
+The output starts with `# dry run: would write <config path>` and then the whole merged config, with your other servers intact:
+
+```json
+{
+  "mcpServers": {
+    "codesage": {
+      "command": "/path/to/codesage-algolia-challenge/mcp_launcher.sh",
+      "env": {
+        "MCP_SERVER_URL": "http://127.0.0.1:8001",
+        "CODESAGE_API_KEY": "********"
+      }
+    }
+  }
+}
+```
+
+### Config file locations
+
+<Tabs syncKey="os">
+  <TabItem label="macOS">
+    ```text
+    ~/Library/Application Support/Claude/claude_desktop_config.json
+    ```
+  </TabItem>
+  <TabItem label="Windows">
+    ```text
+    %APPDATA%\Claude\claude_desktop_config.json
+    ```
+    If `APPDATA` is unset, the installer falls back to `~\AppData\Roaming`.
+  </TabItem>
+  <TabItem label="Linux">
+    ```text
+    ~/.config/Claude/claude_desktop_config.json
+    ```
+  </TabItem>
+</Tabs>
+
+<Aside type="caution">
+The launcher, `mcp_launcher.sh`, is a bash script that runs `.venv/bin/python`. That layout is Unix. The installer knows the Windows config path, but the project sources don't describe a Windows run, so treat Windows as untested. `--basic-auth` needs the macOS `security` command and works on macOS only.
+</Aside>
+
+### What the installer does
+
+- **Merges one entry.** It adds or replaces `mcpServers.<name>` and keeps every other key and server. It refuses a config whose `mcpServers` isn't an object (`error: 'mcpServers' in the existing config is not an object`).
+- **Backs up first.** If the config exists, it writes `claude_desktop_config.json.bak-<YYYYMMDD-HHMMSS>-<pid>` next to it, with a `-1`, `-2` suffix if the name is taken. The backup is a byte-exact copy and prints as `backup: <path>`.
+- **Protects the key.** Both files are written atomically (temp file, then rename) at mode 600, because they can hold the API key.
+- **Refuses to overwrite a bad file.** If the config isn't valid JSON (`error: <path> is not valid JSON (...); refusing to overwrite it`) or isn't a JSON object, it exits with an error and changes nothing. An unreadable config, or a folder it can't write to, is a one-line error, checked before the Keychain is touched, so a failed run leaves no stray item.
+- **Warns when Claude Desktop looks missing.** If the default config folder doesn't exist, it prints `warning: <folder> does not exist; Claude Desktop doesn't seem to be installed` and creates the folder anyway.
+- **Reads the key from `backend/.env`.** `--api-key` wins. With `--basic-auth` it doesn't copy the backend's key, because nginx adds it, and the entry gets an empty `CODESAGE_API_KEY`. Run directly with no key and no `--basic-auth`, it warns `no API key found (...); writing it empty`.
+- **Rejects bad URLs.** `error: --server-url must be an http(s) URL with a host`, and, for a URL with a password, an error that points you to `--basic-auth USER`.
+- **Keeps passwords out of the config.** The `--basic-auth` password is read by `security` from a prompt, never from the command line, and is never written to the file.
+
+On success it prints `updated <config>: mcpServers.<name> -> <repo>/mcp_launcher.sh` and `Restart Claude Desktop to pick it up.`
+
+## Install by hand
+
+Copy `claude_desktop_config.example.json` into your Claude Desktop config. Set the **absolute** launcher path and your key (read it from `backend/.env`; don't paste it anywhere public):
+
+```json title="claude_desktop_config.json"
+{
+  "mcpServers": {
+    "codesage": {
+      "command": "/absolute/path/to/codesage-algolia-challenge/mcp_launcher.sh",
+      "env": {
+        "MCP_SERVER_URL": "http://127.0.0.1:8001",
+        "CODESAGE_API_KEY": "your-api-key"
+      }
+    }
+  }
+}
+```
+
+If the file already has other servers, add the `codesage` object inside the existing `mcpServers`. Then restart Claude Desktop.
+
+## The launcher
+
+`mcp_launcher.sh` does three things before it hands over to the bridge:
+
+1. **Finds Python.** If `.venv/bin/python` is missing it prints `` CodeSage: <path> not found. Run `make setup` in <repo> to create the virtualenv. `` to stderr and exits. If `codesage_mcp` or `mcp` can't be imported it prints `` CodeSage: the Python dependencies are missing in <repo>/.venv. Run `make setup` in <repo>. `` and exits.
+2. **Looks up the basic-auth password.** If `CODESAGE_BASIC_AUTH_USER` is set, `CODESAGE_BASIC_AUTH_PASSWORD` is not, and `security` exists, it reads the password from the Keychain with `security find-generic-password -s codesage-mcp -a <user> -w`. A missing entry gives an empty password and `CodeSage: no Keychain password found for <user> (service codesage-mcp); continuing with an empty password.` on stderr.
+3. **Starts the bridge.** `cd backend && exec .venv/bin/python -m codesage_mcp`.
+
+Configuration comes only from the environment, which Claude Desktop fills from the `env` block. The bridge does not read `backend/.env`.
+
+## Bridge settings
+
+| Variable | Default | Notes |
+| --- | --- | --- |
+| `MCP_SERVER_URL` | `http://127.0.0.1:8001` | Backend base URL, without `/api/v1`. A trailing `/` is removed. Requests go to `/api/v1/ai/...`. |
+| `CODESAGE_API_KEY` | unset | Sent as the `X-API-Key` header. |
+| `CODESAGE_BASIC_AUTH_USER` | unset | Login for the prod nginx. |
+| `CODESAGE_BASIC_AUTH_PASSWORD` | unset | Normally supplied by the launcher from the Keychain. Setting it in `env` stores it in plain text. |
+| `CODESAGE_ALLOW_INSECURE_AUTH` | unset | `1` allows the key or login over plain `http://` to a non-loopback host. |
+| `CODESAGE_MCP_LOG_LEVEL` | `INFO` | Python log level for stderr. |
+| `SSL_CERT_FILE` | unset | Standard TLS variable. Point it at a self-signed certificate for the prod stack. |
+
+Request behavior:
+
+- **Plain-http refusal.** If a key, a login or a `user:password@` in the URL would go over `http://` to a host other than `127.0.0.1`, `localhost` or `::1`, the call returns an error and sends nothing: `Refusing to send the CodeSage key or login over plain http to <host>; use an https:// MCP_SERVER_URL, or set CODESAGE_ALLOW_INSECURE_AUTH=1 on a trusted network`.
+- **URL check.** `MCP_SERVER_URL` must start with `http://` or `https://` and have a host, or the call errors and sends nothing.
+- **Retry.** A failed connection (refused, or none within 5 seconds) is retried once. After the second failure the call errors with "not reachable".
+- **Timeout.** 30 seconds per request. A slow answer errors with `did not answer within 30 s` and is not retried.
+- **Redaction.** Messages and logs show the URL without any `user:password@`. The startup log line `CodeSage MCP bridge starting; backend=<url> api_key=True` records only whether a key is set.
+
+## Prod: the `--basic-auth` flow
+
+In the prod Docker stack nginx asks for a login and adds the API key itself. Install against it like this:
+
+<Steps>
+
+1. Run the installer with your login name:
+
+   ```bash
+   make install-claude ARGS="--server-url https://your-host --basic-auth <user>"
+   ```
+
+2. It prints `Enter the password for <user>; it is stored in the Keychain only.` and runs `security add-generic-password -U -s codesage-mcp -a <user> -w`. Type the password at the prompt. It never appears in the process arguments.
+
+3. The config entry gets `MCP_SERVER_URL`, an empty `CODESAGE_API_KEY` and `CODESAGE_BASIC_AUTH_USER`. The password stays in the Keychain.
+
+4. Restart Claude Desktop. At each start the launcher reads the password from the Keychain.
+
+</Steps>
+
+If the Keychain write fails (prompt cancelled or keychain locked) the installer prints `error: could not store the password in the Keychain (prompt cancelled or keychain locked?); nothing was changed`. For a self-signed certificate, add `SSL_CERT_FILE=/path/to/cert.pem` to the entry's `env`. Without the Keychain, set `CODESAGE_BASIC_AUTH_PASSWORD` in `env`; it is stored in plain text in a file the installer keeps at mode 600. More in [Docker](/docs/guides/docker/) and [Production deployment](/docs/guides/production/).
+
+## Example prompts for each tool
+
+`repository` accepts the numeric ID, the name or `owner/name`; matching on names ignores case. Every tool except `list_repositories` and `add_repository` refuses a repository that isn't `completed`. Full argument tables are in the [MCP tools reference](/docs/reference/mcp-tools/).
+
+### `list_repositories`
+
+> What repositories do you have in CodeSage, and are they ready?
+
+Claude calls `list_repositories` with no arguments. It gets each repository's `id`, `name`, `url`, `branch`, `status`, `total_files`, `total_entities`, `error_message` and `processed_at`, and can tell you which are still indexing or failed.
+
+### `search_code`
+
+> Search the zustand repository for where the store is created.
+
+Claude calls `search_code` with something like `{"query": "create store", "repository": "pmndrs/zustand", "limit": 10}`. Each hit has the entity name and type, file path, line range, language, signature, a snippet and a source link to the exact lines. Optional arguments are `language`, `entity_type` (`function`, `class`, `import`, `doc_section` or `terraform_block`), `limit` (1 to 50) and `page` (zero-based). A question in plain words works.
+
+### `get_file`
+
+> Show me lines 40 to 120 of `src/vanilla.ts` in zustand.
+
+Claude calls `get_file` with `repository`, `path`, `start_line` and `end_line`. Lines come back numbered, as `   12| code`. A call returns at most 400 lines and 100,000 characters; if a cap cut it short the result has `truncated: true` and Claude asks again from a later `start_line`. A wrong path gets up to 10 close suggestions.
+
+### `list_definitions`
+
+> List all the classes under `src/auth/` in my-org/api.
+
+Claude calls `list_definitions` with `path_prefix`, `entity_type` and optionally `name` (a case-insensitive substring) and `limit` (1 to 500, default 100). Results are ordered by file path and line, and `total` counts all matches.
+
+### `analyze_repository`
+
+> Give me an overview of my-org/api: size, languages and the biggest files.
+
+Claude calls `analyze_repository`. It gets file, line and entity totals, `entities_by_type`, `files_by_language`, `definitions_by_language`, the 10 `top_directories` by file count and the 10 `largest_files` by line count. These are counts only; Claude does the interpreting.
+
+### `find_patterns`
+
+> Find every line in my-org/api that matches `TODO|FIXME`, only under `src/`.
+
+Claude calls `find_patterns` with `{"pattern": "TODO|FIXME", "regex": true, "path_glob": "src/*"}`. The pattern is 1 to 200 characters. `path_glob` is matched against the whole path, case-sensitive, and `*` also matches `/`. Regex search gives each file 1 second and the whole call 10 seconds; files over 1,000,000 characters are skipped; a call that runs out of time returns `truncated: true` and lists `skipped_files` (the first 50) with `skipped_count`. Literal search has no time limit.
+
+### `add_repository`
+
+> Add https://gitlab.com/group/project to CodeSage, then tell me when it's ready.
+
+Claude calls `add_repository` with the URL (and optionally `branch` and `description`). It returns `repository_id`, `name`, `status` and the message `Indexing started; check list_repositories for progress.` Claude then polls `list_repositories` and searches once the status is `completed`. This is the only tool that changes anything. See [Other git hosts](/docs/guides/other-git-hosts/).
+
+## How errors look in Claude
+
+A failure reaches Claude as a tool error with a message that says what to fix. Claude usually relays it to you. The common ones:
+
+| Situation | What Claude sees |
+| --- | --- |
+| Backend not running (loopback) | `` CodeSage backend not reachable at http://127.0.0.1:8001; start it with `make start-backend` `` |
+| Backend not running (remote) | `CodeSage backend not reachable at <url>; check MCP_SERVER_URL and that the host is up` |
+| Key rejected (401) | `CodeSage backend rejected the API key (401); check CODESAGE_API_KEY in the MCP server config` |
+| No key configured | `No API key is configured; set CODESAGE_API_KEY in the MCP server's env in the Claude Desktop config.` |
+| Proxy login rejected | `The proxy in front of CodeSage rejected the login (401); check the user and password (CODESAGE_BASIC_AUTH_USER and its Keychain entry)` |
+| Host refused (403) | `CodeSage refused the request (403): <detail>. If the backend runs on another host, add that host to ALLOWED_HOSTS on the backend and check MCP_SERVER_URL.` |
+| Wrong URL (404) | `The backend returned 404 for <path>; check that MCP_SERVER_URL points at the backend root (no /api/v1).` |
+| Bad arguments, caught by the bridge | `Invalid arguments for '<name>': <field>: <reason>` |
+| Bad arguments, caught by the backend | `Invalid arguments for '<name>' (422)` with the details |
+| Rate limit (429) | `CodeSage backend rate limit exceeded (429); wait a moment and retry` |
+| Backend error | `CodeSage backend error (500): Internal server error (request <id>)`, with the ID in the backend log |
+| Proxy error page | `CodeSage backend error (<status>); the backend or the proxy in front of it may be down.` |
+| Timeout | `CodeSage backend did not answer within 30 s.` |
+| Unknown tool | `Unknown tool '<name>'. Available tools: ...` |
+| Repository failed | `Repository '<name>' failed to index: <reason>. Reprocess it from the dashboard.` |
+| Repository still running | `Repository '<name>' is still indexing (120/400 files); try again when it completes.` |
+| Unknown repository | `Repository '<ref>' not found. Available repositories: ...` |
+| Ambiguous name | `Repository '<ref>' is ambiguous: a/x (id 1), b/x (id 2). Use the numeric ID.` |
+| Algolia not set up | `Search is not configured on the server (ALGOLIA_APP_ID / ALGOLIA_ADMIN_API_KEY are missing).` |
+| Algolia failure | `Search is unavailable; try again later.` (the detail is only in the backend log) |
+
+Tool calls and resource reads are limited to 30 per minute per client address. Resource reads fail as MCP protocol errors with the same wording instead of tool errors. The full list, with fixes, is in [Troubleshooting](/docs/troubleshooting/).
+
+## Resources
+
+The bridge also answers `resources/list` and `resources/read`. Reading needs the API key.
+
+| URI | Content |
+| --- | --- |
+| `codesage://repositories` | The same data as `list_repositories` |
+| `codesage://repositories/{id}/files` | `repository`, `total_files`, `truncated` and `files` (path, language, line count): at most the first 5000 files |
+
+`{id}` is the numeric ID. Only the first URI is listed by `resources/list`; the second is read by URI. The server offers tools and resources only, no prompts.
+
+## Where the log lives
+
+The bridge writes to stderr, and Claude Desktop keeps that as the MCP log for the server. On macOS:
+
+```text
+~/Library/Logs/Claude/mcp-server-codesage.log
+```
+
+The file is named after the key under `mcpServers`, so an entry made with `--name codesage-dev` logs to `mcp-server-codesage-dev.log`. The project sources give no log path for Windows or Linux; look in Claude Desktop's logs folder.
+
+## Check the bridge with the MCP Inspector
+
+From the repository root:
+
+```bash
+npx @modelcontextprotocol/inspector ./mcp_launcher.sh
+```
+
+Set `MCP_SERVER_URL` and `CODESAGE_API_KEY` in the Inspector's environment fields, or export them first. You should see seven tools under **Tools**. With the backend running, calling one returns JSON.
+
+## Limits to know
+
+- The backend must be running. The bridge doesn't start it.
+- The rate limit is per address, so everything behind one IP shares it, such as nginx in the prod stack.
+- `search_code` without `repository` includes repositories that are being reprocessed.
+- `add_repository` can't read private repositories except on github.com.
+
+<LinkCard title="MCP tools reference" description="Every tool, argument, default and limit." href="/docs/reference/mcp-tools/" />
+<LinkCard title="MCP endpoints reference" description="The HTTP endpoints behind the bridge." href="/docs/reference/mcp-endpoints/" />
+<LinkCard title="Other git hosts" description="Add GitLab, Bitbucket and self-hosted repositories." href="/docs/guides/other-git-hosts/" />
+<LinkCard title="Troubleshooting" description="Symptoms, causes and fixes." href="/docs/troubleshooting/" />

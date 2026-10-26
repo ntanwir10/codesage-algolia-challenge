@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="32" height="32" role="img" aria-label="CodeSage">
+  <rect width="32" height="32" rx="7" fill="#0f1722"/>
+  <rect x="7" y="8" width="11" height="3" rx="1.5" fill="#7d8aa0"/>
+  <rect x="5" y="13.5" width="22" height="5" rx="1.5" fill="#ffd23f"/>
+  <rect x="7" y="14.5" width="15" height="3" rx="1.5" fill="#0f1722"/>
+  <rect x="7" y="21" width="8" height="3" rx="1.5" fill="#7d8aa0"/>
+</svg>

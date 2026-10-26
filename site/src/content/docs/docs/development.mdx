@@ -1,0 +1,231 @@
+---
+title: Development
+description: How to run the tests and linters, what CI does, and how to add a migration, a language parser or an MCP tool to CodeSage.
+---
+
+import { Aside, FileTree, Steps } from '@astrojs/starlight/components';
+
+This page is for people changing CodeSage itself. To run it, start with [Quick start](/docs/quick-start/). The architecture behind the code is in [Architecture](/docs/concepts/architecture/).
+
+## Set up
+
+<Steps>
+
+1. **Install.** `make setup` copies `.env.example` to `backend/.env` if it is missing, creates `.venv` at the repo root, installs `backend/requirements-dev.txt`, runs `npm ci` in `frontend/`, and generates `CODESAGE_API_KEY`. It stops with a message if Python 3.13 (or `uv`) or Node 22 is missing.
+
+2. **Run.** `make start` starts the backend on `http://127.0.0.1:8001` with `--reload`, waits up to 15 seconds for `/health`, then starts Vite on `http://localhost:5173`.
+
+3. **Run a half.** `make start-backend` and `make start-frontend` run them separately. `make stop` stops the listeners on ports 8001 and 5173.
+
+</Steps>
+
+## Repository layout
+
+<FileTree>
+
+- backend/
+  - app/ FastAPI app
+    - api/v1/ routes: `endpoints/repositories.py`, `ai.py`, `performance.py`
+    - core/ config, security, database, migrations
+    - models/ SQLAlchemy tables
+    - schemas/ pydantic models for the REST API
+    - services/ repository, GitHub, git, parser, Algolia, MCP tools, WebSocket, metrics
+    - main.py
+  - codesage_mcp/ stdio MCP bridge and the shared tool schemas
+  - alembic/ migrations, applied at start-up
+  - tests/ pytest suite
+  - pyproject.toml ruff settings
+  - pytest.ini
+- frontend/
+  - src/pages/ Home, Repository, Dashboard
+  - src/components/ layout, forms, features, ui
+  - src/services/ api.ts and websocket.ts
+  - src/hooks/ and src/lib/
+  - src/test/setup.ts
+- deployment/ Compose files, nginx configs, DOCKER.md
+- docs/ architecture notes and the MCP guide
+- scripts/ ensure_api_key.py and install_claude_desktop.py
+- site/ this documentation site
+- mcp_launcher.sh what Claude Desktop starts
+- Makefile
+
+</FileTree>
+
+## Run the tests
+
+### Backend
+
+```bash
+make test                                     # .venv/bin/python -m pytest backend/tests -v
+cd backend && ../.venv/bin/python -m pytest   # what CI runs, from backend/
+cd backend && ../.venv/bin/python -m pytest tests/test_git_source.py -k clone   # one file, filtered
+```
+
+`backend/pytest.ini` sets `testpaths = tests`, `pythonpath = .` and `asyncio_mode = auto`, so async tests need no decorator.
+
+The tests never touch your real database, Algolia or GitHub. `tests/conftest.py` sets the environment before any app module loads: `DATABASE_URL=sqlite://`, test Algolia and GitHub values, an empty `CODESAGE_API_KEY`, and loopback host settings. `load_dotenv()` never overrides variables that are already set, so your `backend/.env` cannot leak into a test.
+
+| Fixture | What it gives you |
+| --- | --- |
+| `reset_rate_limits` (automatic) | Clears slowapi counters before each test |
+| `no_real_github_check` (automatic) | Replaces `GitHubService.check_repository` and `AlgoliaService.is_available`. Opt out with `@pytest.mark.real_github_check` |
+| `db_engine`, `db_session` | A fresh in-memory SQLite database per test, shared through `StaticPool` |
+| `job_sessions` | Points background jobs at the test database |
+| `client` | A `TestClient` for `app.main.app` on `http://localhost` with a loopback peer, using the test database |
+| `algolia_index` | A fake Algolia index that keeps the real record-building code. Has switches such as `fail_saves`, `fail_deletes` and `stuck_tasks` |
+| `github` | A fake that controls what `get_repository_files` returns, including `skipped_files` and `listing_truncated` |
+
+The test files:
+
+| File | Covers |
+| --- | --- |
+| `test_code_parser.py` | Entity extraction for each language |
+| `test_algolia_service.py` | Records, trimming, settings, waits, filters |
+| `test_github_service.py`, `test_git_source.py` | URL parsing, listing, selection, retries, the git sandbox |
+| `test_repository_create.py`, `test_repository_jobs.py`, `test_repository_processing.py` | Adding, job lifecycle, the full run and its failures |
+| `test_api_security.py`, `test_auth_integration.py`, `test_error_handlers.py` | The key, the request guard, rate limits, error shapes |
+| `test_mcp_tools.py`, `test_mcp_api.py`, `test_mcp_stdio_server.py` | The seven tools, their HTTP endpoints, and the bridge |
+| `test_websocket.py` | Auth, caps, frames and broadcast |
+| `test_migrations.py` | Upgrade, stamping and the dropped columns |
+| `test_performance.py` | The metrics service |
+| `test_install_claude_desktop.py`, `test_ensure_api_key.py` | The scripts in `scripts/` |
+
+### Frontend
+
+```bash
+cd frontend && npm test          # vitest run (single pass)
+cd frontend && npx vitest        # watch mode
+```
+
+Vitest uses jsdom with globals on, and `src/test/setup.ts` as its setup file. Tests sit next to the code they cover as `*.test.ts` or `*.test.tsx`: the three pages, `ErrorBoundary`, `services/api` and `services/websocket`, and the `lib` helpers for errors, polling and the query client. They are unit tests, with no browser and no backend.
+
+## Lint and build
+
+```bash
+.venv/bin/ruff check backend                  # backend lint, from the repo root
+cd backend && ../.venv/bin/ruff check . ../scripts   # what CI runs
+cd frontend && npm run lint                   # eslint .
+cd frontend && npm run build                  # tsc -b && vite build
+```
+
+Ruff is configured in `backend/pyproject.toml`: target `py313`, rules `E`, `F`, `I`, `B` and `UP`, line length 100 with `E501` ignored (the formatter owns length), and `alembic/versions` excluded. A few files ignore `E402` because they load `.env` or pin variables before importing settings. The frontend uses ESLint with `typescript-eslint`, `react-hooks` and `react-refresh` rules.
+
+## CI
+
+The workflow is [`.github/workflows/ci.yml`](https://github.com/ntanwir10/codesage-algolia-challenge/blob/master/.github/workflows/ci.yml). It runs on pushes to `master` and on every pull request, with a read-only token (`contents: read`). Three jobs run on `ubuntu-latest`.
+
+| Job | Steps |
+| --- | --- |
+| `backend` (working directory `backend`) | Check out. Set up Python 3.13 with the pip cache keyed on `backend/requirements*.txt`. `pip install -r requirements-dev.txt`. `ruff check . ../scripts`. `python -m pytest` |
+| `frontend` (working directory `frontend`) | Check out. Set up Node 22 with the npm cache keyed on `package-lock.json`. `npm ci`. `npm run lint`. `npm run build`. `npm test --if-present` |
+| `docker` | Check out. `cp .env.example backend/.env` (Compose reads it through `env_file`). `docker compose -f deployment/docker-compose.yml config -q`. The same for `docker-compose.prod.yml`. `docker build -f backend/Dockerfile.prod backend`. `nginx -t` on the dev config, with `backend` mapped to a dummy address. `nginx -t` on the rendered prod template, using a throwaway certificate, htpasswd and key. `docker build frontend` |
+
+CI does not build the dev backend image (`backend/Dockerfile`) and never starts a container. The prod stack was last run by hand with a self-signed certificate.
+
+## Add a database migration
+
+The schema is owned by Alembic. The models in `app/models/` are the source of truth, and migrations record each change.
+
+<Steps>
+
+1. **Change the model.** Edit the SQLAlchemy model. A new model must be imported in `app/models/__init__.py` so autogenerate and `create_all` see it.
+
+2. **Generate the migration.**
+
+   ```bash
+   make db-migration   # asks for a message, then runs alembic revision --autogenerate in backend/
+   ```
+
+3. **Edit it.** Autogenerate misses some things, so read the file. SQLite cannot alter columns or constraints in place, so use `op.batch_alter_table(...)`, as the existing migrations do. `alembic/env.py` already sets `render_as_batch=True` and `compare_type=True`. Write a real `downgrade`. Drop an index before you drop its column.
+
+4. **Apply and test.**
+
+   ```bash
+   make db-migrate     # alembic upgrade head, against backend/codesage.db
+   make test
+   ```
+
+5. **Update the test constant.** `tests/test_migrations.py` has a `HEAD` constant naming the latest revision. Change it and add a case for what your migration does.
+
+</Steps>
+
+The server also runs migrations at start-up, so a new revision applies the next time the backend starts. The existing revisions use short names (`baseline`, `cleanup`, `drop_unused_columns`) instead of hashes. See [Data model](/docs/concepts/data-model/#migrations) for what each does.
+
+<Aside type="caution">
+A database that has the app tables but no `alembic_version` is stamped at `baseline` and then upgraded. If you rename or reorder revisions, that rule breaks for old databases.
+</Aside>
+
+## Add a language parser
+
+All parsing is in [`backend/app/services/code_parser.py`](https://github.com/ntanwir10/codesage-algolia-challenge/blob/master/backend/app/services/code_parser.py). `CodeParser.parse` picks a path by language:
+
+1. A language in `self.parsers` uses its own method: `python`, `markdown`, `terraform` and `hcl`.
+2. A language in `LANGUAGE_SPECS` uses the generic tree-sitter walk.
+3. Anything else returns no entities.
+
+Whichever you choose, start with the extension.
+
+<Steps>
+
+1. **Map the extension.** Add it to `EXT_TO_LANGUAGE` in `backend/app/services/github_service.py`. Without it, files of that type are dropped before they reach the parser. If the language is documentation or data rather than program source, also add it to `NON_PROGRAMMING_LANGUAGES` in `repository_service.py`, so it does not become a repository's primary language.
+
+2. **Choose the path.**
+
+   - **A tree-sitter language** needs one `LanguageSpec` in `LANGUAGE_SPECS`. Build it with `_spec(label, grammar, functions, classes, imports, methods=(), return_fields=("return_type",))`. `label` is the display name used in descriptions. `grammar` is the name passed to `tree_sitter_language_pack.get_parser`. The three sets are tree-sitter node types for function-like nodes, class-like nodes and imports. `return_fields` lists the field names that hold a return type.
+   - **Anything else** needs a method `_parse_xxx(self, content, file_path)` that returns a list of entities, registered in the `self.parsers` dictionary in `CodeParser.__init__`.
+
+3. **Handle naming quirks.** The generic walk reads names from the `name` field. If your language differs, extend `_function_name` (see the C and C++ and Go cases), `_class_name` (Rust `impl`) or `_class_parents`.
+
+4. **Emit entities.** Each is a `ParsedCodeEntity` with these fields:
+
+   | Field | Meaning |
+   | --- | --- |
+   | `entity_type` | One of `function`, `class`, `import`, `doc_section`, `terraform_block` |
+   | `name` | The entity's name |
+   | `description` | A label such as `Python function: name`, plus a docstring line where there is one |
+   | `line_start`, `line_end` | 1-based and inclusive |
+   | `parameters`, `return_type` | Optional |
+   | `content` | The definition line |
+   | `body` | `make_body(lines, line_start, line_end)`, capped at 60 lines and 2000 characters |
+
+5. **Test it.** Add cases to `tests/test_code_parser.py`.
+
+</Steps>
+
+A parser that raises is not fatal: the run stores the file without entities and counts it in the `Partially indexed` note. If you need a new entity type, add it to `RANK_WEIGHTS` in `algolia_service.py`, to the `EntityType` literal in `codesage_mcp/schemas.py`, and to the `entity_type` filters and docs.
+
+## Add an MCP tool
+
+A tool has two halves: a schema that the bridge and the backend both read, and a handler that only the backend runs.
+
+<Steps>
+
+1. **Define the arguments** in [`backend/codesage_mcp/schemas.py`](https://github.com/ntanwir10/codesage-algolia-challenge/blob/master/backend/codesage_mcp/schemas.py). Subclass `_Args`, which forbids unknown arguments so a typo cannot widen a query. Use `Field` with a description and bounds. This module is imported by the bridge, so it must not import app, database, Algolia or settings code.
+
+2. **Register the tool** by adding a `ToolSpec(name=..., description=..., args_model=...)` to `TOOLS`. The bridge builds `tools/list` from this dictionary, and `/api/v1/ai/mcp/tools` and `/capabilities` read it too.
+
+3. **Write the handler** in [`backend/app/services/mcp_tools.py`](https://github.com/ntanwir10/codesage-algolia-challenge/blob/master/backend/app/services/mcp_tools.py): `async def my_tool(db: Session, args: schemas.MyToolArgs) -> dict`. Use `resolve_repository` to look up a repository by ID, name or `owner/name`, and `_require_ready` to refuse one that is not `completed`. Return a JSON-serialisable dictionary of measured data. Raise `ToolError` with a message the caller can act on. The endpoint returns it as `is_error: true`.
+
+4. **Register the handler** in the `HANDLERS` dictionary under the same name.
+
+5. **Test it.** Add cases to `tests/test_mcp_tools.py`, and check the HTTP path in `tests/test_mcp_api.py` and the bridge in `tests/test_mcp_stdio_server.py`.
+
+6. **Update the docs.** Tool counts appear in the README and in these pages. See [MCP tools](/docs/reference/mcp-tools/).
+
+</Steps>
+
+Bad arguments become a `422` from pydantic. Every tool call already needs the API key and counts toward the 30-per-minute limit, because the key and limiter are on the `/mcp/tools/call` endpoint, not on each tool.
+
+## Conventions in the code
+
+- **Comments say why.** Look at how existing comments explain a constraint (for example, why a close happens before accept). Match that.
+- **Messages are written for people.** Exceptions meant for the person who added a repository set `user_facing = True`, and their text is recorded as is. Everything else is recorded as `ClassName: message`, cut to 500 characters, and database errors become a fixed string.
+- **Blocking work leaves the event loop.** Parsing, the Algolia client and bulk database commits run through `asyncio.to_thread`.
+- **A job owns its session.** Background jobs open `SessionLocal()` themselves. Request handlers use `get_db`.
+- **Fail closed, and say why.** A run that would leave nothing searchable fails with a reason. A failed batch is rolled back so later batches are not poisoned.
+- **Secrets stay out of messages.** Client errors that can name an Algolia host stay in the log, and the user sees a fixed sentence.
+- **Tests pin the environment** before importing the app, and use fakes for Algolia and GitHub. They never reach the network.
+- **Frontend tests live beside the code**, and `@` is an alias for `src`.
+- **No emoji in docs, and plain wording.** Keep new documentation in the same style as these pages.
+
+Back to [Architecture](/docs/concepts/architecture/) or [Known limitations](/docs/limitations/).

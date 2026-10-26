@@ -1,0 +1,386 @@
+---
+// Replaces Starlight's Hero on the landing page; other hero pages (the 404) keep the default.
+import DefaultHero from '@astrojs/starlight/components/Hero.astro';
+
+const isLanding = Astro.url.pathname === '/';
+const code = [
+	[66, "  const setState: StoreApi<TState>['setState'] = (partial, replace) => {"],
+	[69, '    const nextState ='],
+	[70, "      typeof partial === 'function'"],
+	[71, '        ? (partial as (state: TState) => TState)(state)'],
+	[72, '        : partial'],
+	[73, '    if (!Object.is(nextState, state)) {'],
+	[74, '      const previousState = state'],
+	[75, '      state ='],
+	[76, "        (replace ?? (typeof nextState !== 'object' || nextState === null))"],
+	[77, '          ? (nextState as TState)'],
+	[78, '          : Object.assign({}, state, nextState)'],
+	[79, '      listeners.forEach((listener) => listener(state, previousState))'],
+	[80, '    }'],
+	[81, '  }'],
+] as const;
+const marked = new Set([73, 79]);
+---
+
+{!isLanding && <DefaultHero />}
+{isLanding && (
+<section class="cs-hero not-content" aria-labelledby="_top">
+	<div class="cs-hero-copy">
+		<p class="cs-eyebrow">Self-hosted MCP server · Algolia search · Claude Desktop</p>
+		<h1 id="_top">Give Claude a <mark>search index</mark> of your codebase.</h1>
+		<p class="cs-lede">
+			CodeSage parses a repository into functions, classes, imports, Markdown sections and Terraform
+			blocks, indexes them in Algolia, and gives Claude Desktop seven tools to search and read them.
+			A web dashboard adds repositories, shows indexing live and searches the index.
+		</p>
+		<div class="cs-actions">
+			<a class="cs-btn cs-btn-primary" href="/docs/quick-start/">Quick start</a>
+			<a class="cs-btn" href="/docs/introduction/">What is CodeSage?</a>
+			<a class="cs-btn cs-btn-ghost" href="https://github.com/ntanwir10/codesage-algolia-challenge"
+				>Source on GitHub</a
+			>
+		</div>
+		<dl class="cs-facts">
+			<div><dt>7</dt><dd>MCP tools</dd></div>
+			<div><dt>13</dt><dd>languages parsed</dd></div>
+			<div><dt>1000</dt><dd>files per run</dd></div>
+			<div><dt>Live</dt><dd>WebSocket progress</dd></div>
+		</dl>
+	</div>
+
+	<figure class="cs-chat" aria-label="Example Claude Desktop conversation using CodeSage">
+		<div class="cs-chat-bar">
+			<span aria-hidden="true" class="cs-dots"><i></i><i></i><i></i></span>
+			<span>Claude Desktop</span>
+			<span class="cs-chat-mcp">codesage connected</span>
+		</div>
+		<div class="cs-chat-body">
+			<p class="cs-msg-user">In zustand, how does <code>setState</code> decide whether to notify subscribers?</p>
+
+			<div class="cs-tool">
+				<div class="cs-tool-head">
+					<span class="cs-tool-name">search_code</span>
+					<code>{'{ query: "createStoreImpl", repository: "pmndrs/zustand" }'}</code>
+				</div>
+				<ol class="cs-hits">
+					<li>
+						<span class="cs-kind">function</span>
+						<b>createStoreImpl</b>
+						<span class="cs-path">src/vanilla.ts:60–97</span>
+					</li>
+					<li>
+						<span class="cs-kind">function</span>
+						<b>setState</b>
+						<span class="cs-path">src/vanilla.ts:66–81</span>
+					</li>
+				</ol>
+			</div>
+
+			<div class="cs-tool">
+				<div class="cs-tool-head">
+					<span class="cs-tool-name">get_file</span>
+					<code>{'{ path: "src/vanilla.ts", start_line: 66, end_line: 81 }'}</code>
+				</div>
+				<pre class="cs-code"><code>{
+					code.map(([n, line]) => (
+						<span class:list={['cs-line', { 'cs-line-mark': marked.has(n) }]}><span class="cs-ln">{n}</span>{line}{'\n'}</span>
+					))
+				}</code></pre>
+			</div>
+
+			<p class="cs-msg-claude">
+				<code>setState</code> computes the next state, then compares it with <code>Object.is</code> on
+				line 73. Only when the state changed does it merge (or replace) and call every listener with
+				the new and previous state, on line 79.
+				<a href="https://github.com/pmndrs/zustand/blob/HEAD/src/vanilla.ts#L66-L81">src/vanilla.ts#L66-L81</a>
+			</p>
+		</div>
+		<figcaption>
+			The tool calls and results are real CodeSage output for pmndrs/zustand (120 files, 1,025 entities), lightly
+			trimmed. Lines 67–68, two comments, are omitted. Claude's wording is illustrative.
+		</figcaption>
+	</figure>
+</section>
+)}
+
+<style>
+	.cs-hero {
+		display: grid;
+		gap: 2.5rem;
+		padding-block: 1.5rem 3rem;
+		align-items: start;
+	}
+	@media (min-width: 64rem) {
+		.cs-hero {
+			grid-template-columns: minmax(0, 5fr) minmax(0, 6fr);
+			gap: 3.5rem;
+			padding-block: 3rem 4rem;
+		}
+	}
+	.cs-eyebrow {
+		font-family: var(--sl-font-mono);
+		font-size: var(--sl-text-xs);
+		letter-spacing: 0.04em;
+		text-transform: uppercase;
+		color: var(--sl-color-gray-3);
+	}
+	h1 {
+		margin-top: 1rem;
+		font-size: clamp(2.2rem, 1.4rem + 3.2vw, 3.6rem);
+		line-height: 1.06;
+		letter-spacing: -0.025em;
+		font-weight: 700;
+		color: var(--sl-color-white);
+	}
+	h1 mark {
+		padding: 0 0.12em;
+		border-radius: 0.12em;
+		box-decoration-break: clone;
+		-webkit-box-decoration-break: clone;
+	}
+	.cs-lede {
+		margin-top: 1.25rem;
+		font-size: var(--sl-text-lg);
+		line-height: 1.6;
+		color: var(--sl-color-gray-2);
+		max-width: 38rem;
+	}
+	.cs-actions {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 0.75rem;
+		margin-top: 1.75rem;
+	}
+	.cs-btn {
+		display: inline-flex;
+		align-items: center;
+		min-height: 2.75rem;
+		padding: 0 1.1rem;
+		border-radius: 0.45rem;
+		border: 1px solid var(--sl-color-gray-5);
+		color: var(--sl-color-white);
+		font-weight: 600;
+		text-decoration: none;
+		transition: border-color 0.15s, background-color 0.15s;
+	}
+	.cs-btn:hover {
+		border-color: var(--sl-color-accent);
+	}
+	.cs-btn-primary {
+		background: var(--sl-color-accent);
+		border-color: var(--sl-color-accent);
+		color: #fff;
+	}
+	.cs-btn-primary:hover {
+		background: var(--sl-color-accent-high);
+		border-color: var(--sl-color-accent-high);
+		color: var(--sl-color-black);
+	}
+	.cs-btn-ghost {
+		border-color: transparent;
+		color: var(--sl-color-gray-2);
+	}
+	.cs-facts {
+		display: grid;
+		grid-template-columns: repeat(2, minmax(0, 1fr));
+		gap: 1px;
+		margin-top: 2.25rem;
+		border: 1px solid var(--cs-line);
+		border-radius: 0.5rem;
+		background: var(--cs-line);
+		overflow: hidden;
+	}
+	@media (min-width: 36rem) {
+		.cs-facts {
+			grid-template-columns: repeat(4, minmax(0, 1fr));
+		}
+	}
+	.cs-facts div {
+		padding: 0.85rem 1rem;
+		background: var(--sl-color-black);
+	}
+	.cs-facts dt {
+		font-family: var(--sl-font-mono);
+		font-size: var(--sl-text-xl);
+		font-weight: 500;
+		color: var(--sl-color-white);
+	}
+	.cs-facts dd {
+		margin: 0;
+		font-size: var(--sl-text-xs);
+		color: var(--sl-color-gray-3);
+	}
+
+	/* Transcript */
+	.cs-chat {
+		margin: 0;
+		border: 1px solid var(--cs-line);
+		border-radius: 0.75rem;
+		background: var(--cs-panel);
+		box-shadow: 0 30px 60px -35px rgba(0, 0, 0, 0.55);
+		min-width: 0;
+	}
+	.cs-chat-bar {
+		display: flex;
+		align-items: center;
+		gap: 0.75rem;
+		padding: 0.65rem 1rem;
+		border-bottom: 1px solid var(--cs-line);
+		font-size: var(--sl-text-xs);
+		color: var(--sl-color-gray-3);
+	}
+	.cs-dots {
+		display: inline-flex;
+		gap: 0.35rem;
+	}
+	.cs-dots i {
+		width: 0.6rem;
+		height: 0.6rem;
+		border-radius: 50%;
+		background: var(--sl-color-gray-5);
+	}
+	.cs-chat-mcp {
+		margin-left: auto;
+		font-family: var(--sl-font-mono);
+		color: var(--cs-ok);
+	}
+	.cs-chat-mcp::before {
+		content: '';
+		display: inline-block;
+		width: 0.45rem;
+		height: 0.45rem;
+		margin-right: 0.4rem;
+		border-radius: 50%;
+		background: currentColor;
+	}
+	.cs-chat-body {
+		display: grid;
+		gap: 0.85rem;
+		padding: 1rem;
+		font-size: var(--sl-text-sm);
+	}
+	.cs-msg-user {
+		justify-self: end;
+		max-width: 85%;
+		margin: 0;
+		padding: 0.6rem 0.85rem;
+		border-radius: 0.75rem 0.75rem 0.2rem 0.75rem;
+		background: var(--sl-color-accent-low);
+		color: var(--sl-color-white);
+	}
+	.cs-msg-claude {
+		margin: 0;
+		line-height: 1.6;
+		color: var(--sl-color-gray-1);
+	}
+	.cs-msg-claude a {
+		display: block;
+		margin-top: 0.35rem;
+		font-family: var(--sl-font-mono);
+		font-size: var(--sl-text-xs);
+	}
+	code {
+		font-family: var(--sl-font-mono);
+		font-size: 0.92em;
+	}
+	.cs-tool {
+		border: 1px solid var(--cs-line);
+		border-radius: 0.5rem;
+		background: var(--sl-color-black);
+		overflow: hidden;
+	}
+	.cs-tool-head {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: baseline;
+		gap: 0.25rem 0.6rem;
+		padding: 0.5rem 0.75rem;
+		border-bottom: 1px solid var(--cs-line);
+		font-size: var(--sl-text-xs);
+	}
+	.cs-tool-head code {
+		color: var(--sl-color-gray-3);
+		overflow-wrap: anywhere;
+	}
+	.cs-tool-name {
+		font-family: var(--sl-font-mono);
+		font-weight: 500;
+		color: var(--sl-color-accent-high);
+	}
+	.cs-tool-name::before {
+		content: 'tool ';
+		color: var(--sl-color-gray-4);
+		font-weight: 400;
+	}
+	.cs-hits {
+		list-style: none;
+		margin: 0;
+		padding: 0.4rem 0.75rem;
+		display: grid;
+		gap: 0.3rem;
+		font-size: var(--sl-text-xs);
+	}
+	.cs-hits li {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: baseline;
+		gap: 0.25rem 0.6rem;
+		margin: 0;
+	}
+	.cs-hits b {
+		font-family: var(--sl-font-mono);
+		font-weight: 500;
+		background: var(--cs-mark-soft);
+		color: var(--sl-color-white);
+		padding: 0 0.2em;
+		border-radius: 0.15em;
+	}
+	.cs-kind {
+		font-family: var(--sl-font-mono);
+		font-size: 0.68rem;
+		padding: 0 0.35rem;
+		border: 1px solid var(--cs-line);
+		border-radius: 0.25rem;
+		color: var(--sl-color-gray-3);
+	}
+	.cs-path {
+		margin-left: auto;
+		font-family: var(--sl-font-mono);
+		color: var(--sl-color-gray-3);
+	}
+	.cs-code {
+		margin: 0;
+		padding: 0.5rem 0;
+		overflow-x: auto;
+		font-size: 0.72rem;
+		line-height: 1.55;
+		background: transparent;
+		border: 0;
+	}
+	.cs-line {
+		display: block;
+		padding-right: 0.75rem;
+		white-space: pre;
+		color: var(--sl-color-gray-2);
+	}
+	.cs-line-mark {
+		background: var(--cs-mark-soft);
+		box-shadow: inset 3px 0 0 var(--cs-mark);
+		color: var(--sl-color-white);
+	}
+	.cs-ln {
+		display: inline-block;
+		width: 2.75rem;
+		padding-right: 0.75rem;
+		text-align: right;
+		color: var(--sl-color-gray-4);
+		user-select: none;
+	}
+	.cs-chat figcaption {
+		padding: 0.65rem 1rem 0.85rem;
+		border-top: 1px solid var(--cs-line);
+		font-size: var(--sl-text-xs);
+		line-height: 1.5;
+		color: var(--sl-color-gray-3);
+	}
+</style>

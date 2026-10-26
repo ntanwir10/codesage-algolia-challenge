@@ -1,0 +1,125 @@
+---
+title: Introduction
+description: CodeSage indexes your repositories into Algolia and gives Claude seven tools to search and read them.
+---
+
+import { Aside, Card, CardGrid, LinkCard } from '@astrojs/starlight/components';
+import Mermaid from '~/components/Mermaid.astro';
+
+Claude can't see your codebase. You can paste a file into a chat, but it can't search a repository, list the functions in a directory or open the file a stack trace points at. CodeSage closes that gap. It reads a repository once, breaks it into searchable pieces and stores them in Algolia. After that, Claude Desktop (or any other MCP client) can search the code, read files, list definitions and count things, all through seven tools.
+
+CodeSage is a self-hosted tool. You run it on your own machine or server, with your own Algolia account. There is no hosted demo and no CodeSage service to sign up for. It was built for the [Algolia MCP Server Challenge](https://dev.to/challenges/algolia-2025-07-09).
+
+## What it does
+
+- **Indexes a repository.** CodeSage fetches the code files of a GitHub repository (or clones a public repository from another git host) and extracts functions, classes, methods, imports, Markdown doc sections and Terraform blocks. Each piece is called an entity.
+- **Stores two copies.** Full file contents and the entity list go into a local SQLite database. A searchable record per entity goes into your Algolia index.
+- **Serves Claude.** A small bridge program that Claude Desktop starts turns each tool call into an HTTP call to the CodeSage backend. Search goes to Algolia. Reading files and listing definitions go to SQLite.
+- **Shows progress.** A React dashboard adds GitHub repositories, shows indexing live over a WebSocket and searches the index.
+
+## Two ways in
+
+Both end at the same FastAPI backend.
+
+<CardGrid>
+  <Card title="Web dashboard" icon="laptop">
+    Open `http://localhost:5173`, type `owner/repo`, and watch the repository index. Search it, reprocess it or delete it. The dashboard adds GitHub repositories only. See [the dashboard guide](/docs/guides/web-dashboard/).
+  </Card>
+  <Card title="Claude Desktop (MCP)" icon="rocket">
+    Run `make install-claude`, restart Claude Desktop and ask about your code. Claude can also add public repositories from GitLab, Bitbucket and self-hosted servers. See [the Claude Desktop guide](/docs/guides/claude-desktop/).
+  </Card>
+</CardGrid>
+
+## How the parts fit
+
+<Mermaid caption="Both entry points reach the same backend. nginx exists only in the Docker prod stack." code={`flowchart TB
+    you(["You"]) --> browser["Web dashboard<br/>React + Vite"]
+    you --> claude["Claude Desktop"]
+    claude -- "tools/call over stdio" --> bridge["MCP bridge"]
+    browser -- "REST and WebSocket" --> nginx["nginx, prod only<br/>HTTPS, login, adds the API key"]
+    bridge -- "HTTP with the API key" --> nginx
+    nginx --> api["CodeSage backend<br/>FastAPI: REST, WebSocket, MCP tools"]
+    api -- "starts" --> job["Indexing job"]
+    job -- "fetch files" --> github["GitHub API,<br/>or git clone"]
+    job -- "store" --> db[("SQLite<br/>files and entities")]
+    job -- "index" --> algolia[("Algolia<br/>search index")]
+    api -- "search" --> algolia
+    api -- "read files" --> db`} />
+
+In development there is no nginx: the dashboard and the bridge call the backend directly.
+
+| Component | What it is | Where |
+| --- | --- | --- |
+| Backend | FastAPI app with the REST API, the `/ws` WebSocket, the MCP tool endpoints and the indexing jobs. One process, one worker. | `backend/app` |
+| MCP bridge | A stdio MCP server that Claude Desktop starts through `mcp_launcher.sh`. It holds no data. It checks tool arguments and forwards them to the backend. | `backend/codesage_mcp` |
+| Dashboard | React and Vite single-page app. | `frontend/src` |
+| nginx | Prod stack only. Terminates HTTPS, asks for a login and adds the API key to each request. | `deployment/` |
+| Algolia | The search index. Holds one record per entity. | Your Algolia account |
+| SQLite | The local database with repositories, full file contents and entities. | `backend/codesage.db` |
+| GitHub API or `git clone` | Where files come from. github.com uses its REST API. Every other host is read with a shallow `git clone`. | Network |
+
+For the full picture see [Architecture](/docs/concepts/architecture/).
+
+## What you can ask Claude
+
+Once a repository has status `completed`, ask questions in plain words. Claude picks the tools.
+
+- "Search the zustand repository for where the store is created."
+- "List every class in `owner/repo` under `src/auth/`."
+- "Show me lines 40 to 120 of `src/server.py`, then explain the retry logic."
+- "Which directories hold the most files, and which files are the largest?"
+- "Find every line that matches `TODO|FIXME` in the `docs/` folder."
+- "Add https://gitlab.com/group/project to CodeSage, then tell me when it is ready."
+
+Example prompts for each tool are in [Claude Desktop](/docs/guides/claude-desktop/#example-prompts-for-each-tool). The tool arguments are in the [MCP tools reference](/docs/reference/mcp-tools/).
+
+## Supported languages
+
+| Kind | Languages | Entities |
+| --- | --- | --- |
+| Source code | Python, JavaScript, TypeScript, Java, Go, Rust, C, C++, C#, PHP, Ruby | functions, classes, methods, imports |
+| Markdown | `.md` | a `doc_section` per heading |
+| Terraform and HCL | `.tf`, `.tfvars`, `.hcl` | a `terraform_block` per top-level block |
+| Stored, no entities | CSS, SCSS, HTML, SQL, JSON, YAML, XML | none. The files are stored and readable with `get_file` and `find_patterns` |
+
+Details, including which file extensions are picked up, are in [Languages](/docs/reference/languages/).
+
+## Who it's for
+
+- You use Claude Desktop (or another MCP client) and want it to answer questions about code that isn't in the chat.
+- You work in a codebase too large to paste, or you explore unfamiliar open-source projects.
+- You want search that ranks names, docstrings and code together, and links each hit to the exact line.
+- You are comfortable running a Python backend and a Node dev server on your own machine, and you have (or can create) an Algolia account.
+
+## What it is not
+
+- **Not a hosted service.** Nobody runs CodeSage for you. You supply the Algolia account and, optionally, a GitHub token.
+- **Not a code-execution tool.** CodeSage reads and searches text. It never runs, builds or tests the code it indexes.
+- **Read-only, with one exception.** Six of the seven tools only read. `add_repository` is the one tool that changes state: it creates a repository record and starts indexing.
+- **Not a live view.** It indexes a snapshot of a branch. Changes to the repository after indexing don't appear until you reprocess it.
+- **Not multi-user.** There is one shared API key and no per-user permissions.
+
+<Aside type="caution">
+CodeSage is designed for one person on a trusted machine. Before you expose it on a network, read [Security](/docs/concepts/security/) and [Production deployment](/docs/guides/production/).
+</Aside>
+
+## Glossary
+
+| Term | Meaning |
+| --- | --- |
+| Repository | A git repository you added to CodeSage, with a numeric ID and a name. GitHub repositories are named `owner/repo`. Others are named `<host>/<path>`. |
+| Entity | One searchable piece of code: a function, class, import, Markdown doc section or Terraform block. Each entity becomes one Algolia record. |
+| Index | The Algolia index (default name `codesage_code_entities`) that holds the entity records. Indexing is the act of filling it. |
+| MCP | Model Context Protocol, the standard way for an AI client such as Claude Desktop to call tools on a server. |
+| Bridge | The small stdio program (`python -m codesage_mcp`) that Claude Desktop runs. It speaks MCP to Claude and HTTP to the backend. |
+| Tool | One of the seven MCP operations: `list_repositories`, `search_code`, `get_file`, `list_definitions`, `analyze_repository`, `find_patterns` and `add_repository`. |
+| Run (or job) | One background indexing pass over a repository. At most one run per repository and at most two runs at once. A run ends as `completed` or `failed`. |
+| Partial index | A run that ended `completed` but left something out, such as files over the 1000-file or 100 MB limit. The repository's `error_message` begins with `Partially indexed:` and the dashboard shows an amber card. |
+
+## Where to go next
+
+<LinkCard title="Quick start" description="Install, configure, run, index a repository and connect Claude Desktop in five steps." href="/docs/quick-start/" />
+<LinkCard title="Installation in depth" description="Prerequisites, Algolia and GitHub credentials, what make setup does and how to upgrade." href="/docs/installation/" />
+<LinkCard title="Web dashboard" description="Every page, message and state of the React dashboard." href="/docs/guides/web-dashboard/" />
+<LinkCard title="Claude Desktop" description="Install the bridge, tune its settings and try prompts for each tool." href="/docs/guides/claude-desktop/" />
+<LinkCard title="Architecture" description="Components, data flow and the indexing pipeline." href="/docs/concepts/architecture/" />

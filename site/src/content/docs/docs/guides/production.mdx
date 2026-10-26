@@ -1,0 +1,197 @@
+---
+title: Production deployment
+description: Run CodeSage behind nginx with HTTPS, basic auth and a server-held API key, then connect Claude Desktop to it and operate it.
+---
+
+import { Aside, Steps } from '@astrojs/starlight/components';
+import Mermaid from '~/components/Mermaid.astro';
+
+The prod stack is for a server that more than one person reaches over a network. nginx terminates TLS, asks for a password and adds the API key to each request. The browser never sees the key, and the backend has no published port. There is no hosted CodeSage service: you run this stack on your own server, with your own Algolia account.
+
+The files are [`deployment/docker-compose.prod.yml`](https://github.com/ntanwir10/codesage-algolia-challenge/blob/master/deployment/docker-compose.prod.yml), [`deployment/nginx.prod.conf.template`](https://github.com/ntanwir10/codesage-algolia-challenge/blob/master/deployment/nginx.prod.conf.template) and [`backend/Dockerfile.prod`](https://github.com/ntanwir10/codesage-algolia-challenge/blob/master/backend/Dockerfile.prod).
+
+<Aside type="caution">
+CI validates both Compose files and both nginx configs, and it builds the images. It never starts the prod stack. The full stack was last run by hand with a self-signed certificate. Expect to fix small problems at runtime, and test your own setup before you rely on it.
+</Aside>
+
+<Mermaid caption="The prod stack. Only nginx is published. Port 80 serves /health and redirects everything else to HTTPS." code={`flowchart TB
+    browser(["Browser"]) --> https["nginx :443<br/>HTTPS, basic auth"]
+    https -- "static files" --> spa["Built dashboard"]
+    https -- "/api and /ws<br/>adds X-API-Key" --> backend["backend :8001<br/>one uvicorn worker"]
+    backend --> db[("SQLite volume")]
+    backend --> algolia[("Algolia")]
+    browser -. "plain HTTP" .-> http["nginx :80<br/>/health and a redirect"]
+    http -. "/health" .-> backend
+`} />
+
+On port 80, `/health` is proxied to the backend and everything else gets a `301` to HTTPS, so a password never crosses plain HTTP. On port 443, `/health` skips basic auth so load balancers and uptime checks need no login.
+
+## Dev versus prod
+
+| | Dev | Prod |
+| --- | --- | --- |
+| Compose file | `deployment/docker-compose.yml` | `deployment/docker-compose.prod.yml` |
+| Backend image | `backend/Dockerfile`: source bind-mounted, uvicorn `--reload` | `backend/Dockerfile.prod`: multi-stage, no bind mount, `--workers 1`, `ENVIRONMENT=production` so `/docs` is off. Installs `curl` and `git` |
+| nginx | `deployment/nginx.conf`, plain HTTP | `deployment/nginx.prod.conf.template`, HTTPS and basic auth |
+| Containers | `codesage_mcp_server`, `codesage_nginx` | `codesage_mcp_server_prod`, `codesage_nginx_prod` |
+| Published ports | `127.0.0.1:80` and `127.0.0.1:8001` | `80` and `443`. The backend is not published |
+| Auth | The API key in the browser bundle | Basic auth in nginx (`deployment/htpasswd`) |
+| Where the key lives | `backend/.env`, and the shell at build time | The shell (`CODESAGE_API_KEY`), for both backend and nginx. The bundle never has it |
+| Algolia index | `codesage_code_entities_docker` | `codesage_code_entities_prod` (override with `PROD_ALGOLIA_INDEX_NAME`) |
+| SQLite volume | `backend_data` | `backend_data_prod` |
+| Network | default | `codesage_network` |
+
+The prod backend image is a two-stage build. A builder stage installs the dependencies with `build-essential`, `gcc` and `git`. The final stage copies only the installed packages and the `app/`, `codesage_mcp/` and `alembic/` folders, and runs as `appuser` (uid 1000). The `git` in the final image is what `add_repository` uses to clone repositories from hosts other than github.com.
+
+## Set it up
+
+<Steps>
+
+1. **Create the login.** nginx reads `deployment/htpasswd`. The Compose file mounts it with `create_host_path: false`, so a missing file fails at start instead of becoming an empty directory.
+
+   ```bash
+   docker run --rm httpd:alpine htpasswd -nbB <user> <password> > deployment/htpasswd   # bcrypt entry
+   ```
+
+   The password appears in your shell history and in the process list while this runs. Clear the history entry, or run it on a machine you trust. Add more users by appending more lines.
+
+2. **Create the certificate.** `deployment/ssl/` must hold `cert.pem` and `key.pem`. For a self-signed pair:
+
+   ```bash
+   mkdir -p deployment/ssl
+   openssl req -x509 -newkey rsa:2048 -nodes -days 365 -subj "/CN=your-host" \
+     -addext "subjectAltName=DNS:your-host" \
+     -keyout deployment/ssl/key.pem -out deployment/ssl/cert.pem   # use IP:1.2.3.4 for an IP
+   ```
+
+   Both `deployment/htpasswd` and `deployment/ssl/` are gitignored.
+
+3. **Set your domain.** In `deployment/docker-compose.prod.yml`, replace the `CORS_ORIGINS=https://yourdomain.com` placeholder with a comma-separated list of the origins people use, such as `https://app.example.com,https://other.example.com`.
+
+4. **Export the key and any extra hosts.**
+
+   ```bash
+   export CODESAGE_API_KEY=...            # one value for backend and nginx; overrides backend/.env
+   export ALLOWED_HOSTS=203.0.113.5,docs.example.com   # only if the site is reached by another name or IP
+   ```
+
+5. **Set Algolia and GitHub in `backend/.env`.** The prod backend reads `ALGOLIA_APP_ID`, `ALGOLIA_ADMIN_API_KEY` and `GITHUB_TOKEN` from that file through `env_file`.
+
+6. **Build and start.**
+
+   ```bash
+   make prod-build   # docker compose -f deployment/docker-compose.prod.yml build
+   make prod-up      # same file, up -d; nginx waits for the backend healthcheck
+   ```
+
+7. **Check it.**
+
+   ```bash
+   curl -k https://localhost/health   # -k only for a self-signed certificate
+   ```
+
+</Steps>
+
+<Aside type="danger">
+The key must be exported in the same shell that runs `make prod-up`. The Compose file sets `CODESAGE_API_KEY=${CODESAGE_API_KEY:-}` for the backend, so an unset variable becomes an empty string that overrides the value in `backend/.env`. The backend then refuses to start, because it binds `0.0.0.0` with no key, and nginx never starts because it waits for a healthy backend.
+</Aside>
+
+## The certificate
+
+A self-signed certificate is fine for a test or for a private network where you can trust it on each machine. Browsers show a warning until you add it to the trust store, and the Claude Desktop bridge needs `SSL_CERT_FILE` (see [Connect Claude Desktop](#connect-claude-desktop)).
+
+For anything public, use a certificate from a real authority such as Let's Encrypt:
+
+- The stack does not run a certificate client. Get the certificate with a tool such as certbot, outside the stack.
+- Port 80 in this stack redirects everything except `/health`, so the usual HTTP challenge will not pass while the stack runs. Stop the stack for the challenge, or use a DNS challenge.
+- Copy the full chain to `deployment/ssl/cert.pem` and the private key to `deployment/ssl/key.pem`.
+- nginx reads the files at start. After a renewal, copy the new files and restart nginx: `docker compose -f deployment/docker-compose.prod.yml restart nginx`.
+
+This is general guidance; the repository does not automate renewal.
+
+## Hosts and origins
+
+With a key set, the backend answers only to loopback hosts, the hosts named in `CORS_ORIGINS`, and the hosts in `ALLOWED_HOSTS`. Any other `Host` gets `403`.
+
+- **`CORS_ORIGINS`** is a comma-separated list of full origins (scheme and host, and the port if it is not 443). It does two jobs: it names the browser origins that may send writes and open WebSockets, and its hostnames are added to the host allow list. A `*` is refused at start-up.
+- **`ALLOWED_HOSTS`** is for names that are not in `CORS_ORIGINS`: a hostname or IP, without a port. `*.example.com` allows subdomains. `*` allows any host and logs a warning, because it turns off DNS-rebinding protection.
+- **A site reached by another name or by IP.** Add that hostname or IP to `ALLOWED_HOSTS`. Browser writes and WebSocket connections are accepted from the API's own origin or an origin in `CORS_ORIGINS`, so a page served from that name works once the host is allowed.
+- **Why nginx keeps the port.** On `/api` and `/ws` nginx sends `Host $http_host`, so a non-443 port stays in the header and matches the browser's `Origin`.
+
+## What nginx adds
+
+- **Response headers.** `Strict-Transport-Security` (`max-age=63072000`, two years), `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `Content-Security-Policy: frame-ancestors 'none'` and `Referrer-Policy: same-origin`. TLS is 1.2 and 1.3 only, with a 10 MB shared session cache.
+- **The key.** nginx sets `X-API-Key` itself on `/api` and `/ws`, and sets `Authorization` to empty, so the backend never sees the login. Only `${CODESAGE_API_KEY}` is substituted in the template (`NGINX_ENVSUBST_FILTER`). nginx's own `$variables` are left alone.
+- **Forwarded headers, overwritten and not appended.** `X-Forwarded-For` is set to the real client address and `X-Forwarded-Proto` to `https`. The backend uses the first for per-client rate limits and WebSocket caps, so a client must not be able to choose its own address.
+- **uvicorn trust.** `Dockerfile.prod` starts uvicorn with `--forwarded-allow-ips "*"`. That is safe only because the backend has no published port and nginx is the only peer that can reach it. Keep it that way.
+- **Limits.** `client_max_body_size` is 2 MB. `/ws` allows idle connections for an hour. `/api/` times out after 60 s.
+- **Compression.** Text, CSS, JSON and JavaScript are gzipped.
+- **Static files.** The dashboard is served from the nginx image, with `index.html` as the fallback for any path.
+
+## Health behaviour
+
+`GET /health` returns:
+
+| Result | HTTP status | Meaning |
+| --- | --- | --- |
+| `healthy` | 200 | The database answers and Algolia is reachable |
+| `degraded` | 200 | Algolia is unreachable or not configured |
+| `unhealthy` | 503 | The database check failed |
+
+`degraded` is still `200`, so the container stays healthy while Algolia is unset. The Docker health check runs `curl -f http://localhost:8001/health` every 30 s with a 10 s timeout and 3 retries, and nginx has `depends_on` with `service_healthy`. So nginx does not start until the backend reports healthy, which can take up to about half a minute after the backend starts.
+
+## Connect Claude Desktop
+
+```bash
+make install-claude ARGS="--server-url https://your-host --basic-auth <user>"   # asks for the password
+```
+
+- **Password.** The installer stores it in the macOS Keychain (service `codesage-mcp`). The Claude Desktop config holds only the user name.
+- **No key needed.** nginx adds the API key, so the bridge sends none. The installer does not copy the backend's key when you pass `--basic-auth`.
+- **Plain HTTP is refused.** The bridge will not send the login or a key over `http://` to a host other than loopback unless `CODESAGE_ALLOW_INSECURE_AUTH=1` is set in its `env`.
+- **Self-signed certificate.** Add `SSL_CERT_FILE=/path/to/cert.pem` to the bridge's `env` in the Claude Desktop config.
+- **Without the Keychain.** Set `CODESAGE_BASIC_AUTH_PASSWORD` in that `env` block instead. It is stored in plain text, in a file the installer keeps at mode 600.
+- **Rate limit.** Tool calls are limited to 30 per minute per client address. Behind nginx the address is the real client's, not nginx's.
+
+`--basic-auth` needs the macOS `security` command. See [Claude Desktop](/docs/guides/claude-desktop/) for the full flow.
+
+## Operate it
+
+```bash
+docker compose -f deployment/docker-compose.prod.yml logs -f backend   # backend logs
+docker compose -f deployment/docker-compose.prod.yml logs -f nginx     # access and error logs
+docker compose -f deployment/docker-compose.prod.yml ps                # container and health state
+docker compose -f deployment/docker-compose.prod.yml down              # stop prod; data is kept
+curl -k https://localhost/health                                       # prod health
+```
+
+- **Only two make targets.** `make prod-build` and `make prod-up` are the prod targets. Every other Docker target uses the dev file, so call Compose directly for prod.
+- **Data.** The SQLite file is in the named volume `backend_data_prod`, which survives `down`. To wipe it, run `down -v` with the prod file. That does not clean Algolia, so delete repositories in the dashboard first, or remove the index in Algolia.
+- **Upgrades.** Pull the new code, then `make prod-build` and `make prod-up`. Migrations run at start-up. If a run was in progress, the restart marks it `failed`, and you reprocess it.
+- **Do not run dev and prod together.** Both publish port 80.
+- **One worker.** Do not change `--workers 1`. See [Known limitations](/docs/limitations/).
+
+## Pre-flight checklist
+
+- `deployment/htpasswd` exists and has at least one user.
+- `deployment/ssl/cert.pem` and `key.pem` exist and match, and the certificate covers your hostname or IP.
+- `CORS_ORIGINS` in the Compose file lists the exact origins people use, with `https://`.
+- `CODESAGE_API_KEY` is exported in the shell that runs `make prod-up`.
+- `ALLOWED_HOSTS` is exported if the site is reached by an IP or a second name.
+- `backend/.env` has `ALGOLIA_APP_ID` and `ALGOLIA_ADMIN_API_KEY`, and `GITHUB_TOKEN` if you need private repositories or higher limits.
+- Ports 80 and 443 are free on the host, and the dev stack is down.
+- `curl -k https://your-host/health` returns `200`.
+- You signed in to the dashboard, added a small repository, and watched it reach `completed`.
+- You ran a search from the dashboard, and from Claude Desktop if you use it.
+
+## When something goes wrong
+
+| Symptom | Fix |
+| --- | --- |
+| `make prod-up` fails on a bind mount | `deployment/htpasswd` or `deployment/ssl/` is missing. Create them as above |
+| nginx exits with an SSL error | `cert.pem` or `key.pem` is missing or does not match. Regenerate the pair and read `logs nginx` |
+| `403` from the API | The `Host` is not loopback, in `CORS_ORIGINS` or in `ALLOWED_HOSTS`. Add it to `ALLOWED_HOSTS` and restart |
+| Writes or the WebSocket get `403` from a browser | The origin is neither the API's own nor in `CORS_ORIGINS`. Add the full origin to the Compose file and restart |
+| Backend unhealthy, nginx never starts | Usually the missing key. Read the backend logs |
+
+More in [Troubleshooting](/docs/troubleshooting/#docker-prod). The reasoning behind each control is in the [Security model](/docs/concepts/security/).
