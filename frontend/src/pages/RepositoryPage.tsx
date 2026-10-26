@@ -14,12 +14,31 @@ import { DeleteConfirmationDialog } from "@/components/ui/delete-confirmation-di
 import { useRealtimeStatus } from "@/hooks/useRealtimeStatus";
 import { useToast } from "@/components/ui/toast";
 import { describeError } from "@/lib/errors";
-import { pollWhileActive } from "@/lib/polling";
+import { isActiveStatus, pollWhileActive } from "@/lib/polling";
 import { isHttpUrl } from "@/lib/utils";
+
+// "View on GitHub" only for github.com; other hosts get a neutral label.
+function sourceLabel(url: string) {
+  try {
+    return new URL(url).hostname === "github.com" ? "View on GitHub" : "View source";
+  } catch {
+    return "View source";
+  }
+}
+
+// Stop polling once the repository is gone: react-query keeps the last good data
+// (still "processing") after a 404, which would otherwise keep the interval alive.
+const pollUnlessGone = (query: {
+  state: { data: { status: string } | undefined; error: unknown };
+}) =>
+  query.state.error && describeError(query.state.error).status === 404
+    ? false
+    : pollWhileActive(query.state.data);
 
 export function RepositoryPage() {
   const { id } = useParams<{ id: string }>();
-  const repositoryId = parseInt(id || "0");
+  // Strict: parseInt would load repo 12 for "12abc". 0 means invalid.
+  const repositoryId = /^\d+$/.test(id ?? "") ? Number(id) : 0;
   const navigate = useNavigate();
 
   const [deleteDialog, setDeleteDialog] = useState<{
@@ -38,18 +57,20 @@ export function RepositoryPage() {
   const {
     data: repository,
     isLoading: isRepoLoading,
+    error: repoError,
+    refetch,
   } = useQuery({
     queryKey: ["repository", repositoryId],
     queryFn: () => api.getRepository(repositoryId),
     enabled: !!repositoryId,
-    refetchInterval: (query) => pollWhileActive(query.state.data),
+    refetchInterval: pollUnlessGone,
   });
 
   const { data: status } = useQuery({
     queryKey: ["repository-status", repositoryId],
     queryFn: () => api.getRepositoryStatus(repositoryId),
     enabled: !!repositoryId,
-    refetchInterval: (query) => pollWhileActive(query.state.data),
+    refetchInterval: pollUnlessGone,
   });
 
   // Live updates: subscribe while the repository is being processed.
@@ -72,7 +93,12 @@ export function RepositoryPage() {
     setDeleteDialog((prev) => ({ ...prev, isDeleting: true }));
 
     try {
-      await api.deleteRepository(repository.id);
+      try {
+        await api.deleteRepository(repository.id);
+      } catch (error) {
+        // Already gone (e.g. deleted in another tab): same outcome as success.
+        if (describeError(error).status !== 404) throw error;
+      }
 
       addToast({ type: "success", title: "Repository deleted" });
       // Don't remove this page's queries: its observers would refetch the deleted repository
@@ -82,6 +108,7 @@ export function RepositoryPage() {
     } catch (error) {
       const { message, status: httpStatus } = describeError(error);
       setDeleteDialog({ isOpen: false, isDeleting: false });
+      if (httpStatus === 401) return; // the global auth toast covers it
       addToast({
         type: "error",
         title:
@@ -119,6 +146,7 @@ export function RepositoryPage() {
       });
     } catch (error) {
       const { message, status: httpStatus } = describeError(error);
+      if (httpStatus === 401) return; // the global auth toast covers it
       addToast({
         type: httpStatus === 409 ? "warning" : "error",
         title:
@@ -147,8 +175,10 @@ export function RepositoryPage() {
     );
   }
 
-  // A failed background poll keeps the old data; only show the error with none.
-  if (!repository) {
+  // A 404 beats stale cached data (deleted in another tab); other background
+  // poll failures keep the old data and only show an error when there is none.
+  const described = repoError ? describeError(repoError) : null;
+  if (!repositoryId || described?.status === 404 || (!repository && !described)) {
     return (
       <div className="container mx-auto px-4 py-8">
         <div className="max-w-6xl mx-auto">
@@ -166,13 +196,28 @@ export function RepositoryPage() {
     );
   }
 
+  if (!repository) {
+    return (
+      <div className="container mx-auto px-4 py-8">
+        <div className="max-w-6xl mx-auto">
+          <EmptyState
+            icon="⚠️"
+            title="Couldn't load this repository"
+            description={described?.message ?? ""}
+            action={{ label: "Try again", onClick: () => refetch() }}
+          />
+        </div>
+      </div>
+    );
+  }
+
   const canSearch = repository.status === "completed";
 
   return (
     <div className="container mx-auto px-4 py-8">
       <div className="max-w-6xl mx-auto space-y-8">
         {/* Breadcrumb */}
-        <div className="flex items-center gap-2 text-sm text-muted-foreground">
+        <div className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
           <Link
             to="/dashboard"
             className="hover:text-foreground transition-colors"
@@ -180,7 +225,7 @@ export function RepositoryPage() {
             Dashboard
           </Link>
           <span>/</span>
-          <span className="text-foreground font-medium">{repository.name}</span>
+          <span className="text-foreground font-medium break-all">{repository.name}</span>
           {connectionStatus === "connected" && (
             <>
               <span>/</span>
@@ -192,27 +237,27 @@ export function RepositoryPage() {
         </div>
 
         {/* Repository Header */}
-        <div className="flex items-start justify-between">
-          <div className="flex items-start gap-4">
+        <div className="flex flex-wrap items-start justify-between gap-2">
+          <div className="flex items-start gap-4 min-w-0">
             <div className="p-3 bg-blue-100 rounded-lg">
               <span className="text-3xl">📂</span>
             </div>
-            <div>
-              <h1 className="text-3xl font-bold">{repository.name}</h1>
+            <div className="min-w-0">
+              <h1 className="text-3xl font-bold break-words">{repository.name}</h1>
               {repository.description && (
                 <p className="text-muted-foreground mt-1 text-lg">
                   {repository.description}
                 </p>
               )}
-              <div className="flex items-center gap-4 mt-3">
+              <div className="flex flex-wrap items-center gap-x-4 gap-y-1 mt-3">
                 {isHttpUrl(repository.url) && (
                   <a
                     href={repository.url}
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="text-sm text-blue-600 hover:underline font-medium"
+                    className="text-sm text-blue-600 hover:underline font-medium break-all"
                   >
-                    View on GitHub →
+                    {sourceLabel(repository.url)} →
                   </a>
                 )}
                 <span className="text-sm text-muted-foreground">
@@ -221,7 +266,7 @@ export function RepositoryPage() {
               </div>
             </div>
           </div>
-          <div className="flex items-center gap-3">
+          <div className="flex flex-wrap items-center gap-2">
             <StatusBadge status={repository.status} />
             <Button
               variant="outline"
@@ -240,7 +285,7 @@ export function RepositoryPage() {
         <RepositoryStats repository={repository} />
 
         {/* Processing Status */}
-        {status && repository.status === "processing" && (
+        {status && isActiveStatus(repository.status) && (
           <Card className="border-blue-200 bg-blue-50/50">
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
@@ -312,16 +357,17 @@ export function RepositoryPage() {
                       ? "Repository partially indexed"
                       : "Repository analysis complete!"}
                   </p>
-                  <p className="text-sm text-green-600">
-                    Your repository is ready for AI-powered search and
-                    exploration.
-                    {connectionStatus === "connected" && (
-                      <span className="ml-1">Real-time updates enabled.</span>
-                    )}
-                  </p>
-                  {repository.error_message && (
-                    <p className="mt-1 text-sm text-amber-700">
+                  {repository.error_message ? (
+                    <p className="mt-1 text-sm text-muted-foreground">
                       {repository.error_message}
+                    </p>
+                  ) : (
+                    <p className="text-sm text-green-600">
+                      Your repository is ready for AI-powered search and
+                      exploration.
+                      {connectionStatus === "connected" && (
+                        <span className="ml-1">Real-time updates enabled.</span>
+                      )}
                     </p>
                   )}
                   <Button
@@ -375,6 +421,7 @@ export function RepositoryPage() {
           key={repositoryId}
           repositoryId={repositoryId}
           canSearch={!!canSearch}
+          status={repository.status}
         />
 
         {/* Quick Actions */}
@@ -388,7 +435,7 @@ export function RepositoryPage() {
             <a href={repository.url} target="_blank" rel="noopener noreferrer">
               <Button variant="outline" className="gap-2">
                 <span>🔗</span>
-                View on GitHub
+                {sourceLabel(repository.url)}
               </Button>
             </a>
           )}

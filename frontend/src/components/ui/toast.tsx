@@ -85,7 +85,12 @@ function ToastContainer() {
   const { toasts, removeToast } = context;
 
   return (
-    <div className="fixed top-4 right-4 z-50 space-y-2 max-w-sm">
+    <div
+      role="region"
+      aria-label="Notifications"
+      aria-live="polite"
+      className="fixed top-4 right-4 z-50 space-y-2 max-w-sm"
+    >
       {toasts.map((toast) => (
         <ToastItem
           key={toast.id}
@@ -153,6 +158,7 @@ function ToastItem({ toast, onClose }: { toast: Toast; onClose: () => void }) {
         }
       `}
       onClick={handleClose}
+      role={toast.type === "error" ? "alert" : undefined}
     >
       <CardContent className="p-4">
         <div className="flex items-start gap-3">

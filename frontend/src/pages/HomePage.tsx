@@ -4,8 +4,6 @@ import { useQueryClient } from "@tanstack/react-query";
 import { GitHubForm, type GitHubFormData } from "@/components/forms/github-form";
 import { useToast } from "@/components/ui/toast";
 import { api } from "@/services/api";
-import { describeError } from "@/lib/errors";
-import { isAxiosError } from "axios";
 import type { CreateRepositoryRequest } from "@/types/repository";
 
 export function HomePage() {
@@ -34,28 +32,6 @@ export function HomePage() {
         description: "Processing has started. Progress appears on this page.",
       });
       navigate(`/repository/${repository.id}`);
-    } catch (error: unknown) {
-      const { message, status } = describeError(error);
-      // 422 details are shown inline by the form; everything else is toasted.
-      const inlineByForm =
-        status === 422 &&
-        isAxiosError(error) &&
-        Array.isArray(error.response?.data?.detail);
-      if (!inlineByForm) {
-        addToast({
-          type: status === 409 ? "warning" : "error",
-          title:
-            status === 409
-              ? "Repository already exists"
-              : status === 429
-              ? "Slow down"
-              : "Failed to add repository",
-          description: message,
-          duration: 8000,
-        });
-      }
-      // Rethrow so the form keeps the user's input.
-      throw error;
     } finally {
       setIsSubmitting(false);
     }
@@ -70,7 +46,7 @@ export function HomePage() {
             Discover Code with AI
           </h2>
           <p className="text-xl text-muted-foreground max-w-2xl mx-auto">
-            Submit a GitHub repository URL and ask natural language questions
+            Add a GitHub repository and ask natural language questions
             about your code. Powered by Algolia search and MCP server
             integration.
           </p>
@@ -92,7 +68,7 @@ export function HomePage() {
               </div>
               <h4 className="font-medium">Submit Repository</h4>
               <p className="text-sm text-muted-foreground">
-                Enter a GitHub URL and we'll fetch and parse its code
+                Enter owner/repo and we'll fetch and parse its code
               </p>
             </div>
             <div className="text-center space-y-2">

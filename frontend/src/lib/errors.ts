@@ -51,7 +51,9 @@ export function describeError(error: unknown): DescribedError {
     if (!response) {
       return {
         message:
-          "Cannot reach the CodeSage server. Check that the backend is running.",
+          error.code === "ECONNABORTED"
+            ? "The server took too long to respond. Try again."
+            : "Cannot reach the CodeSage server. Check that the backend is running.",
         kind: "network",
       };
     }
@@ -75,6 +77,14 @@ export function describeError(error: unknown): DescribedError {
         break;
       case 500:
         message = `Server error${requestId ? ` (request ${requestId})` : ""}. Please try again later.`;
+        break;
+      case 502:
+      case 503:
+      case 504:
+        message =
+          typeof data?.detail === "string"
+            ? data.detail
+            : "The server is temporarily unavailable. Try again shortly.";
         break;
       default:
         message = detail ?? `Request failed (${status}).`;

@@ -1,5 +1,7 @@
 import asyncio
 import fnmatch
+import ipaddress
+import math
 import re
 import time
 from collections import deque
@@ -75,6 +77,9 @@ EXT_TO_LANGUAGE: dict[str, str] = {
     "yml": "yaml",
     "xml": "xml",
     "md": "markdown",
+    "tf": "terraform",
+    "tfvars": "terraform",
+    "hcl": "hcl",
 }
 
 _NAME_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
@@ -93,7 +98,94 @@ def is_denied_path(path: str) -> bool:
 
 def is_valid_branch(branch: str) -> bool:
     """False for names that could step outside the repository in an API path"""
-    return bool(branch) and ".." not in branch.split("/") and "\x00" not in branch
+    return (
+        bool(branch)
+        and ".." not in branch.split("/")
+        and "\x00" not in branch
+        and not branch.startswith("-")  # would read as an option to git
+    )
+
+
+def parse_repository_url(url: str) -> tuple[str, str, str | None]:
+    """Parse an https git URL on any host into (host, path, branch_or_None).
+
+    The path keeps nested groups (GitLab's group/sub/repo) without a trailing .git or slash.
+    The branch comes from /tree/<b> (GitHub), /-/tree/<b> (GitLab) or /src/<b> (Bitbucket).
+    Raises ValueError for anything else, including non-https schemes, credentials, ports and
+    hosts that are localhost or a non-public IP literal.
+    """
+    if not isinstance(url, str) or not url.strip():
+        raise ValueError("Invalid repository URL: empty")
+    raw = url.strip()
+    try:
+        parts = urlsplit(raw)
+        hostname = parts.hostname
+        port = parts.port
+    except ValueError as e:
+        raise ValueError(f"Invalid repository URL: {url}") from e
+    if parts.scheme != "https":
+        raise ValueError(f"Invalid repository URL (only https is supported): {url}")
+    if not hostname:
+        raise ValueError(f"Invalid repository URL (missing host): {url}")
+    if parts.username is not None or parts.password is not None:
+        raise ValueError(f"Invalid repository URL (credentials are not allowed): {url}")
+    if port:
+        raise ValueError(f"Invalid repository URL (ports are not supported): {url}")
+    if parts.query or parts.fragment:
+        raise ValueError(f"Invalid repository URL (query or fragment not allowed): {url}")
+    host = hostname.removeprefix("www.") if hostname == "www.github.com" else hostname
+    if host == "localhost" or host.endswith(".localhost"):
+        raise ValueError(f"Invalid repository URL (localhost is not allowed): {url}")
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        ip = None
+    if ip is not None and not ip.is_global:
+        raise ValueError(f"Invalid repository URL (private or loopback address): {url}")
+
+    segments = [unquote(s) for s in parts.path.split("/") if s]
+    branch: str | None = None
+    marker = None  # index where the branch part starts
+    if host == "github.com":
+        if len(segments) > 2:
+            if segments[2] != "tree" or len(segments) < 4:
+                raise ValueError(f"Invalid repository URL (unsupported path): {url}")
+            marker = 2
+    elif "-" in segments:
+        i = segments.index("-")
+        if segments[i + 1 : i + 2] != ["tree"] or len(segments) < i + 3:
+            raise ValueError(f"Invalid repository URL (unsupported path): {url}")
+        marker = i
+    elif host == "bitbucket.org" and len(segments) > 2:
+        if segments[2] != "src" or len(segments) < 4:
+            raise ValueError(f"Invalid repository URL (unsupported path): {url}")
+        marker = 2
+    if marker is not None:
+        skip = 1 if segments[marker] == "-" else 0
+        branch = "/".join(segments[marker + 1 + skip :])
+        segments = segments[:marker]
+
+    if segments and segments[-1].endswith(".git"):
+        segments[-1] = segments[-1][: -len(".git")]
+    if len(segments) < 2:
+        raise ValueError(f"Invalid repository URL (missing owner or repository): {url}")
+    # "." and ".." as owner would turn api.github.com/users/<owner> into api.github.com/user
+    if any(not _NAME_RE.match(seg) or seg in (".", "..") for seg in segments):
+        raise ValueError(f"Invalid repository URL (bad owner or repository name): {url}")
+    if branch is not None and not is_valid_branch(branch):
+        raise ValueError(f"Invalid repository URL (bad branch): {url}")
+    return host, "/".join(segments), branch
+
+
+def to_https_url(url: str) -> str:
+    """Rewrite http:// and git@<host>:<path> forms to https://; anything else is returned stripped"""
+    raw = url.strip()
+    ssh = re.match(r"^git@([^:/\s]+):(.+)$", raw)
+    if ssh:
+        return f"https://{ssh.group(1)}/{ssh.group(2)}"
+    if raw.lower().startswith("http://"):
+        return "https://" + raw[len("http://") :]
+    return raw
 
 
 def parse_github_url(url: str) -> tuple[str, str, str | None]:
@@ -105,44 +197,13 @@ def parse_github_url(url: str) -> tuple[str, str, str | None]:
     """
     if not isinstance(url, str) or not url.strip():
         raise ValueError("Invalid GitHub URL: empty")
-    raw = url.strip()
-    branch: str | None = None
-
-    ssh = re.match(r"^git@github\.com:([^/?#]+)/([^/?#]+?)/?$", raw)
-    if ssh:
-        owner, repo = ssh.groups()
-    else:
-        try:
-            parts = urlsplit(raw)
-            hostname = parts.hostname
-            port = parts.port
-        except ValueError as e:
-            raise ValueError(f"Invalid GitHub URL: {url}") from e
-        if parts.scheme not in ("http", "https"):
-            raise ValueError(f"Invalid GitHub URL (unsupported scheme): {url}")
-        if hostname not in ("github.com", "www.github.com"):
-            raise ValueError(f"Invalid GitHub URL (host must be github.com): {url}")
-        if parts.username or parts.password or port:
-            raise ValueError(f"Invalid GitHub URL (unexpected credentials or port): {url}")
-        if parts.query or parts.fragment:
-            raise ValueError(f"Invalid GitHub URL (query or fragment not allowed): {url}")
-        segments = [s for s in parts.path.split("/") if s]
-        if len(segments) < 2:
-            raise ValueError(f"Invalid GitHub URL (missing owner or repository): {url}")
-        owner, repo = segments[0], segments[1]
-        rest = segments[2:]
-        if rest:
-            if rest[0] != "tree" or len(rest) < 2:
-                raise ValueError(f"Invalid GitHub URL (unsupported path): {url}")
-            branch = "/".join(unquote(s) for s in rest[1:])
-
-    if repo.endswith(".git"):
-        repo = repo[: -len(".git")]
-    # "." and ".." as owner would turn api.github.com/users/<owner> into api.github.com/user
-    if not _NAME_RE.match(owner) or owner in (".", "..") or not repo or not _NAME_RE.match(repo) or repo in (".", ".."):
-        raise ValueError(f"Invalid GitHub URL (bad owner or repository name): {url}")
-    if branch is not None and not is_valid_branch(branch):
-        raise ValueError(f"Invalid GitHub URL (bad branch): {url}")
+    try:
+        host, path, branch = parse_repository_url(to_https_url(url))
+    except ValueError as e:
+        raise ValueError(str(e).replace("Invalid repository URL", "Invalid GitHub URL", 1)) from e
+    if host != "github.com":
+        raise ValueError(f"Invalid GitHub URL (host must be github.com): {url}")
+    owner, repo = path.split("/")
     return owner, repo, branch
 
 
@@ -154,9 +215,44 @@ def quote_path(path: str) -> str:
 class GitHubAPIError(Exception):
     """GitHub returned an error status while listing repository contents"""
 
+    user_facing = True  # the message is written for the person who added the repository
+
     def __init__(self, status: int, message: str):
         super().__init__(message)
         self.status = status
+
+
+class RepositoryCheckError(Exception):
+    """The pre-flight check refused a repository; the endpoint returns it as an HTTP error"""
+
+    def __init__(self, status_code: int, detail: str, headers: dict[str, str] | None = None):
+        super().__init__(detail)
+        self.status_code = status_code
+        self.detail = detail
+        self.headers = headers
+
+
+def rate_limit_wait(headers) -> float | None:
+    """Seconds until a rate-limited 403/429 clears, or None when headers say nothing"""
+    try:
+        if "Retry-After" in headers:
+            return max(1.0, float(headers["Retry-After"]))
+        if headers.get("X-RateLimit-Remaining") == "0":
+            return max(1.0, int(headers["X-RateLimit-Reset"]) - time.time())
+    except (KeyError, ValueError):
+        pass
+    return None
+
+
+def is_rate_limited(status: int, headers) -> bool:
+    return status in (403, 429) and (
+        headers.get("X-RateLimit-Remaining") == "0" or "Retry-After" in headers
+    )
+
+
+def _about_minutes(seconds: float) -> str:
+    minutes = max(1, math.ceil(seconds / 60))
+    return f"about {minutes} minute{'' if minutes == 1 else 's'}"
 
 
 @dataclass
@@ -170,7 +266,62 @@ class GitHubFile:
     filename: str
 
 
-class GitHubService:
+class FileSelector:
+    """Which repository files get indexed: the limits and filters shared by every git source"""
+
+    def __init__(self):
+        self.max_files = 1000  # Maximum number of files to process
+        self.max_file_size = 1024 * 1024  # 1MB file size limit
+        self.max_total_bytes = 100 * 1024 * 1024  # a run holds every file in memory at once
+        self.skipped_files = 0  # Code files the last listing dropped over max_files / max_total_bytes
+        self.listing_truncated = False  # The last listing stopped at MAX_WALK_REQUESTS directories
+
+    def _select_candidates(self, entries: list[tuple[str, int]]) -> list[tuple[str, int]]:
+        """Apply deny-list, extension and size filters, then sort and cap"""
+        selected = []
+        for path, size in entries:
+            if is_denied_path(path):
+                continue
+            filename = path.split("/")[-1]
+            # Unknown extensions map to "text", which we don't index
+            if self._detect_language(filename) == "text" or size >= self.max_file_size:
+                continue
+            selected.append((path, size))
+        selected.sort()
+        kept, total_bytes = 0, 0
+        for _, size in selected:
+            if kept == self.max_files or total_bytes + size > self.max_total_bytes:
+                break
+            kept += 1
+            total_bytes += size
+        self.skipped_files = len(selected) - kept
+        if self.skipped_files:
+            logger.warning(
+                "Repository is over the file or size limit, indexing the first files only",
+                total_files=len(selected),
+                kept_files=kept,
+                max_files=self.max_files,
+                max_total_bytes=self.max_total_bytes,
+            )
+        return selected[:kept]
+
+    def _detect_language(self, filename: str) -> str:
+        """Detect programming language from file extension"""
+        if not filename:
+            return "text"
+
+        ext = filename.lower().split(".")[-1] if "." in filename else ""
+        return EXT_TO_LANGUAGE.get(ext, "text")
+
+    @staticmethod
+    def _decode_content(raw: bytes) -> str | None:
+        """Decode downloaded bytes to text, or None for empty and binary files"""
+        if not raw or b"\x00" in raw:
+            return None
+        return raw.decode("utf-8-sig", errors="replace")
+
+
+class GitHubService(FileSelector):
     """
     GitHub API client for repository analysis with performance optimizations.
     Based on architecture.md: External Integration → GitHub API
@@ -182,18 +333,13 @@ class GitHubService:
         self.raw_base_url = "https://raw.githubusercontent.com"
         self._semaphore = asyncio.Semaphore(MAX_CONCURRENT_REQUESTS)
 
-        # Set processing limits
-        self.max_files = 1000  # Maximum number of files to process
-        self.max_file_size = 1024 * 1024  # 1MB file size limit
-        self.max_total_bytes = 100 * 1024 * 1024  # a run holds every file in memory at once
-        self.skipped_files = 0  # Code files the last listing dropped over max_files / max_total_bytes
-        self.listing_truncated = False  # The last listing stopped at MAX_WALK_REQUESTS directories
+        super().__init__()
         self._walk_requests = 0
 
         if not self.token:
             logger.warning("GitHub token not found. Rate limits will be lower.")
 
-    def _new_session(self) -> aiohttp.ClientSession:
+    def _new_session(self, total_timeout: float = 30) -> aiohttp.ClientSession:
         """One session per get_repository_files call"""
         headers = {
             "Accept": "application/vnd.github.v3+json",
@@ -201,7 +347,7 @@ class GitHubService:
         }
         if self.token:
             headers["Authorization"] = f"token {self.token}"
-        timeout = aiohttp.ClientTimeout(total=30, connect=10)
+        timeout = aiohttp.ClientTimeout(total=total_timeout, connect=10)
         return aiohttp.ClientSession(headers=headers, timeout=timeout)
 
     async def _make_request_with_retries(
@@ -251,16 +397,14 @@ class GitHubService:
                     continue
                 if status < 500:
                     raise failure
-            except TimeoutError:
+            except TimeoutError as e:
                 target = f"{owner}/{repo}/{path}" if path else f"{owner}/{repo}"
-                failure = GitHubAPIError(
-                    504, f"GitHub API request timed out (504) while reading {target}"
-                )
+                logger.warning("GitHub request timed out", url=url, error=str(e))
+                failure = GitHubAPIError(504, f"GitHub did not respond in time while reading {target}")
             except aiohttp.ClientError as e:
                 target = f"{owner}/{repo}/{path}" if path else f"{owner}/{repo}"
-                failure = GitHubAPIError(
-                    503, f"GitHub API connection failed (503) while reading {target}: {e}"
-                )
+                logger.warning("GitHub request failed", url=url, error=str(e))
+                failure = GitHubAPIError(503, f"Could not reach GitHub while reading {target}")
 
             attempt += 1
             if attempt >= MAX_RETRIES:
@@ -268,6 +412,79 @@ class GitHubService:
             delay = RETRY_BACKOFF_BASE * 2 ** (attempt - 1)
             logger.warning("Retrying GitHub request", url=url, attempt=attempt, delay=delay)
             await asyncio.sleep(delay)
+
+    async def check_repository(self, url: str, branch: str | None = None) -> None:
+        """Fail fast, before a row exists, if the repository or branch can't be read.
+
+        One attempt each for the repository and its branch, 10 s in total: no retries or
+        rate-limit sleeps, since the caller is an HTTP request with its own timeout.
+        Raises RepositoryCheckError carrying the HTTP status and message to return.
+        """
+        owner, repo, url_branch = parse_github_url(url)
+        branch = branch or url_branch
+        name = f"{owner}/{repo}"
+        session = self._new_session(total_timeout=10)
+        try:
+            status, info = await self._check_get(session, f"{self.base_url}/repos/{owner}/{repo}")
+            if status == 404:
+                raise RepositoryCheckError(
+                    422,
+                    f"GitHub repository {name} was not found. Check the URL; "
+                    "if it's private, the server's GITHUB_TOKEN needs access.",
+                )
+            if status == 403:
+                raise RepositoryCheckError(422, f"GitHub denied access to {name}.")
+            if status != 200 or not isinstance(info, dict):
+                raise RepositoryCheckError(502, "Could not reach GitHub; try again.")
+
+            branch = branch or info.get("default_branch")
+            if not branch:
+                return  # get_repository_files reports a missing default branch itself
+            status, _ = await self._check_get(
+                session, f"{self.base_url}/repos/{owner}/{repo}/branches/{quote_path(branch)}"
+            )
+            if status == 404:
+                # Assumed: GitHub answers 404 for any branch of an empty repository
+                if info.get("size") == 0:
+                    raise RepositoryCheckError(422, f"{name} is empty; there is nothing to index.")
+                raise RepositoryCheckError(422, f"Branch '{branch}' does not exist in {name}.")
+            if status == 403:
+                raise RepositoryCheckError(422, f"GitHub denied access to {name}.")
+            if status != 200:
+                raise RepositoryCheckError(502, "Could not reach GitHub; try again.")
+        finally:
+            await session.close()
+
+    async def _check_get(self, session: aiohttp.ClientSession, url: str) -> tuple[int, Any]:
+        """One GET for check_repository: (status, JSON) for 200, 403 and 404, else raises"""
+        try:
+            async with session.get(url) as response:
+                status, headers = response.status, response.headers
+                body = await response.json(content_type=None) if status == 200 else None
+        except TimeoutError as e:
+            logger.warning("GitHub check timed out", url=url, error=str(e))
+            raise RepositoryCheckError(504, "GitHub did not respond in time; try again.") from e
+        except aiohttp.ClientError as e:
+            logger.warning("GitHub check failed", url=url, error=str(e))
+            raise RepositoryCheckError(502, "Could not reach GitHub; try again.") from e
+
+        if is_rate_limited(status, headers):
+            wait = rate_limit_wait(headers) or 60.0
+            raise RepositoryCheckError(
+                503,
+                f"GitHub's API rate limit was reached; try again in {_about_minutes(wait)}.",
+                {"Retry-After": str(math.ceil(wait))},
+            )
+        if status == 401:
+            raise RepositoryCheckError(
+                502,
+                "GitHub rejected the server's GITHUB_TOKEN; check the token configured "
+                "on the CodeSage server.",
+            )
+        if status >= 500:
+            logger.warning("GitHub check got a server error", url=url, status=status)
+            raise RepositoryCheckError(502, "Could not reach GitHub; try again.")
+        return status, body
 
     async def get_repository_files(
         self, repo_url: str, branch: str | None = None
@@ -316,35 +533,6 @@ class GitHubService:
             # The caller records the failure on the repository; just trace it here
             logger.debug("Failed to get repository files", repo_url=repo_url, error=str(e))
             raise
-
-    def _select_candidates(self, entries: list[tuple[str, int]]) -> list[tuple[str, int]]:
-        """Apply deny-list, extension and size filters, then sort and cap"""
-        selected = []
-        for path, size in entries:
-            if is_denied_path(path):
-                continue
-            filename = path.split("/")[-1]
-            # Unknown extensions map to "text", which we don't index
-            if self._detect_language(filename) == "text" or size >= self.max_file_size:
-                continue
-            selected.append((path, size))
-        selected.sort()
-        kept, total_bytes = 0, 0
-        for _, size in selected:
-            if kept == self.max_files or total_bytes + size > self.max_total_bytes:
-                break
-            kept += 1
-            total_bytes += size
-        self.skipped_files = len(selected) - kept
-        if self.skipped_files:
-            logger.warning(
-                "Repository is over the file or size limit, indexing the first files only",
-                total_files=len(selected),
-                kept_files=kept,
-                max_files=self.max_files,
-                max_total_bytes=self.max_total_bytes,
-            )
-        return selected[:kept]
 
     async def _list_entries(
         self, session: aiohttp.ClientSession, owner: str, repo: str, branch: str
@@ -454,34 +642,21 @@ class GitHubService:
             raise
         return [f for f in results if f is not None]
 
-    def _detect_language(self, filename: str) -> str:
-        """Detect programming language from file extension"""
-        if not filename:
-            return "text"
-
-        ext = filename.lower().split(".")[-1] if "." in filename else ""
-        return EXT_TO_LANGUAGE.get(ext, "text")
-
     @staticmethod
     def _describe_api_error(status: int, headers, owner: str, repo: str, path: str) -> str:
         """Explain a failed contents request in terms a user can act on"""
         target = f"{owner}/{repo}/{path}" if path else f"{owner}/{repo}"
         if status == 401:
             return f"GitHub rejected the token (401) for {target}; check GITHUB_TOKEN"
-        if status in (403, 429) and headers.get("X-RateLimit-Remaining") == "0":
-            return f"GitHub API rate limit exceeded ({status}) while reading {target}"
+        if is_rate_limited(status, headers):
+            wait = rate_limit_wait(headers)
+            retry = f"; try again in {_about_minutes(wait)}" if wait else ""
+            return f"GitHub API rate limit exceeded ({status}) while reading {target}{retry}"
         if status == 403:
             return f"GitHub denied access (403) to {target}"
         if status == 404:
             return f"GitHub repository or path not found (404): {target}; it may be private or misspelled"
         return f"GitHub API error {status} while reading {target}"
-
-    @staticmethod
-    def _decode_content(raw: bytes) -> str | None:
-        """Decode downloaded bytes to text, or None for empty and binary files"""
-        if not raw or b"\x00" in raw:
-            return None
-        return raw.decode("utf-8-sig", errors="replace")
 
     async def _download_file_content(
         self, session: aiohttp.ClientSession, download_url: str, path: str

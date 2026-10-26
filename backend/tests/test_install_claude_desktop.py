@@ -124,3 +124,77 @@ def test_basic_auth_stores_password_in_keychain_and_only_user_in_config(tmp_path
     assert "pw" not in cfg.read_text() and "PASSWORD" not in cfg.read_text()
     # -w is last, so `security` prompts and the password never appears in argv
     assert calls == [["security", "add-generic-password", "-U", "-s", "codesage-mcp", "-a", "ann", "-w"]]
+
+
+def test_unreadable_config_is_a_clean_error(tmp_path, capsys):
+    cfg = tmp_path / "c.json"
+    cfg.mkdir()  # reading a directory raises OSError
+    assert run(cfg) == 1
+    assert f"error: cannot read {cfg}:" in capsys.readouterr().err
+
+
+def test_non_utf8_config_is_a_clean_error(tmp_path, capsys):
+    cfg = tmp_path / "c.json"
+    cfg.write_bytes(b"\xff\xfe\x00{")
+    assert run(cfg) == 1
+    assert f"error: cannot read {cfg}:" in capsys.readouterr().err
+    assert cfg.read_bytes() == b"\xff\xfe\x00{"
+
+
+def test_unwritable_directory_fails_before_the_keychain(tmp_path, monkeypatch, capsys):
+    stored = []
+    monkeypatch.setattr(installer.shutil, "which", lambda name: "/usr/bin/security")
+    monkeypatch.setattr(installer.subprocess, "run", lambda cmd: stored.append(cmd))
+    monkeypatch.setattr(installer.os, "access", lambda path, mode: False)
+    cfg = tmp_path / "c.json"
+    assert run(cfg, "--basic-auth", "ann") == 1
+    assert f"error: cannot write {cfg}:" in capsys.readouterr().err
+    assert stored == [] and not cfg.exists()
+
+
+def test_write_failure_is_a_clean_error(tmp_path, monkeypatch, capsys):
+    def deny(path, data):
+        raise PermissionError("denied")
+
+    monkeypatch.setattr(installer, "write_atomic", deny)
+    cfg = tmp_path / "c.json"
+    assert run(cfg) == 1
+    assert f"error: cannot write {cfg}: denied" in capsys.readouterr().err
+
+
+def test_missing_claude_desktop_folder_warns_but_proceeds(tmp_path, monkeypatch, capsys):
+    cfg = tmp_path / "Claude" / "claude_desktop_config.json"
+    monkeypatch.setattr(installer, "default_config_path", lambda: cfg)
+    assert installer.main(["--server-url", "http://x:1", "--api-key", "k"]) == 0
+    assert "Claude Desktop doesn't seem to be installed" in capsys.readouterr().err
+    assert cfg.exists()
+
+
+def test_explicit_config_path_skips_the_missing_folder_warning(tmp_path, capsys):
+    assert run(tmp_path / "new" / "c.json") == 0
+    assert "doesn't seem to be installed" not in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("url", ["localhost:8001", "ftp://x", "http://", "backend"])
+def test_bad_server_url_is_refused(tmp_path, capsys, url):
+    cfg = tmp_path / "c.json"
+    assert installer.main(["--config", str(cfg), "--server-url", url, "--api-key", "k"]) == 1
+    assert "--server-url must be an http(s) URL with a host" in capsys.readouterr().err
+    assert not cfg.exists()
+
+
+def test_backup_names_are_unique_within_the_same_second(tmp_path):
+    cfg = tmp_path / "c.json"
+    cfg.write_text("{}")
+    for _ in range(3):
+        assert run(cfg) == 0
+    assert len(list(tmp_path.glob("c.json.bak-*"))) == 3
+
+
+def test_keychain_failure_says_nothing_changed(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(installer.shutil, "which", lambda name: "/usr/bin/security")
+    monkeypatch.setattr(installer.subprocess, "run", lambda cmd: type("R", (), {"returncode": 1})())
+    cfg = tmp_path / "c.json"
+    assert run(cfg, "--basic-auth", "ann") == 1
+    assert "nothing was changed" in capsys.readouterr().err
+    assert not cfg.exists()

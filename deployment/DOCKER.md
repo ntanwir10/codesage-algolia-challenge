@@ -18,7 +18,7 @@ CodeSage ships two Compose stacks: a **dev** stack for one user on localhost, an
 | | Dev | Prod |
 | --- | --- | --- |
 | Compose file | `deployment/docker-compose.yml` | `deployment/docker-compose.prod.yml` |
-| Backend image | `backend/Dockerfile` (source bind-mounted, uvicorn `--reload`) | `backend/Dockerfile.prod` (multi-stage, no bind mount, `--workers 1`, `ENVIRONMENT=production` so `/docs` is off) |
+| Backend image | `backend/Dockerfile` (source bind-mounted, uvicorn `--reload`) | `backend/Dockerfile.prod` (multi-stage, no bind mount, `--workers 1`, `ENVIRONMENT=production` so `/docs` is off; installs `curl` and `git`, which the `add_repository` tool uses to clone public repositories from hosts other than github.com) |
 | nginx | `deployment/nginx.conf`, plain HTTP | `deployment/nginx.prod.conf.template`, HTTPS and basic auth |
 | Containers | `codesage_mcp_server`, `codesage_nginx` | `codesage_mcp_server_prod`, `codesage_nginx_prod` |
 | Published ports | `127.0.0.1:80` (nginx), `127.0.0.1:8001` (backend) | `80` and `443` (nginx). The backend is not published |
@@ -41,13 +41,15 @@ The dev stack serves the built dashboard and proxies the API through nginx, with
    cp .env.example backend/.env   # or run `make setup`
    ```
 
-   Fill in `ALGOLIA_APP_ID`, `ALGOLIA_ADMIN_API_KEY`, `GITHUB_TOKEN` and `CODESAGE_API_KEY`. The backend reads this file through `env_file`.
+   Fill in `ALGOLIA_APP_ID`, `ALGOLIA_ADMIN_API_KEY`, `GITHUB_TOKEN` and `CODESAGE_API_KEY`. The backend reads this file through `env_file`. A value left empty, or left as a `your-...-here` placeholder, counts as unset. Without Algolia the stack starts, but `/health` reports `degraded` and adding a repository returns `503`. `GITHUB_TOKEN` is optional.
 
 2. **Generate a key and export it.**
 
    ```bash
    python -c "import secrets; print(secrets.token_urlsafe(32))"   # put this in backend/.env
    export CODESAGE_API_KEY=<the same key>                         # used at build time
+   # after `make setup` the key already lives in backend/.env:
+   # export CODESAGE_API_KEY=$(sed -n 's/^CODESAGE_API_KEY=//p' backend/.env)
    ```
 
 3. **Build and start.**
@@ -166,7 +168,7 @@ Each stack uses its own Algolia index, and neither matches the local-run default
 | `make logs` / `make logs-backend` | Follow all dev logs, or the backend's |
 | `make status` | `docker compose ps` for the dev stack |
 | `make shell` | `bash` in the dev backend container |
-| `make health` | Curls `http://localhost:8001/health` and the MCP capabilities (dev, needs `jq`) |
+| `make health` | Curls `http://127.0.0.1:8001/health` and the MCP capabilities (dev, needs `jq`). Prints "Backend not responding" if the backend is down or answers with an error |
 | `make prod-build` / `make prod-up` | Build and start the prod stack |
 | `make clean` | Stop the dev stack and delete its volumes |
 | `make clean-all` | The same, plus the dev stack's locally built images |
@@ -211,6 +213,8 @@ It does not build the dev backend image (`backend/Dockerfile`) and never starts 
 | Browser asks for a login on every request | Wrong user or password in `htpasswd` | Recreate the file and restart nginx |
 | Dev app returns an empty reply on another hostname | The dev nginx drops unknown `Host` values | Use `localhost` or `127.0.0.1` |
 | Port 80 already in use | The dev and prod stacks both publish it, or another service does | Stop the other stack with `docker compose -f <file> down` |
-| Prod backend is unhealthy and nginx never starts | nginx waits for the backend healthcheck | Read the backend logs; the usual cause is the missing key |
-| Repository ends in `failed` | `error_message` says why, for example missing Algolia credentials or a GitHub rate limit | Fix the credentials, or set `GITHUB_TOKEN`, then reprocess |
+| Prod backend is unhealthy and nginx never starts | nginx waits for the backend healthcheck, which fails on a non-2xx `/health`. The usual cause is the missing key; a database failure is the other | Read the backend logs |
+| `/health` says `degraded`, or adding a repository returns `503` | Algolia is not configured, or unreachable. Empty values and `your-...-here` placeholders count as unset. `degraded` is still HTTP `200`, so the container stays healthy | Set `ALGOLIA_APP_ID` and `ALGOLIA_ADMIN_API_KEY` in `backend/.env`, then restart the stack |
+| Adding a repository returns `422`, `502` or `504` | GitHub refused the repository, rejected `GITHUB_TOKEN`, or didn't answer within 10 s. The dashboard shows the message | Fix the URL or branch, or the token, and try again. A `503` with `Retry-After` is GitHub's rate limit |
+| Repository ends in `failed` | `error_message` says why, for example a GitHub rate limit or an Algolia error. The dashboard card and `GET /api/v1/repositories/{id}/status` show it | Fix the cause, or set `GITHUB_TOKEN`, then reprocess |
 | Claude Desktop can't reach prod | The bridge refuses plain `http://`, or doesn't trust a self-signed cert | Use `https://`, and add `SSL_CERT_FILE` to the bridge's `env` |

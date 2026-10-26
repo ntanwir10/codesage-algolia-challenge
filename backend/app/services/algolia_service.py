@@ -39,7 +39,7 @@ MAX_RECORD_BYTES = 9000
 MAX_FIELD_CHARS = 500
 
 # Higher ranks first when relevance ties
-RANK_WEIGHTS = {"class": 3, "function": 2, "doc_section": 1, "import": 0}
+RANK_WEIGHTS = {"class": 3, "function": 2, "terraform_block": 2, "doc_section": 1, "import": 0}
 
 
 def _fit_record(record: dict[str, Any]) -> dict[str, Any]:
@@ -274,6 +274,11 @@ class AlgoliaService:
             "page": page,
             "highlightPreTag": "<mark>",
             "highlightPostTag": "</mark>",
+            # Natural-language questions: drop words that miss instead of returning nothing
+            "removeWordsIfNoResults": "allOptional",
+            "removeStopWords": True,
+            "ignorePlurals": True,
+            "queryLanguages": ["en"],
         }
         filters = []
         if repository_id is not None:

@@ -536,3 +536,90 @@ async def test_ruby():
 
 async def test_syntax_errors_do_not_raise():
     assert isinstance(await parse("function ((( {{{", "javascript"), list)
+
+
+TERRAFORM = textwrap.dedent(
+    '''\
+    terraform {
+      required_version = ">= 1.5"
+    }
+
+    provider "aws" {
+      region = var.region
+    }
+
+    # Access logs for the API
+    // kept in S3
+    resource "aws_s3_bucket" "logs" {
+      bucket = "logs"
+      lifecycle {
+        prevent_destroy = true
+      }
+    }
+
+    data "aws_iam_policy_document" "x" {
+      statement {
+        actions = ["s3:*"]
+      }
+    }
+
+    module "network" {
+      source = "./network"
+    }
+
+    variable "region" {
+      default = "us-east-1"
+    }
+
+    locals {
+      user_data = <<-EOT
+        #!/bin/bash
+        resource "fake" "block" { }
+        }
+      EOT
+    }
+
+    output "api_url" {
+      value = "x"
+    }
+    '''
+)
+
+
+def test_terraform_top_level_blocks_become_named_entities():
+    entities = CodeParser().parse("main.tf", TERRAFORM, "terraform")
+
+    assert [(e.entity_type, e.name, e.line_start, e.line_end) for e in entities] == [
+        ("terraform_block", "terraform", 1, 3),
+        ("terraform_block", "provider aws", 5, 7),
+        ("terraform_block", "resource aws_s3_bucket.logs", 11, 16),
+        ("terraform_block", "data aws_iam_policy_document.x", 18, 22),
+        ("terraform_block", "module network", 24, 26),
+        ("terraform_block", "variable region", 28, 30),
+        ("terraform_block", "locals", 32, 38),
+        ("terraform_block", "output api_url", 40, 42),
+    ]
+    logs = entities[2]
+    assert logs.description == "Access logs for the API kept in S3"
+    assert logs.content == 'resource "aws_s3_bucket" "logs" {'
+    assert "prevent_destroy" in logs.body
+    assert CodeParser().parse("main.hcl", TERRAFORM, "hcl") == entities
+
+
+def test_terraform_comment_above_the_first_block_is_its_description():
+    src = '# Bucket for logs\nresource "a" "b" {}\n\n# Second\nresource "c" "d" {}\n'
+    entities = CodeParser().parse("main.tf", src, "terraform")
+
+    assert [e.description for e in entities] == ["Bucket for logs", "Second"]
+
+
+def test_terraform_block_comment_has_no_stray_stars():
+    src = '/*\n * Shared bucket\n * for logs\n */\nresource "a" "b" {}\n'
+    entities = CodeParser().parse("main.tf", src, "terraform")
+
+    assert entities[0].description == "Shared bucket for logs"
+
+
+def test_terraform_only_the_comment_run_directly_above_the_first_block_counts():
+    src = '# Unrelated\n\n# Bucket\n# for logs\nresource "a" "b" {}\n'
+    assert CodeParser().parse("main.tf", src, "terraform")[0].description == "Bucket for logs"

@@ -1,3 +1,4 @@
+import { Link } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 
 interface EmptyStateProps {
@@ -29,7 +30,7 @@ export function EmptyState({
       {action && (
         <Button onClick={action.onClick} asChild={!!action.href}>
           {action.href ? (
-            <a href={action.href}>{action.label}</a>
+            <Link to={action.href}>{action.label}</Link>
           ) : (
             action.label
           )}

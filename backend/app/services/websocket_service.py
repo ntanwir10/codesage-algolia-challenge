@@ -211,7 +211,7 @@ async def repository_status_websocket(websocket: WebSocket):
         # Accept first: a close before accept reaches browsers as 1006, and only
         # 1008 tells the client that retrying can't help
         await websocket.accept(subprotocol=subprotocol)
-        await websocket.close(code=1008)
+        await websocket.close(code=1008, reason="Invalid or missing API key")
         return
 
     # No await between this check and connect() registering the socket, so racing handshakes can't
@@ -219,7 +219,7 @@ async def repository_status_websocket(websocket: WebSocket):
     if websocket_manager.is_full_for(websocket):
         # 1013 "try again later": the client's reconnect backoff applies, unlike after 1008
         await websocket.accept(subprotocol=subprotocol)
-        await websocket.close(code=1013)
+        await websocket.close(code=1013, reason="Too many connections; try again later")
         return
 
     await websocket_manager.connect(websocket, subprotocol)
@@ -274,5 +274,7 @@ async def repository_status_websocket(websocket: WebSocket):
         logger.info("WebSocket client disconnected")
     except Exception as e:
         logger.error("WebSocket error", error=str(e))
+        with contextlib.suppress(Exception):  # the socket may already be gone
+            await websocket.close(code=1011, reason="Internal error")
     finally:
         await websocket_manager.disconnect(websocket)

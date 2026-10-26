@@ -25,7 +25,7 @@ export interface MCPToolsResponse {
   count: number;
 }
 
-type EntityType = "function" | "class" | "import" | "doc_section";
+type EntityType = "function" | "class" | "import" | "doc_section" | "terraform_block";
 
 /** Arguments accepted by the search_code tool (unknown keys are rejected: 422). */
 export interface SearchQuery {

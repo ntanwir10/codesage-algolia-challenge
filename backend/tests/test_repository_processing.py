@@ -6,7 +6,7 @@ from app.models.code_entity import CodeEntity
 from app.models.code_file import CodeFile
 from app.models.repository import Repository
 from app.services.github_service import GitHubAPIError, GitHubFile
-from app.services.repository_service import RepositoryService
+from app.services.repository_service import INDEX_REMOVED_NOTE, RepositoryService
 
 MODULE_A = (
     "import os\n"
@@ -94,9 +94,7 @@ async def test_github_errors_mark_the_run_failed(
     await process(db_session, repository)
 
     assert repository.status == "failed"
-    assert repository.error_message == (
-        f"GitHubAPIError: GitHub request failed ({status})"
-    )
+    assert repository.error_message == f"GitHub request failed ({status})"
     assert algolia_index.records == {}
 
 
@@ -190,6 +188,36 @@ async def test_reprocess_stops_if_old_records_cannot_be_removed(
     assert "Could not remove previously indexed records" in repository.error_message
     assert stored_counts(db_session, repository.id) == (2, 5)
     assert len(algolia_index.records) == 5
+
+
+async def test_failure_after_the_old_index_was_cleared_says_so(
+    db_session, repository, github, algolia_index, monkeypatch
+):
+    github.files = [FILE_A, FILE_B]
+    await process(db_session, repository)
+
+    async def reject(self, documents):
+        return False
+
+    monkeypatch.setattr("app.services.algolia_service.AlgoliaService.index_documents", reject)
+    await process(db_session, repository, force=True)
+
+    assert repository.status == "failed"
+    assert repository.error_message.startswith("Algolia rejected the indexing request")
+    assert repository.error_message.endswith(INDEX_REMOVED_NOTE)
+    assert len(repository.error_message) <= 500
+
+
+async def test_failure_before_the_clear_does_not_claim_the_index_was_removed(
+    db_session, repository, github, algolia_index
+):
+    github.files = [FILE_A, FILE_B]
+    await process(db_session, repository)
+
+    github.error = GitHubAPIError(404, "GitHub repository or path not found (404)")
+    await process(db_session, repository, force=True)
+
+    assert "previous index was removed" not in repository.error_message
 
 
 async def test_entities_from_other_repositories_are_untouched(

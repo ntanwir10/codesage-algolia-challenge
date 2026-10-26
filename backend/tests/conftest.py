@@ -42,6 +42,26 @@ def reset_rate_limits():
     yield
 
 
+def pytest_configure(config):
+    config.addinivalue_line("markers", "real_github_check: run GitHubService.check_repository for real")
+
+
+@pytest.fixture(autouse=True)
+def no_real_github_check(request, monkeypatch):
+    """Creating a repository checks GitHub first; tests never reach it or need Algolia keys.
+
+    A test of the real check opts out with @pytest.mark.real_github_check.
+    """
+    monkeypatch.setattr(AlgoliaService, "is_available", lambda self: True)
+    if request.node.get_closest_marker("real_github_check"):
+        return
+
+    async def accept(self, url, branch=None):
+        return None
+
+    monkeypatch.setattr(github_module.GitHubService, "check_repository", accept)
+
+
 @pytest.fixture
 def db_engine():
     """A fresh in-memory SQLite database per test"""

@@ -8,10 +8,12 @@ import { LoadingSpinner } from "@/components/ui/loading-spinner";
 import { describeError, type DescribedError } from "@/lib/errors";
 import { isHttpUrl } from "@/lib/utils";
 import type { SearchHit } from "@/types/mcp";
+import type { RepositoryStatus } from "@/types/repository";
 
 interface SearchInterfaceProps {
   repositoryId: number;
   canSearch: boolean;
+  status?: RepositoryStatus;
   className?: string;
 }
 
@@ -21,6 +23,7 @@ const BLUR_CLOSE_MS = 150;
 export function SearchInterface({
   repositoryId,
   canSearch,
+  status,
   className,
 }: SearchInterfaceProps) {
   const listboxId = useId();
@@ -109,9 +112,12 @@ export function SearchInterface({
     } catch (error: unknown) {
       if (requestId !== searchRequestId.current) return;
       setSearchError(describeError(error));
-      setSearchResults([]);
-      setTotalHits(0);
-      setPages(0);
+      // A failed page change keeps the current results and pager.
+      if (targetPage === 0) {
+        setSearchResults([]);
+        setTotalHits(0);
+        setPages(0);
+      }
       setHasSearched(true);
     } finally {
       if (requestId === searchRequestId.current) setIsSearching(false);
@@ -143,6 +149,8 @@ export function SearchInterface({
         <p className="text-sm text-muted-foreground">
           {canSearch
             ? "Search functions, classes, imports and docs in this repository"
+            : status === "failed"
+            ? "Indexing failed, so search isn't available. Reprocess the repository to try again."
             : "Search will be available once processing is complete"}
         </p>
       </CardHeader>
@@ -202,7 +210,7 @@ export function SearchInterface({
 
             <Button
               type="submit"
-              disabled={!canSearch || isSearching}
+              disabled={!canSearch || isSearching || !searchQuery.trim()}
               className="px-6"
             >
               {isSearching ? <LoadingSpinner className="w-4 h-4" /> : "Search"}
@@ -245,14 +253,14 @@ export function SearchInterface({
 
         {searchResults.length > 0 && (
           <div className="space-y-4">
-            <div className="flex items-center justify-between">
+            <div className="flex flex-wrap items-center justify-between gap-2">
               <p className="text-sm text-muted-foreground">
                 Found {totalHits.toLocaleString()} result
                 {totalHits !== 1 ? "s" : ""} for &ldquo;{activeQuery}&rdquo;
               </p>
 
               {pages > 1 && (
-                <div className="flex items-center gap-2">
+                <div className="flex flex-wrap items-center gap-2">
                   <Button
                     variant="outline"
                     size="sm"

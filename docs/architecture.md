@@ -22,8 +22,8 @@ Everything runs in one backend process; the other parts are clients or proxies.
 | REST API | `backend/app/api/v1/endpoints/` | `repositories.py` (create, update, delete, status, stats, process), `ai.py` (MCP tool calls, resources, search suggestions) and `performance.py` (metrics). Mounted under `/api/v1`. |
 | Core | `backend/app/core/` | `config.py` (settings and startup validation), `security.py` (API key, request guard, rate limiter, failure messages), `database.py` (engine, session) and `migrations.py` (Alembic at startup). |
 | Models | `backend/app/models/` | SQLAlchemy tables: `Repository`, `CodeFile`, `CodeEntity`. |
-| Services | `backend/app/services/` | `repository_service.py` (job lifecycle), `github_service.py` (listing and download), `code_parser.py` (entities), `algolia_service.py` (index and search), `mcp_tools.py` (the six tools), `websocket_service.py` (live status) and `performance_monitor.py` (metrics). |
-| MCP bridge | `backend/codesage_mcp/` | Stdio MCP server that Claude Desktop runs. It holds no data and turns `tools/list`, `tools/call`, `resources/list` and `resources/read` into HTTP calls to `/api/v1/ai`. Tool names and argument models live in `schemas.py`, which the backend imports too, so `tools/list` works with the backend down. Requests time out after 30 s. |
+| Services | `backend/app/services/` | `repository_service.py` (job lifecycle), `github_service.py` (listing and download), `git_source.py` (public repositories on other hosts, read with git), `code_parser.py` (entities), `algolia_service.py` (index and search), `mcp_tools.py` (the seven tools), `websocket_service.py` (live status) and `performance_monitor.py` (metrics). |
+| MCP bridge | `backend/codesage_mcp/` | Stdio MCP server that Claude Desktop runs. It holds no data and turns `tools/list`, `tools/call`, `resources/list` and `resources/read` into HTTP calls to `/api/v1/ai`. Tool names and argument models live in `schemas.py`, which the backend imports too, so `tools/list` works with the backend down. Requests time out after 30 s, and a connection after 5 s. |
 | Dashboard | `frontend/` | React + Vite. `services/api.ts` and `services/websocket.ts` are the REST and WebSocket clients. In the dev stack nginx serves the built bundle. |
 | nginx | `deployment/nginx.conf`, `deployment/nginx.prod.conf.template` | Dev: HTTP proxy that drops requests for any `Host` except `localhost` and `127.0.0.1`. Prod: see [The prod nginx role](#the-prod-nginx-role). |
 
@@ -45,8 +45,8 @@ erDiagram
 | `code_entities` | `id`, `file_id`, `repository_id`, `entity_type`, `entity_name` (up to 255), `start_line`, `end_line`, `signature`, `docstring`, `entity_metadata` (JSON: `parameters`, `return_type`), timestamps |
 
 - **Status.** `status` is `pending`, `processing`, `completed` or `failed`. The transitions are in the README's [status diagram](../README.md#repository-status).
-- **Entity types.** `function` (methods are stored as functions), `class`, `import` and `doc_section`.
-- **Cascade.** The ORM cascades `all, delete-orphan` from repository to files and from file to entities. Foreign keys carry no `ON DELETE`, and SQLite runs with `foreign_keys=ON`, so the service deletes entities, then files, with bulk queries before it deletes the repository row. Algolia records go first; if that fails, nothing is deleted and the API returns `502`.
+- **Entity types.** `function` (methods are stored as functions), `class`, `import`, `doc_section` and `terraform_block` (a top-level Terraform or HCL block, named like `resource aws_s3_bucket.logs`).
+- **Cascade.** The ORM cascades `all, delete-orphan` from repository to files and from file to entities. Foreign keys carry no `ON DELETE`, and SQLite runs with `foreign_keys=ON`, so the service deletes entities, then files, with bulk queries before it deletes the repository row. The Algolia removal (`delete_by`) is sent first and not awaited: Algolia applies an index's tasks in order, so records indexed later under a reused id still land after the delete. If Algolia refuses the request, nothing is deleted and the API returns `502`.
 - **Connection.** WAL journal mode and foreign keys are set on every connection.
 
 ### Migrations
@@ -64,7 +64,7 @@ Alembic migrations in `backend/alembic/versions` run at startup through `app/cor
 
 ## Ingestion pipeline
 
-A run turns a GitHub repository into stored files, entities and Algolia records. The flow is drawn in the README's [indexing run](../README.md#the-indexing-run); this section gives the order and the numbers.
+A run turns a git repository into stored files, entities and Algolia records. The flow is drawn in the README's [indexing run](../README.md#the-indexing-run); this section gives the order and the numbers.
 
 ### Limits
 
@@ -75,6 +75,8 @@ A run turns a GitHub repository into stored files, entities and Algolia records.
 | Bytes per run | 100 MB | `github_service.py` |
 | Contents-API walk | 300 directory requests, breadth-first | `github_service.py` |
 | Concurrent GitHub downloads | 5 | `github_service.py` |
+| Remote check on other hosts (`git ls-remote`) | 10 s | `git_source.py` |
+| Clone on other hosts (`git clone --depth 1`) | 120 s | `git_source.py` |
 | Retries | 3, with exponential backoff, for timeouts, 429 and 5xx; a rate-limit reset is awaited for at most 60 s | `github_service.py` |
 | Files per database commit | 200 | `repository_service.py` |
 | Concurrent runs | 2 | `repository_service.py` |
@@ -82,31 +84,47 @@ A run turns a GitHub repository into stored files, entities and Algolia records.
 
 ### Steps
 
-1. **Schedule.** `POST /repositories/` (`201`) or `POST /repositories/{id}/process` (`202`) starts an asyncio task. The task is refused with `409` if one is already running for that repository.
+1. **Check and schedule.** `POST /repositories/` first rejects a duplicate URL (`409`, matched regardless of case), then requires Algolia to be configured (`503`), then checks the remote: for github.com `GitHubService.check_repository`, for any other host `git ls-remote` (see [Fetching by host](#fetching-by-host)). The GitHub check makes one GET for the repository and one for its branch, 10 s in total, with no retries or rate-limit sleeps. It maps problems to a status without creating a row: `422` for a missing, private, empty or denied repository or a missing branch; `502` for a rejected `GITHUB_TOKEN`, a network error or a GitHub 5xx; `503` with `Retry-After` for a rate limit; `504` for a timeout. Then `POST /repositories/` (`201`) or `POST /repositories/{id}/process` (`202`, also `503` without Algolia) starts an asyncio task. The task is refused with `409` if one is already running for that repository. `/process` sets the repository to `processing` before it returns, so a client polling `/status` never reads the old `failed`.
 2. **Mark and wait.** The repository becomes `processing` with `processed_files` back at 0, and the status is broadcast. A run waits for one of two slots while already showing `processing`.
-3. **Check Algolia.** Missing credentials, or a missing URL, fail the run with a message.
-4. **List.** The branch is the repository's, the URL's, or the default branch from the GitHub API. One recursive git trees call lists the blobs; symlinks are ignored.
+3. **Check Algolia.** The endpoints already refuse a missing configuration, so this only fails a run when the credentials went away after it was scheduled. The run fails with a message.
+4. **List.** The branch is the repository's, the URL's, or the default branch from the GitHub API. For github.com, one recursive git trees call lists the blobs; symlinks are ignored. For other hosts, a shallow clone is walked instead (step 6 does not apply).
 5. **Select.** Denied directories (`node_modules`, `dist`, `build`, `vendor`, `third_party`, `.git`, `__pycache__`, `.next`, `coverage`), minified and generated files (`*.min.js`, `*.min.css`, `*.bundle.js`, `*.map`), lockfiles, unknown extensions and files of 1 MB or more are dropped. The rest are sorted by path and kept in order until 1000 files or 100 MB; the remainder counts as skipped.
 6. **Truncated trees.** If GitHub marks the tree truncated, the contents API is walked breadth-first from the root, one request per directory and 300 at most, pruning denied directories. Its result is merged with the entries the truncated tree did return. If the cap is hit, the deepest unlisted directories are left out and the run is flagged.
-7. **Download.** Files download five at a time. Empty and binary files are skipped. One failed download fails the run. No files at all fails it too.
-8. **Clear.** Only after a successful fetch are the repository's Algolia records, then its rows, deleted, so a transient GitHub error does not wipe a working index. The Algolia delete is awaited, and if it fails the run fails.
+7. **Download.** Files download five at a time (other hosts: read from the clone). Empty and binary files are skipped. One failed download fails the run. No files at all fails it too.
+8. **Clear.** Only after a successful fetch are the repository's Algolia records, then its rows, deleted, so a transient GitHub error does not wipe a working index. The Algolia delete is awaited (up to 120 s), and if it fails the run fails. A plain repository delete does not wait.
 9. **Parse and store.** Files are handled in batches of 200: parse each file, add the file and its entities, commit off the event loop, then broadcast progress.
 10. **Index.** All records are sent to Algolia in batches of 1000. The run fails if there are no records, or if Algolia rejects the request.
 11. **Finish.** The primary language is the most common programming language; Markdown, JSON, YAML, XML, CSS, SCSS, HTML and plain text do not count. The framework is detected from `package.json` dependencies (`next`, `@angular/core`, `vue`, `svelte`, `react`, `express`) or Python imports (`django`, `fastapi`, `flask`). The status becomes `completed`.
+
+### Fetching by host
+
+`repository_service.py` picks the source from the URL's host. `GitHubService` and `GitSource` share one `FileSelector`, so the deny list, extensions, size and count limits are the same.
+
+| Host | Check | Fetch |
+| --- | --- | --- |
+| github.com | REST API (`check_repository`), private repositories readable with `GITHUB_TOKEN` | Trees and blobs API |
+| Any other host | `git ls-remote --heads --symref`, 10 s | `git clone --depth 1 --single-branch --no-tags`, 120 s, into a temporary directory that is always removed |
+
+- **Public only.** Git cannot ask for credentials, so a repository that answers 401, 403 or 404 is reported as "not found or is private; only public repositories are supported on <host>" (`422` at the check, `404` during a run).
+- **No shell, no config.** Git runs through `create_subprocess_exec` with an empty `HOME`, no user or system config, no credential helper, `GIT_TERMINAL_PROMPT=0`, and only https allowed. It is killed on timeout.
+- **Symlinks skipped.** The clone uses `core.symlinks=false`, and the tree walk does not follow or list symlinks.
+- **URL limits.** `parse_repository_url` accepts https only and rejects credentials, ports, `localhost`, private IP literals, and branch names that start with `-`.
+- **Names and entry points.** Other hosts are named `<host>/<path>`. REST create takes github.com only; the `add_repository` MCP tool takes any host through the same service function.
+- **Image.** The prod image installs `git`.
 
 ### Failure handling
 
 - **Parse failure.** The file is still stored, without entities, and counted as unparsed.
 - **Store failure.** A failed batch commit is rolled back, its files are counted as failed, its records are not indexed, and the run continues with the next batch.
-- **Run failure.** Any other exception rolls back, sets `failed` with a message of at most 500 characters, and broadcasts it. A database error is recorded as a generic message, because its text carries SQL and file contents.
+- **Run failure.** Any other exception rolls back, sets `failed` with a message of at most 500 characters, and broadcasts it. A database error is recorded as a generic message, because its text carries SQL and file contents. A GitHub error is recorded as its own sentence, such as the rate-limit message with the wait. Other exceptions are recorded as `ClassName: message`. If a reprocess had already cleared the old index, the message ends with a note that the previous index was removed.
 - **Partial index.** The run still ends `completed` when something was left out, and `error_message` starts with `Partially indexed:`. It names each cause: files that could not be stored, files that could not be parsed, files skipped over the 1000-file or 100 MB limit, and a listing too large to read in full. The dashboard shows this as amber.
 - **Job crash.** If the task itself dies, the row is set to `failed` ("Processing stopped unexpectedly") so it does not stay `processing`.
 - **Server restart.** At startup, every repository left `pending` or `processing` is set to `failed` ("interrupted by a server restart"). Reprocess it to retry.
-- **Delete.** A repository can't be deleted, or have `branch`, `language` or `framework` changed, while its job runs (`409`).
+- **Delete.** A repository can't be deleted, or have `branch`, `language` or `framework` changed, while its job runs (`409`). A delete returns as soon as Algolia accepts the removal; a reprocess waits for it.
 
 ## Search
 
-Entities are indexed as Algolia records, one per function, class, import or doc section. `AlgoliaService` builds the records and applies the settings; the settings are written once per process, and only when they differ from the live ones.
+Entities are indexed as Algolia records, one per function, class, import, doc section or Terraform block. `AlgoliaService` builds the records and applies the settings; the settings are written once per process, and only when they differ from the live ones.
 
 ### Record fields
 
@@ -116,13 +134,13 @@ Entities are indexed as Algolia records, one per function, class, import or doc 
 | --- | --- |
 | `objectID` | `<repository_id>_<sha1 of path:type:name:line>`, so re-indexing overwrites instead of duplicating |
 | `repository_id`, `file_path`, `language` | Where the entity lives |
-| `entity_type`, `entity_name` | `function`, `class`, `import` or `doc_section`; name capped at 500 characters |
+| `entity_type`, `entity_name` | `function`, `class`, `import`, `doc_section` or `terraform_block`; name capped at 500 characters |
 | `description` | Docstring or summary, capped at 500 characters |
 | `parameters`, `return_type` | Parameter names; return type capped at 500 characters |
-| `line_start`, `line_end` | 1-based line range, used for GitHub links |
+| `line_start`, `line_end` | 1-based line range, used for source links |
 | `signature` | Definition line, capped at 500 characters |
 | `content` | Signature plus the body, with at most 2000 characters of body |
-| `rank_weight` | `class` 3, `function` 2, `doc_section` 1, `import` 0 |
+| `rank_weight` | `class` 3, `function` 2, `terraform_block` 2, `doc_section` 1, `import` 0 |
 | `parameter_count`, `lines_of_code` | Derived counts |
 
 A record is trimmed to 9000 bytes of JSON, `content` first and then `parameters`, because Algolia rejects a whole batch if one record is over 10 KB.
@@ -133,15 +151,15 @@ A record is trimmed to 9000 bytes of JSON, `content` first and then `parameters`
 | --- | --- |
 | `searchableAttributes` | `entity_name`, `description`, `content`, `parameters`, `file_path`, in that order |
 | `attributesForFaceting` | `filterOnly(repository_id)`, `entity_type`, `language`, `file_path` |
-| `customRanking` | `desc(rank_weight)`: on a relevance tie, classes first, then functions, doc sections, imports |
+| `customRanking` | `desc(rank_weight)`: on a relevance tie, classes first, then functions and Terraform blocks, doc sections, imports |
 | Highlighting | `<mark>` and `</mark>` |
 | `hitsPerPage`, `maxValuesPerFacet` | 20, 100 |
 
 ### Queries
 
-- **`search_code`.** The MCP tool resolves the repository by id, name or URL and requires it to be `completed`. It then queries Algolia with `repository_id=<n>` as a numeric filter (the facet form matches nothing), plus optional `language` and `entity_type` filters with escaped values. Without a repository it searches every repository, including any being reprocessed. Results carry a snippet (600 characters), signature and description (300 each) and a GitHub permalink at the exact lines. A failed query becomes a tool error that hides the Algolia host.
+- **`search_code`.** The MCP tool resolves the repository by id, name or URL and requires it to be `completed`; a `failed`, `pending` or `processing` one is refused with the reason or the progress. It then queries Algolia with `repository_id=<n>` as a numeric filter (the facet form matches nothing), plus optional `language` and `entity_type` filters with escaped values. Without a repository it searches every repository, including any being reprocessed. Each query sends `removeWordsIfNoResults: allOptional`, `removeStopWords`, `ignorePlurals` and `queryLanguages: ["en"]`, so a question in plain words returns the best partial matches instead of nothing. Results carry a snippet (600 characters), signature and description (300 each) and a permalink at the exact lines: GitHub `#L`, GitLab `/-/blob/...#L` or Bitbucket `/src/...#lines-`. Other hosts get no link. Every other tool refuses a repository that is not `completed`, with the reason or the progress. If Algolia is not configured, the tool says so. A failed query becomes a tool error that hides the Algolia host.
 - **Suggestions.** `GET /api/v1/ai/search/suggestions` needs at least two characters, asks Algolia for twice the limit (1 to 20, default 10) and returns the distinct entity names in rank order. Any failure returns an empty list.
-- **Writes and waits.** Indexing and deletes poll the Algolia task with a deadline (300 s to index, 120 s to delete), because the v3 client would wait forever. An indexing timeout is logged and the run goes on, since the records were accepted. A delete timeout fails the run.
+- **Writes and waits.** Indexing and the delete before a reprocess poll the Algolia task with a deadline (300 s to index, 120 s to delete), because the v3 client would wait forever. An indexing timeout is logged and the run goes on, since the records were accepted. A delete timeout fails the run. A plain repository delete sends `delete_by` and does not poll.
 - **Threads.** The v3 client is synchronous, so each call runs in a worker thread, and there is one client per set of credentials.
 
 ## Real-time updates
@@ -150,10 +168,11 @@ A record is trimmed to 9000 bytes of JSON, `content` first and then `parameters`
 
 ### Connection
 
-- **Auth.** The key is read from a `codesage.key.<hex>` subprotocol, which is how browsers send it, or else from the `X-API-Key` header, which the prod nginx sends. With a key configured, a missing or wrong key is accepted and then closed with code 1008, because a close before accept reaches browsers as 1006. With no key configured, any connection passes this check.
+- **Auth.** The key is read from a `codesage.key.<hex>` subprotocol, which is how browsers send it, or else from the `X-API-Key` header, which the prod nginx sends. With a key configured, a missing or wrong key is accepted and then closed with code 1008 and the reason "Invalid or missing API key", because a close before accept reaches browsers as 1006. With no key configured, any connection passes this check.
 - **Request guard.** Before the endpoint runs, the guard closes the handshake with 1008 if the `Host` or `Origin` is refused. See [BrowserRequestGuard](#browserrequestguard).
-- **Caps.** At most 200 open connections, and 20 from one client address. A new one over either cap is accepted and closed with 1013 ("try again later"), so the client's reconnect backoff applies. Behind the prod nginx, uvicorn takes the address from `X-Forwarded-For`.
+- **Caps.** At most 200 open connections, and 20 from one client address. A new one over either cap is accepted and closed with 1013 and the reason "Too many connections; try again later", so the client's reconnect backoff applies. Behind the prod nginx, uvicorn takes the address from `X-Forwarded-For`.
 - **Subprotocol.** `codesage` is echoed back when the client offered it.
+- **Unexpected errors.** An exception in the handler closes the socket with 1011 and the reason "Internal error".
 
 ### Messages
 
@@ -182,7 +201,7 @@ The defaults protect a local, single-user setup; a key and the host checks prote
 
 When `CODESAGE_API_KEY` is set, requests must carry it as `X-API-Key`, compared in constant time. It guards:
 
-- repository create, update, delete and process;
+- repository create, update, delete and process, and the `add_repository` tool call;
 - everything under `/api/v1/performance`;
 - `GET /api/v1/ai/search/suggestions`, `POST /api/v1/ai/mcp/tools/call` and `GET /api/v1/ai/mcp/resources/read`;
 - the `/ws` WebSocket.
@@ -223,7 +242,8 @@ Limits come from slowapi, per client address, and can be turned off with `ENABLE
 
 ### Secrets and errors
 
-- **Logs and responses.** An unhandled exception returns `500` with a generic message and an `X-Request-ID`; the details go to the log under that ID.
+- **Logs and responses.** An unhandled exception returns `500` with `{detail, request_id}` and an `X-Request-ID` header; the details go to the log under that ID. The response carries CORS headers for an allowed origin, because the handler sits outside the CORS middleware, so a browser can read it.
+- **Shapes.** Errors are `{detail}` with a string. Validation errors (`422`) carry a list whose `loc` names the field, such as `["body","url"]`. A rate limit is `429` with `{detail}` and a `Retry-After` header. An id or `skip` too large for the database is `422`, not a `500`.
 - **Recorded failures.** `failure_message` is used for `error_message`, WebSocket frames, metrics and parse logs. It replaces SQLAlchemy errors with a fixed message and truncates other errors to 500 characters.
 - **Tool errors.** A failed Algolia query reaches Claude as "Search is unavailable", and the health check says only that Algolia is unreachable, because client errors can name the Algolia host or app id.
 - **Key transport.** Browsers send the key to `/ws` in a subprotocol, so it never appears in a URL or an access log.
@@ -237,7 +257,7 @@ Limits come from slowapi, per client address, and can be turned off with `ENABLE
 - **TLS and login.** Port 443 requires basic auth, with the login file in `deployment/htpasswd`. Port 80 answers `/health` and redirects everything else to HTTPS.
 - **Key injection.** nginx sets `X-API-Key` on every `/api/` and `/ws` request and clears `Authorization`, so the browser never holds the key.
 - **Forwarding.** It passes `Host` with its port, `X-Forwarded-For` and `X-Forwarded-Proto: https`, which the origin check and the per-client WebSocket cap rely on.
-- **Health.** `/health` skips basic auth.
+- **Health.** `/health` skips basic auth. It returns `200` for `healthy` and `degraded` (Algolia unreachable or not configured) and `503` only when the database fails, so the Docker healthcheck stays green while Algolia is unset.
 
 The bridge sends the key itself when it talks to the backend directly. Through nginx it uses the basic-auth login instead, and nginx supplies the key. It refuses to send either over plain `http://` to a non-loopback host.
 

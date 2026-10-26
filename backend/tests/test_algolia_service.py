@@ -142,3 +142,23 @@ async def test_indented_definitions_hold_their_signature_once(algolia_index):
         record = service._create_algolia_document(entity, 1, path, language)
 
         assert record["content"].count(record["signature"].strip()) == 1, record["content"]
+
+
+async def test_search_relaxes_natural_language_questions(algolia_index):
+    await algolia_module.AlgoliaService().search_code("what AWS services does this project use")
+
+    sent = algolia_index.searches[-1]
+    assert sent["removeWordsIfNoResults"] == "allOptional"
+    assert sent["removeStopWords"] is True
+    assert sent["ignorePlurals"] is True
+    assert sent["queryLanguages"] == ["en"]
+    assert sent["highlightPreTag"] == "<mark>"
+
+
+def test_terraform_and_doc_records_carry_their_name():
+    parser, service = CodeParser(), algolia_module.AlgoliaService.__new__(algolia_module.AlgoliaService)
+    tf = parser.parse("main.tf", 'resource "aws_s3_bucket" "logs" {\n  bucket = "x"\n}\n', "terraform")[0]
+    doc = parser.parse("README.md", "# Overview\ntext\n", "markdown")[0]
+
+    assert service._create_algolia_document(tf, 1, "main.tf", "terraform")["entity_name"] == "resource aws_s3_bucket.logs"
+    assert service._create_algolia_document(doc, 1, "README.md", "markdown")["entity_name"] == "Overview"

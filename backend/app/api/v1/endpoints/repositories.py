@@ -1,12 +1,15 @@
+from typing import Annotated
+
 import structlog
 from fastapi import (
     APIRouter,
     Depends,
     HTTPException,
+    Path,
     Query,
     Request,
 )
-from sqlalchemy.exc import IntegrityError
+from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
@@ -18,9 +21,13 @@ from app.schemas.repository import (
     RepositoryResponse,
     RepositoryUpdate,
 )
+from app.services import algolia_service
 from app.services.repository_service import (
+    ALGOLIA_MISSING,
+    RepositoryAddError,
     RepositoryBusyError,
     RepositoryService,
+    add_repository,
     is_processing,
     start_processing,
 )
@@ -28,6 +35,17 @@ from app.services.repository_service import (
 logger = structlog.get_logger()
 settings = get_settings()
 router = APIRouter()
+
+# Ids and offsets beyond the database's integer range would overflow into a 500
+RepositoryId = Annotated[int, Path(ge=1, le=2**63 - 1)]
+
+
+def require_algolia() -> None:
+    if not algolia_service.AlgoliaService().is_available():
+        raise HTTPException(
+            status_code=503,
+            detail=ALGOLIA_MISSING,
+        )
 
 
 @router.get(
@@ -37,7 +55,7 @@ router = APIRouter()
     description="List all repositories with optional filtering",
 )
 async def list_repositories(
-    skip: int = Query(default=0, ge=0, description="Number of repositories to skip"),
+    skip: int = Query(default=0, ge=0, le=2**31, description="Number of repositories to skip"),
     limit: int = Query(
         default=100, ge=1, le=500, description="Maximum number of repositories to return"
     ),
@@ -80,25 +98,15 @@ async def create_repository(
 ):
     """Create a new repository"""
     # repository.url is already validated and normalised by the schema
-    existing = db.query(Repository).filter(Repository.url == repository.url).first()
-    if existing:
-        raise HTTPException(
-            status_code=409,
-            detail=f"Repository with URL {repository.url} already exists (ID: {existing.id})",
-        )
-
-    service = RepositoryService(db)
     try:
-        new_repository = await service.create_repository(repository)
-    except IntegrityError as e:
-        # Another request added the same URL between the check above and this insert
-        db.rollback()
-        raise HTTPException(
-            status_code=409, detail=f"Repository with URL {repository.url} already exists"
-        ) from e
-
-    logger.info("Repository created", repository_id=new_repository.id)
-    return new_repository
+        return await add_repository(db, repository)
+    except RepositoryAddError as e:
+        if e.repository_id is not None:
+            return JSONResponse(
+                status_code=e.status_code,
+                content={"detail": e.detail, "repository_id": e.repository_id},
+            )
+        raise HTTPException(status_code=e.status_code, detail=e.detail, headers=e.headers) from e
 
 
 @router.get(
@@ -107,7 +115,7 @@ async def create_repository(
     summary="Get Repository",
     description="Get a specific repository by ID",
 )
-async def get_repository(repository_id: int, db: Session = Depends(get_db)):
+async def get_repository(repository_id: RepositoryId, db: Session = Depends(get_db)):
     """Get a specific repository by ID"""
     repository = db.query(Repository).filter(Repository.id == repository_id).first()
     if not repository:
@@ -127,7 +135,7 @@ async def get_repository(repository_id: int, db: Session = Depends(get_db)):
     description="Update a repository's details",
 )
 async def update_repository(
-    repository_id: int,
+    repository_id: RepositoryId,
     repository_update: RepositoryUpdate,
     db: Session = Depends(get_db),
 ):
@@ -171,7 +179,7 @@ async def update_repository(
     summary="Delete Repository",
     description="Delete a repository and all its associated data",
 )
-async def delete_repository(repository_id: int, db: Session = Depends(get_db)):
+async def delete_repository(repository_id: RepositoryId, db: Session = Depends(get_db)):
     """Delete a repository and all its associated data"""
     repository = db.query(Repository).filter(Repository.id == repository_id).first()
     if not repository:
@@ -198,7 +206,7 @@ async def delete_repository(repository_id: int, db: Session = Depends(get_db)):
     summary="Get Repository Status",
     description="Get the current processing status of a repository",
 )
-async def get_repository_status(repository_id: int, db: Session = Depends(get_db)):
+async def get_repository_status(repository_id: RepositoryId, db: Session = Depends(get_db)):
     """Get the status of a repository"""
     repository = db.query(Repository).filter(Repository.id == repository_id).first()
     if not repository:
@@ -212,6 +220,7 @@ async def get_repository_status(repository_id: int, db: Session = Depends(get_db
         "processed_files": repository.processed_files,
         "total_files": repository.total_files,
         "progress": repository.processing_progress,
+        "error_message": repository.error_message,
     }
 
 
@@ -220,7 +229,7 @@ async def get_repository_status(repository_id: int, db: Session = Depends(get_db
     summary="Get Repository Statistics",
     description="Get processing statistics for a repository",
 )
-async def get_repository_stats(repository_id: int, db: Session = Depends(get_db)):
+async def get_repository_stats(repository_id: RepositoryId, db: Session = Depends(get_db)):
     """Get statistics for a repository"""
     repository = db.query(Repository).filter(Repository.id == repository_id).first()
     if not repository:
@@ -247,7 +256,7 @@ async def get_repository_stats(repository_id: int, db: Session = Depends(get_db)
 @limiter.limit(lambda: settings.rate_limit_default)
 async def process_repository(
     request: Request,
-    repository_id: int,
+    repository_id: RepositoryId,
     force_reprocess: bool = False,
     db: Session = Depends(get_db),
 ):
@@ -263,10 +272,15 @@ async def process_repository(
             detail="Repository is already processed; pass force_reprocess=true to reprocess it",
         )
 
+    require_algolia()
     try:
         start_processing(repository_id, force_reprocess=force_reprocess)
     except RepositoryBusyError as e:
         raise HTTPException(status_code=409, detail=str(e)) from e
+    # The job starts at the next await, so clients polling /status never read the old "failed"
+    repository.status = "processing"
+    repository.error_message = None
+    db.commit()
 
     logger.info("Repository processing scheduled", repository_id=repository_id)
     return {

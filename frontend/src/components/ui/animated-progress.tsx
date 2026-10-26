@@ -90,7 +90,14 @@ export function AnimatedProgress({
         </div>
       )}
 
-      <div className={`w-full bg-gray-200 rounded-full ${getSizeClasses()}`}>
+      <div
+        role="progressbar"
+        aria-label="Progress"
+        aria-valuemin={0}
+        aria-valuemax={100}
+        aria-valuenow={indeterminate ? undefined : Math.round(percentage)}
+        className={`w-full bg-gray-200 rounded-full ${getSizeClasses()}`}
+      >
         {indeterminate ? (
           <div
             className={`

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { onApiAuthError } from "@/services/api";
+import { clearAuthNotice, onApiAuthError } from "@/services/api";
 import {
   WebSocketService,
   buildWebSocketProtocols,
@@ -60,6 +60,7 @@ describe("WebSocketService", () => {
 
   beforeEach(() => {
     vi.useFakeTimers();
+    clearAuthNotice();
     FakeWebSocket.instances = [];
     vi.stubGlobal("WebSocket", FakeWebSocket);
     vi.stubEnv("VITE_WS_URL", "");
@@ -134,6 +135,19 @@ describe("WebSocketService", () => {
     expect(ws.closed).toBeNull();
     vi.advanceTimersByTime(1500);
     expect(ws.closed).toEqual({ code: 1000 });
+  });
+
+  it("reports disconnected when the idle close finds the socket already gone", () => {
+    const off = service.onRepositoryUpdate(1, () => {});
+    last().welcome();
+    last().drop(); // reconnect now pending
+    const statuses: string[] = [];
+    service.onConnectionStatusChange((s) => statuses.push(s));
+    off();
+    vi.advanceTimersByTime(1500);
+    expect(statuses).toEqual(["disconnected"]);
+    vi.advanceTimersByTime(60000);
+    expect(FakeWebSocket.instances).toHaveLength(1); // no reconnect
   });
 
   it("sends a heartbeat ping every 25s", () => {

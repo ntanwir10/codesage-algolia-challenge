@@ -12,6 +12,8 @@ export default defineConfig({
     },
   },
   server: {
+    // Fail instead of moving to 5174, which the example CORS_ORIGINS doesn't allow
+    strictPort: true,
     proxy: {
       "/api": { target: "http://127.0.0.1:8001", changeOrigin: true },
       "/ws": { target: "ws://127.0.0.1:8001", ws: true, changeOrigin: true },

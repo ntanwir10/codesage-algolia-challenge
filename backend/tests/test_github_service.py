@@ -558,3 +558,59 @@ async def test_missing_repository_is_reported_even_with_a_branch(github_api):
         await service_for(github_api).get_repository_files(REPO_URL, "main")
 
     assert "not found (404): octo/demo" in str(excinfo.value)
+
+
+@pytest.mark.parametrize(
+    "url, expected",
+    [
+        ("https://github.com/octo/demo", ("github.com", "octo/demo", None)),
+        ("https://www.github.com/octo/demo.git/", ("github.com", "octo/demo", None)),
+        ("https://github.com/octo/demo/tree/feature/x", ("github.com", "octo/demo", "feature/x")),
+        ("https://gitlab.com/group/repo", ("gitlab.com", "group/repo", None)),
+        ("https://gitlab.com/group/sub/deep/repo.git", ("gitlab.com", "group/sub/deep/repo", None)),
+        ("https://gitlab.com/group/sub/repo/-/tree/dev/x", ("gitlab.com", "group/sub/repo", "dev/x")),
+        ("https://bitbucket.org/team/repo", ("bitbucket.org", "team/repo", None)),
+        ("https://bitbucket.org/team/repo/src/release", ("bitbucket.org", "team/repo", "release")),
+        ("https://git.example.com/a/b", ("git.example.com", "a/b", None)),
+        ("https://GitLab.com/Group/Repo", ("gitlab.com", "Group/Repo", None)),
+    ],
+)
+def test_parse_repository_url_accepts(url, expected):
+    assert gh.parse_repository_url(url) == expected
+
+
+@pytest.mark.parametrize(
+    "url, message",
+    [
+        ("http://gitlab.com/g/r", "only https"),
+        ("git://gitlab.com/g/r", "only https"),
+        ("https://user:pw@gitlab.com/g/r", "credentials"),
+        ("https://token@gitlab.com/g/r", "credentials"),
+        ("https://localhost/g/r", "localhost"),
+        ("https://git.localhost/g/r", "localhost"),
+        ("https://127.0.0.1/g/r", "private or loopback"),
+        ("https://10.0.0.1/g/r", "private or loopback"),
+        ("https://192.168.1.5/g/r", "private or loopback"),
+        ("https://169.254.169.254/g/r", "private or loopback"),
+        ("https://[::1]/g/r", "private or loopback"),
+        ("https://gitlab.com/onlyone", "missing owner"),
+        ("https://gitlab.com/", "missing owner"),
+        ("https://gitlab.com/g/r/-/blob/main/x", "unsupported path"),
+        ("https://gitlab.com/g/../r", "bad owner"),
+        ("https://gitlab.com/g/r/-/tree/a/../b", "bad branch"),
+        ("https://gitlab.com/g/r/-/tree/-x", "bad branch"),
+        ("https://gitlab.com:8443/g/r", "ports"),
+        ("", "empty"),
+    ],
+)
+def test_parse_repository_url_rejects(url, message):
+    with pytest.raises(ValueError, match=message):
+        gh.parse_repository_url(url)
+
+
+@pytest.mark.parametrize(
+    "filename, language",
+    [("main.tf", "terraform"), ("prod.tfvars", "terraform"), ("vault.hcl", "hcl"), ("a.txt", "text")],
+)
+def test_infrastructure_languages(filename, language):
+    assert GitHubService()._detect_language(filename) == language

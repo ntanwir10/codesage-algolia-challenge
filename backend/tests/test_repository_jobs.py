@@ -360,6 +360,21 @@ async def test_delete_keeps_the_row_when_algolia_cannot_delete(db_session, algol
     assert db_session.get(Repository, repo.id) is not None
 
 
+async def test_delete_does_not_wait_for_algolia_to_finish(db_session, monkeypatch):
+    repo = make_repository(db_session, status="completed")
+    waits = []
+
+    async def record_delete(self, repository_id, wait=False):
+        waits.append(wait)
+        return True
+
+    monkeypatch.setattr(algolia_module.AlgoliaService, "delete_repository_index", record_delete)
+
+    assert await RepositoryService(db_session).delete_repository(repo) is True
+    assert waits == [False]
+    assert db_session.get(Repository, repo.id) is None
+
+
 async def test_no_run_can_start_while_a_delete_is_in_flight(db_session, monkeypatch):
     repo = make_repository(db_session, status="completed")
     entered, release = asyncio.Event(), asyncio.Event()
@@ -456,4 +471,4 @@ async def test_failed_run_reports_its_reason_through_the_api(client, db_session,
 
     body = client.get(f"/api/v1/repositories/{repo.id}").json()
     assert body["status"] == "failed"
-    assert body["error_message"] == "GitHubAPIError: GitHub repository or path not found (404): octo/demo"
+    assert body["error_message"] == "GitHub repository or path not found (404): octo/demo"

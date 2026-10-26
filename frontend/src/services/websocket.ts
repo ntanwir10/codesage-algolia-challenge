@@ -1,4 +1,4 @@
-import { notifyAuthError } from "@/services/api";
+import { clearAuthNotice, notifyAuthError } from "@/services/api";
 import type { RepositoryStatus } from "@/types/repository";
 
 export interface RepositoryStatusUpdate {
@@ -90,7 +90,8 @@ export class WebSocketService {
     }
   }
 
-  private hasSubscribers(): boolean {
+  /** True while any repository is subscribed (i.e. a socket is wanted). */
+  hasSubscribers(): boolean {
     return this.repoListeners.size > 0;
   }
 
@@ -279,6 +280,8 @@ export class WebSocketService {
       if (this.hasSubscribers()) return;
       this.clearReconnect();
       this.teardownSocket(1000, "No subscribers");
+      // No socket may be left to report it (closed, retry pending): tell listeners nothing is retrying
+      this.notifyConnection("disconnected");
     }, IDLE_CLOSE_MS);
   }
 
@@ -315,6 +318,7 @@ export class WebSocketService {
   /** The server's "connected" frame: the connection is now really up. */
   private onWelcome(): void {
     this.welcomed = true;
+    clearAuthNotice();
     this.reconnectAttempts = 0;
     this.notifyConnection("connected");
     for (const repositoryId of this.repoListeners.keys()) {

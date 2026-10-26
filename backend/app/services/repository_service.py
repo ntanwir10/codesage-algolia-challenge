@@ -16,6 +16,7 @@ from datetime import UTC, datetime
 
 import structlog
 from sqlalchemy import func
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.database import SessionLocal
@@ -24,12 +25,17 @@ from app.models.code_entity import CodeEntity
 from app.models.code_file import CodeFile
 from app.models.repository import Repository
 from app.schemas.repository import RepositoryCreate
+from app.services import git_source
+from app.services.github_service import GitHubService, RepositoryCheckError, parse_repository_url
 from app.services.performance_monitor import monitor_repository_processing
 
 logger = structlog.get_logger()
 
 # Files written to the database per commit
 DB_BATCH_SIZE = 200
+
+# Appended to a failure recorded after a reprocess already cleared the old index
+INDEX_REMOVED_NOTE = " The previous index was removed; reprocess to rebuild it."
 
 # Languages whose files are documentation or data rather than program source
 NON_PROGRAMMING_LANGUAGES = {"text", "markdown", "json", "yaml", "xml", "css", "scss", "html"}
@@ -53,8 +59,30 @@ def _run_slot() -> asyncio.Semaphore:
     return _run_slots[loop]
 
 
+ALGOLIA_MISSING = "Search indexing is not configured on the server (Algolia credentials are missing)."
+
+
+class RepositoryAddError(Exception):
+    """add_repository refused; the REST endpoint and the MCP tool both report these"""
+
+    def __init__(
+        self,
+        status_code: int,
+        detail: str,
+        headers: dict[str, str] | None = None,
+        repository_id: int | None = None,
+    ):
+        super().__init__(detail)
+        self.status_code = status_code
+        self.detail = detail
+        self.headers = headers
+        self.repository_id = repository_id  # the existing row, for a duplicate (409)
+
+
 class IngestionError(Exception):
     """A processing run that would leave the repository with nothing searchable"""
+
+    user_facing = True  # messages are written for the person who added the repository
 
 
 class RepositoryBusyError(Exception):
@@ -150,6 +178,7 @@ class RepositoryService:
 
     def __init__(self, db: Session):
         self.db = db
+        self._index_cleared = False  # set once a run has removed the previous index
 
     async def create_repository(self, repository_data: RepositoryCreate) -> Repository:
         """Create a repository and schedule its processing"""
@@ -189,6 +218,7 @@ class RepositoryService:
         repository.error_message = None
         self.db.commit()
         await self._broadcast_repository_status(repository)
+        self._index_cleared = False
 
         try:
             # A run already shows "processing" while it waits here for a free slot
@@ -199,6 +229,11 @@ class RepositoryService:
             self.db.rollback()
             repository.status = "failed"
             repository.error_message = failure_message(e)
+            if self._index_cleared:
+                # The old records are gone, so a failure here leaves nothing to search
+                repository.error_message = (
+                    repository.error_message[: 500 - len(INDEX_REMOVED_NOTE)] + INDEX_REMOVED_NOTE
+                )
             self.db.commit()
             logger.error(
                 "Repository processing failed",
@@ -229,6 +264,7 @@ class RepositoryService:
         """GitHub fetch → parse → store → Algolia index. Raises on any failure."""
         from app.services.algolia_service import AlgoliaService
         from app.services.code_parser import CodeParser
+        from app.services.git_source import GitSource
         from app.services.github_service import GitHubService
 
         algolia_service = AlgoliaService()
@@ -239,11 +275,13 @@ class RepositoryService:
         if not repository.url:
             raise IngestionError("Repository URL is required for processing")
 
-        # 1. GitHub: list and download the repository's code files.
-        # No branch means the repository's default branch.
-        github = GitHubService()
+        # 1. Git host: list and download the repository's code files.
+        # No branch means the repository's default branch. github.com uses its REST API;
+        # every other host is cloned with git.
+        host = parse_repository_url(repository.url)[0]
+        github = GitHubService() if host == "github.com" else GitSource()
         files = await github.get_repository_files(repository.url, repository.branch or None)
-        logger.info("GitHub files retrieved", repository_id=repository.id, file_count=len(files))
+        logger.info("Repository files retrieved", repository_id=repository.id, file_count=len(files))
         if not files:
             raise IngestionError("No supported code files found in repository")
 
@@ -454,10 +492,15 @@ class RepositoryService:
                 error=str(e),
             )
 
-    async def _clear_repository_data(self, repository_id: int, algolia_service):
-        """Remove a repository's stored files, entities and Algolia records"""
-        if not await algolia_service.delete_repository_index(repository_id, wait=True):
+    async def _clear_repository_data(self, repository_id: int, algolia_service, wait: bool = True):
+        """Remove a repository's stored files, entities and Algolia records.
+
+        A plain delete passes wait=False: Algolia applies an index's tasks in order, so records
+        indexed later under a reused id still land after the delete instead of being removed by it.
+        """
+        if not await algolia_service.delete_repository_index(repository_id, wait=wait):
             raise IngestionError("Could not remove previously indexed records from Algolia")
+        self._index_cleared = True
 
         def clear_rows():
             # Entities reference files, so delete them first
@@ -488,7 +531,7 @@ class RepositoryService:
         try:
             # Bulk-deletes the rows off the event loop, so the ORM cascade below finds none to load
             try:
-                await self._clear_repository_data(repository.id, AlgoliaService())
+                await self._clear_repository_data(repository.id, AlgoliaService(), wait=False)
             except IngestionError:
                 return False
 
@@ -500,3 +543,39 @@ class RepositoryService:
             return True
         finally:
             del _jobs[repository.id]
+
+
+async def add_repository(db: Session, repository: RepositoryCreate) -> Repository:
+    """Check and create a repository, and schedule its processing.
+
+    Raises RepositoryAddError for a duplicate (409), missing Algolia credentials (503) or a
+    repository the pre-flight check refuses. `repository` is already validated and normalised.
+    """
+    from app.services import algolia_service
+
+    existing = (
+        db.query(Repository).filter(func.lower(Repository.url) == repository.url.lower()).first()
+    )
+    if existing:
+        name = repository.url.removeprefix("https://").removeprefix("github.com/")
+        raise RepositoryAddError(409, f"{name} has already been added.", repository_id=existing.id)
+
+    if not algolia_service.AlgoliaService().is_available():
+        raise RepositoryAddError(503, ALGOLIA_MISSING)
+    try:
+        if parse_repository_url(repository.url)[0] == "github.com":
+            await GitHubService().check_repository(repository.url, repository.branch)
+        else:
+            await git_source.check_remote(repository.url, repository.branch)
+    except RepositoryCheckError as e:
+        raise RepositoryAddError(e.status_code, e.detail, e.headers) from e
+
+    try:
+        new_repository = await RepositoryService(db).create_repository(repository)
+    except IntegrityError as e:
+        # Another request added the same URL between the check above and this insert
+        db.rollback()
+        raise RepositoryAddError(409, f"Repository with URL {repository.url} already exists") from e
+
+    logger.info("Repository created", repository_id=new_repository.id)
+    return new_repository

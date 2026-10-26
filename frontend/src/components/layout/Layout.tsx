@@ -30,8 +30,8 @@ export function Layout({ children }: LayoutProps) {
       {/* Header */}
       <header className="border-b">
         <div className="container mx-auto px-4 py-4">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-8">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="flex flex-wrap items-center gap-x-8 gap-y-2">
               <Link to="/" className="flex items-center gap-2">
                 <span className="text-2xl">🧠</span>
                 <div>
@@ -44,7 +44,7 @@ export function Layout({ children }: LayoutProps) {
                 </div>
               </Link>
 
-              <nav className="hidden md:flex items-center gap-4">
+              <nav className="flex flex-wrap items-center gap-2 md:gap-4">
                 {navigation.map((item) => (
                   <Link
                     key={item.name}

@@ -267,6 +267,7 @@ def test_one_client_cannot_take_every_slot(monkeypatch):
         with pytest.raises(WebSocketDisconnect) as excinfo, client.websocket_connect("ws://localhost/ws") as ws:
             ws.receive_json()
         assert excinfo.value.code == 1013
+        assert excinfo.value.reason == "Too many connections; try again later"
         # Another client address still gets in
         with other.websocket_connect("ws://localhost/ws") as ws:
             assert ws.receive_json()["type"] == "connected"
@@ -340,3 +341,31 @@ async def test_disconnect_cleans_subscriptions():
     await manager.disconnect(ws)
     assert manager.get_connection_count() == 0
     assert manager.repository_connections == {}
+
+
+def test_a_bad_api_key_is_closed_with_1008_and_a_reason(monkeypatch):
+    from fastapi import WebSocketDisconnect
+
+    monkeypatch.setattr("app.services.websocket_service.api_key_is_valid", lambda key: False)
+    client = TestClient(app, base_url="http://localhost", client=LOCAL)
+    with pytest.raises(WebSocketDisconnect) as excinfo, client.websocket_connect("ws://localhost/ws") as ws:
+        ws.receive_json()
+    assert excinfo.value.code == 1008
+    assert excinfo.value.reason == "Invalid or missing API key"
+
+
+def test_an_unexpected_error_closes_with_1011(monkeypatch):
+    from fastapi import WebSocketDisconnect
+
+    def boom(raw):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr("app.services.websocket_service._parse_client_message", boom)
+    client = TestClient(app, base_url="http://localhost", client=LOCAL)
+    with client.websocket_connect("ws://localhost/ws") as ws:
+        ws.receive_json()  # connected
+        ws.send_text("{}")
+        with pytest.raises(WebSocketDisconnect) as excinfo:
+            ws.receive_json()
+    assert excinfo.value.code == 1011
+    assert excinfo.value.reason == "Internal error"
