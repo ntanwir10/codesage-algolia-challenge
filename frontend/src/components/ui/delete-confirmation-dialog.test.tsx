@@ -13,9 +13,10 @@ describe("DeleteConfirmationDialog", () => {
   it("is a labelled modal that focuses Cancel and closes on Escape", () => {
     const onClose = vi.fn();
     render(<DeleteConfirmationDialog {...props} onClose={onClose} />);
+    // No focus trap, so the dialog must not claim to be modal
     expect(
       screen.getByRole("dialog", { name: "Delete Repository" })
-    ).toHaveAttribute("aria-modal", "true");
+    ).not.toHaveAttribute("aria-modal");
     expect(screen.getByText("Cancel")).toHaveFocus();
     fireEvent.keyDown(document, { key: "Escape" });
     expect(onClose).toHaveBeenCalledTimes(1);

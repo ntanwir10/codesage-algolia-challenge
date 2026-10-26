@@ -66,7 +66,6 @@ export function DeleteConfirmationDialog({
     >
       <Card
         role="dialog"
-        aria-modal="true"
         aria-labelledby={titleId}
         className="w-full max-w-md mx-auto"
       >

@@ -141,7 +141,7 @@ shell:
 
 health:
 	@echo "🏥 CodeSage - MCP-First Code Discovery Health Check:"
-	@out=$$(curl -fsS http://127.0.0.1:8001/health) && echo "$$out" | jq . || echo "❌ Backend not responding"
+	@out=$$(curl -sS http://127.0.0.1:8001/health) && echo "$$out" | jq . || echo "❌ Backend not responding"
 	@echo ""
 	@echo "🤖 MCP Capabilities:"
 	@out=$$(curl -fsS http://127.0.0.1:8001/api/v1/ai/mcp/capabilities) && echo "$$out" | jq .tools || echo "❌ MCP not responding"

@@ -176,7 +176,7 @@ export function DashboardPage() {
 
         {error && (
           <p role="status" className="text-sm text-muted-foreground mb-4">
-            Couldn't refresh. Showing the last loaded data; retrying…
+            Couldn't refresh. Showing the last loaded data.
           </p>
         )}
 
