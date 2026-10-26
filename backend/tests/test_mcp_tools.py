@@ -372,3 +372,104 @@ async def test_resources(db_session, repo):
 async def test_resource_errors(db_session, repo, uri):
     with pytest.raises(ToolError):
         await mcp_tools.read_resource(db_session, uri)
+
+
+# --- permalinks on other hosts -----------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("url", "branch", "expected"),
+    [
+        (
+            "https://gitlab.com/group/sub/repo",
+            "main",
+            "https://gitlab.com/group/sub/repo/-/blob/main/src/vanilla.ts#L5-20",
+        ),
+        (
+            "https://gitlab.example.org/team/repo",
+            None,
+            "https://gitlab.example.org/team/repo/-/blob/HEAD/src/vanilla.ts#L5-20",
+        ),
+        (
+            "https://bitbucket.org/team/repo",
+            "dev",
+            "https://bitbucket.org/team/repo/src/dev/src/vanilla.ts#lines-5:20",
+        ),
+        ("https://git.example.com/team/repo", "main", None),
+    ],
+)
+async def test_permalinks_for_other_hosts(db_session, algolia_index, url, branch, expected):
+    other = make_repo(db_session, name="o", url=url, branch=branch)
+    algolia_index.search = lambda q, params: {"hits": [{**HIT, "repository_id": other.id}], "nbHits": 1}
+    result = await call_tool(db_session, "search_code", {"query": "create"})
+    assert result["results"][0]["url"] == expected
+
+
+# --- add_repository -----------------------------------------------------------
+
+
+@pytest.fixture
+def started(monkeypatch):
+    from app.services import git_source, repository_service
+
+    checks = []
+
+    async def record(url, branch=None):
+        checks.append((url, branch))
+
+    monkeypatch.setattr(git_source, "check_remote", record)
+    monkeypatch.setattr(repository_service, "start_processing", lambda *a, **k: None)
+    return checks
+
+
+async def test_add_repository_creates_and_starts_indexing(db_session, started):
+    result = await call_tool(
+        db_session,
+        "add_repository",
+        {"url": "https://gitlab.com/group/repo/-/tree/dev", "description": "demo"},
+    )
+
+    row = db_session.query(Repository).one()
+    assert result == {
+        "repository_id": row.id,
+        "name": "gitlab.com/group/repo",
+        "status": "pending",
+        "message": "Indexing started; check list_repositories for progress.",
+    }
+    assert (row.url, row.branch, row.description) == ("https://gitlab.com/group/repo", "dev", "demo")
+    assert started == [("https://gitlab.com/group/repo", "dev")]
+
+
+async def test_add_repository_names_the_existing_row_for_a_duplicate(db_session, started):
+    existing = make_repo(db_session, name="gitlab.com/g/r", url="https://gitlab.com/g/r")
+
+    with pytest.raises(ToolError, match=rf"already added as repository {existing.id}"):
+        await call_tool(db_session, "add_repository", {"url": "https://gitlab.com/G/R"})
+    assert started == []
+
+
+@pytest.mark.parametrize(
+    ("url", "message"),
+    [
+        ("http://gitlab.com/g/r", "only https"),
+        ("https://127.0.0.1/g/r", "private or loopback"),
+        ("https://gitlab.com/g", "missing owner"),
+    ],
+)
+async def test_add_repository_refuses_bad_urls_as_tool_errors(db_session, started, url, message):
+    with pytest.raises(ToolError, match=message):
+        await call_tool(db_session, "add_repository", {"url": url})
+    assert db_session.query(Repository).count() == 0
+
+
+async def test_add_repository_reports_a_refused_check(db_session, monkeypatch):
+    from app.services import git_source
+    from app.services.github_service import RepositoryCheckError
+
+    async def refuse(url, branch=None):
+        raise RepositoryCheckError(422, "gitlab.com/g/r was not found or is private.")
+
+    monkeypatch.setattr(git_source, "check_remote", refuse)
+    with pytest.raises(ToolError, match="was not found or is private"):
+        await call_tool(db_session, "add_repository", {"url": "https://gitlab.com/g/r"})
+    assert db_session.query(Repository).count() == 0

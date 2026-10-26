@@ -12,19 +12,22 @@ import time
 from collections import Counter
 from collections.abc import Awaitable, Callable
 from typing import Any
+from urllib.parse import urlsplit
 
 import regex
 import structlog
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.models.code_entity import CodeEntity
 from app.models.code_file import CodeFile
 from app.models.repository import Repository
+from app.schemas.repository import AnyHostRepositoryCreate
 from app.services import algolia_service
 from app.services.github_service import quote_path
-from app.services.repository_service import RepositoryService
+from app.services.repository_service import RepositoryAddError, RepositoryService
+from app.services.repository_service import add_repository as create_repository
 from codesage_mcp import schemas
 
 logger = structlog.get_logger()
@@ -143,16 +146,27 @@ async def list_repositories(db: Session, args: BaseModel) -> dict:
 
 
 def _permalink(repository: Repository | None, hit: dict) -> str | None:
-    path = _url_path(repository.url) if repository else None
     file_path = hit.get("file_path")
-    if not path or not file_path:
+    if not repository or not repository.url or not file_path:
+        return None
+    parts = urlsplit(repository.url.strip())
+    host = (parts.hostname or "github.com").removeprefix("www.")
+    path = _url_path(repository.url) if host == "github.com" else parts.path.strip("/").removesuffix(".git")
+    if not path:
         return None
     start = hit.get("line_start")
     end = hit.get("line_end") or start
-    url = f"{GITHUB_PREFIX}{path}/blob/{quote_path(repository.branch or 'HEAD')}/{quote_path(file_path)}"
-    if start:
-        url += f"#L{start}-L{end}"
-    return url
+    ref, file = quote_path(repository.branch or "HEAD"), quote_path(file_path)
+    if host == "github.com":
+        url = f"{GITHUB_PREFIX}{path}/blob/{ref}/{file}"
+        return url + f"#L{start}-L{end}" if start else url
+    if host == "gitlab.com" or "gitlab" in host:
+        url = f"https://{host}/{path}/-/blob/{ref}/{file}"
+        return url + f"#L{start}-{end}" if start else url
+    if host == "bitbucket.org":
+        url = f"https://{host}/{path}/src/{ref}/{file}"
+        return url + f"#lines-{start}:{end}" if start else url
+    return None  # no known link format for this host
 
 
 async def search_code(db: Session, args: schemas.SearchCodeArgs) -> dict:
@@ -409,6 +423,30 @@ async def find_patterns(db: Session, args: schemas.FindPatternsArgs) -> dict:
     return result
 
 
+# --- add repository --------------------------------------------------------
+
+
+async def add_repository(db: Session, args: schemas.AddRepositoryArgs) -> dict:
+    try:
+        data = AnyHostRepositoryCreate(url=args.url, branch=args.branch, description=args.description)
+    except ValidationError as exc:
+        raise ToolError(
+            "; ".join(f"{'.'.join(map(str, e['loc']))}: {e['msg']}" for e in exc.errors(include_url=False))
+        ) from exc
+    try:
+        repository = await create_repository(db, data)
+    except RepositoryAddError as exc:
+        if exc.repository_id is not None:
+            raise ToolError(f"{data.name} is already added as repository {exc.repository_id}.") from exc
+        raise ToolError(exc.detail) from exc
+    return {
+        "repository_id": repository.id,
+        "name": repository.name,
+        "status": repository.status,
+        "message": "Indexing started; check list_repositories for progress.",
+    }
+
+
 # --- dispatch ---------------------------------------------------------------
 
 Handler = Callable[[Session, Any], Awaitable[dict]]
@@ -420,6 +458,7 @@ HANDLERS: dict[str, Handler] = {
     "list_definitions": list_definitions,
     "analyze_repository": analyze_repository,
     "find_patterns": find_patterns,
+    "add_repository": add_repository,
 }
 
 

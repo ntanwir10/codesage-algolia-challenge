@@ -10,8 +10,6 @@ from fastapi import (
     Request,
 )
 from fastapi.responses import JSONResponse
-from sqlalchemy import func
-from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
@@ -24,10 +22,12 @@ from app.schemas.repository import (
     RepositoryUpdate,
 )
 from app.services import algolia_service
-from app.services.github_service import GitHubService, RepositoryCheckError
 from app.services.repository_service import (
+    ALGOLIA_MISSING,
+    RepositoryAddError,
     RepositoryBusyError,
     RepositoryService,
+    add_repository,
     is_processing,
     start_processing,
 )
@@ -44,7 +44,7 @@ def require_algolia() -> None:
     if not algolia_service.AlgoliaService().is_available():
         raise HTTPException(
             status_code=503,
-            detail="Search indexing is not configured on the server (Algolia credentials are missing).",
+            detail=ALGOLIA_MISSING,
         )
 
 
@@ -98,38 +98,15 @@ async def create_repository(
 ):
     """Create a new repository"""
     # repository.url is already validated and normalised by the schema
-    existing = (
-        db.query(Repository)
-        .filter(func.lower(Repository.url) == repository.url.lower())
-        .first()
-    )
-    if existing:
-        return JSONResponse(
-            status_code=409,
-            content={
-                "detail": f"{repository.url.removeprefix('https://github.com/')} has already been added.",
-                "repository_id": existing.id,
-            },
-        )
-
-    require_algolia()
     try:
-        await GitHubService().check_repository(repository.url, repository.branch)
-    except RepositoryCheckError as e:
+        return await add_repository(db, repository)
+    except RepositoryAddError as e:
+        if e.repository_id is not None:
+            return JSONResponse(
+                status_code=e.status_code,
+                content={"detail": e.detail, "repository_id": e.repository_id},
+            )
         raise HTTPException(status_code=e.status_code, detail=e.detail, headers=e.headers) from e
-
-    service = RepositoryService(db)
-    try:
-        new_repository = await service.create_repository(repository)
-    except IntegrityError as e:
-        # Another request added the same URL between the check above and this insert
-        db.rollback()
-        raise HTTPException(
-            status_code=409, detail=f"Repository with URL {repository.url} already exists"
-        ) from e
-
-    logger.info("Repository created", repository_id=new_repository.id)
-    return new_repository
 
 
 @router.get(

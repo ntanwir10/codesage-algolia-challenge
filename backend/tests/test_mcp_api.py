@@ -10,9 +10,9 @@ def call(client, tool, **arguments):
 def test_tools_list_has_input_schemas(client):
     body = client.get(f"{BASE}/mcp/tools").json()
     names = [t["name"] for t in body["tools"]]
-    assert body["count"] == len(names) == 6
+    assert body["count"] == len(names) == 7
     assert set(names) == {"list_repositories", "search_code", "get_file", "list_definitions",
-                          "analyze_repository", "find_patterns"}
+                          "analyze_repository", "find_patterns", "add_repository"}
     search = next(t for t in body["tools"] if t["name"] == "search_code")
     assert search["description"] and search["inputSchema"]["properties"]["limit"]["maximum"] == 50
 
@@ -101,3 +101,33 @@ def test_suggestions_algolia_unavailable(client, algolia_index):
     algolia_index.search = boom
     resp = client.get(f"{BASE}/search/suggestions", params={"query": "create"})
     assert resp.status_code == 200 and resp.json() == {"suggestions": []}
+
+
+def test_add_repository_through_the_endpoint(client, db_session, monkeypatch):
+    from app.services import git_source, repository_service
+
+    async def accept(url, branch=None):
+        return None
+
+    monkeypatch.setattr(git_source, "check_remote", accept)
+    monkeypatch.setattr(repository_service, "start_processing", lambda *a, **k: None)
+
+    body = call(client, "add_repository", url="https://gitlab.com/g/r").json()
+    assert body["is_error"] is False and body["result"]["name"] == "gitlab.com/g/r"
+
+    again = call(client, "add_repository", url="https://gitlab.com/g/r").json()
+    assert again["is_error"] is True and "already added as repository" in again["error"]
+
+    refused = call(client, "add_repository", url="ftp://gitlab.com/g/r").json()
+    assert refused["is_error"] is True and "only https" in refused["error"]
+
+    assert call(client, "add_repository").status_code == 422  # url is required
+
+
+def test_add_repository_requires_the_key(client, db_session, monkeypatch):
+    from app.core.config import get_settings
+
+    monkeypatch.setattr(get_settings(), "codesage_api_key", "s3cret")
+    resp = call(client, "add_repository", url="https://gitlab.com/g/r")
+    assert resp.status_code == 401
+    assert db_session.query(Repository).count() == 0

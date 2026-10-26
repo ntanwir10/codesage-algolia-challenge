@@ -1,5 +1,6 @@
 import asyncio
 import fnmatch
+import ipaddress
 import math
 import re
 import time
@@ -76,6 +77,9 @@ EXT_TO_LANGUAGE: dict[str, str] = {
     "yml": "yaml",
     "xml": "xml",
     "md": "markdown",
+    "tf": "terraform",
+    "tfvars": "terraform",
+    "hcl": "hcl",
 }
 
 _NAME_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
@@ -94,7 +98,83 @@ def is_denied_path(path: str) -> bool:
 
 def is_valid_branch(branch: str) -> bool:
     """False for names that could step outside the repository in an API path"""
-    return bool(branch) and ".." not in branch.split("/") and "\x00" not in branch
+    return (
+        bool(branch)
+        and ".." not in branch.split("/")
+        and "\x00" not in branch
+        and not branch.startswith("-")  # would read as an option to git
+    )
+
+
+def parse_repository_url(url: str) -> tuple[str, str, str | None]:
+    """Parse an https git URL on any host into (host, path, branch_or_None).
+
+    The path keeps nested groups (GitLab's group/sub/repo) without a trailing .git or slash.
+    The branch comes from /tree/<b> (GitHub), /-/tree/<b> (GitLab) or /src/<b> (Bitbucket).
+    Raises ValueError for anything else, including non-https schemes, credentials, ports and
+    hosts that are localhost or a non-public IP literal.
+    """
+    if not isinstance(url, str) or not url.strip():
+        raise ValueError("Invalid repository URL: empty")
+    raw = url.strip()
+    try:
+        parts = urlsplit(raw)
+        hostname = parts.hostname
+        port = parts.port
+    except ValueError as e:
+        raise ValueError(f"Invalid repository URL: {url}") from e
+    if parts.scheme != "https":
+        raise ValueError(f"Invalid repository URL (only https is supported): {url}")
+    if not hostname:
+        raise ValueError(f"Invalid repository URL (missing host): {url}")
+    if parts.username is not None or parts.password is not None:
+        raise ValueError(f"Invalid repository URL (credentials are not allowed): {url}")
+    if port:
+        raise ValueError(f"Invalid repository URL (ports are not supported): {url}")
+    if parts.query or parts.fragment:
+        raise ValueError(f"Invalid repository URL (query or fragment not allowed): {url}")
+    host = hostname.removeprefix("www.") if hostname == "www.github.com" else hostname
+    if host == "localhost" or host.endswith(".localhost"):
+        raise ValueError(f"Invalid repository URL (localhost is not allowed): {url}")
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        ip = None
+    if ip is not None and not ip.is_global:
+        raise ValueError(f"Invalid repository URL (private or loopback address): {url}")
+
+    segments = [unquote(s) for s in parts.path.split("/") if s]
+    branch: str | None = None
+    marker = None  # index where the branch part starts
+    if host == "github.com":
+        if len(segments) > 2:
+            if segments[2] != "tree" or len(segments) < 4:
+                raise ValueError(f"Invalid repository URL (unsupported path): {url}")
+            marker = 2
+    elif "-" in segments:
+        i = segments.index("-")
+        if segments[i + 1 : i + 2] != ["tree"] or len(segments) < i + 3:
+            raise ValueError(f"Invalid repository URL (unsupported path): {url}")
+        marker = i
+    elif host == "bitbucket.org" and len(segments) > 2:
+        if segments[2] != "src" or len(segments) < 4:
+            raise ValueError(f"Invalid repository URL (unsupported path): {url}")
+        marker = 2
+    if marker is not None:
+        skip = 1 if segments[marker] == "-" else 0
+        branch = "/".join(segments[marker + 1 + skip :])
+        segments = segments[:marker]
+
+    if segments and segments[-1].endswith(".git"):
+        segments[-1] = segments[-1][: -len(".git")]
+    if len(segments) < 2:
+        raise ValueError(f"Invalid repository URL (missing owner or repository): {url}")
+    # "." and ".." as owner would turn api.github.com/users/<owner> into api.github.com/user
+    if any(not _NAME_RE.match(seg) or seg in (".", "..") for seg in segments):
+        raise ValueError(f"Invalid repository URL (bad owner or repository name): {url}")
+    if branch is not None and not is_valid_branch(branch):
+        raise ValueError(f"Invalid repository URL (bad branch): {url}")
+    return host, "/".join(segments), branch
 
 
 def parse_github_url(url: str) -> tuple[str, str, str | None]:
@@ -107,43 +187,18 @@ def parse_github_url(url: str) -> tuple[str, str, str | None]:
     if not isinstance(url, str) or not url.strip():
         raise ValueError("Invalid GitHub URL: empty")
     raw = url.strip()
-    branch: str | None = None
-
-    ssh = re.match(r"^git@github\.com:([^/?#]+)/([^/?#]+?)/?$", raw)
+    ssh = re.match(r"^git@github\.com:([^/?#]+/[^/?#]+?)/?$", raw)
     if ssh:
-        owner, repo = ssh.groups()
-    else:
-        try:
-            parts = urlsplit(raw)
-            hostname = parts.hostname
-            port = parts.port
-        except ValueError as e:
-            raise ValueError(f"Invalid GitHub URL: {url}") from e
-        if parts.scheme not in ("http", "https"):
-            raise ValueError(f"Invalid GitHub URL (unsupported scheme): {url}")
-        if hostname not in ("github.com", "www.github.com"):
-            raise ValueError(f"Invalid GitHub URL (host must be github.com): {url}")
-        if parts.username or parts.password or port:
-            raise ValueError(f"Invalid GitHub URL (unexpected credentials or port): {url}")
-        if parts.query or parts.fragment:
-            raise ValueError(f"Invalid GitHub URL (query or fragment not allowed): {url}")
-        segments = [s for s in parts.path.split("/") if s]
-        if len(segments) < 2:
-            raise ValueError(f"Invalid GitHub URL (missing owner or repository): {url}")
-        owner, repo = segments[0], segments[1]
-        rest = segments[2:]
-        if rest:
-            if rest[0] != "tree" or len(rest) < 2:
-                raise ValueError(f"Invalid GitHub URL (unsupported path): {url}")
-            branch = "/".join(unquote(s) for s in rest[1:])
-
-    if repo.endswith(".git"):
-        repo = repo[: -len(".git")]
-    # "." and ".." as owner would turn api.github.com/users/<owner> into api.github.com/user
-    if not _NAME_RE.match(owner) or owner in (".", "..") or not repo or not _NAME_RE.match(repo) or repo in (".", ".."):
-        raise ValueError(f"Invalid GitHub URL (bad owner or repository name): {url}")
-    if branch is not None and not is_valid_branch(branch):
-        raise ValueError(f"Invalid GitHub URL (bad branch): {url}")
+        raw = f"https://github.com/{ssh.group(1)}"
+    elif raw.lower().startswith("http://"):
+        raw = "https://" + raw[len("http://") :]
+    try:
+        host, path, branch = parse_repository_url(raw)
+    except ValueError as e:
+        raise ValueError(str(e).replace("Invalid repository URL", "Invalid GitHub URL", 1)) from e
+    if host != "github.com":
+        raise ValueError(f"Invalid GitHub URL (host must be github.com): {url}")
+    owner, repo = path.split("/")
     return owner, repo, branch
 
 
@@ -206,7 +261,62 @@ class GitHubFile:
     filename: str
 
 
-class GitHubService:
+class FileSelector:
+    """Which repository files get indexed: the limits and filters shared by every git source"""
+
+    def __init__(self):
+        self.max_files = 1000  # Maximum number of files to process
+        self.max_file_size = 1024 * 1024  # 1MB file size limit
+        self.max_total_bytes = 100 * 1024 * 1024  # a run holds every file in memory at once
+        self.skipped_files = 0  # Code files the last listing dropped over max_files / max_total_bytes
+        self.listing_truncated = False  # The last listing stopped at MAX_WALK_REQUESTS directories
+
+    def _select_candidates(self, entries: list[tuple[str, int]]) -> list[tuple[str, int]]:
+        """Apply deny-list, extension and size filters, then sort and cap"""
+        selected = []
+        for path, size in entries:
+            if is_denied_path(path):
+                continue
+            filename = path.split("/")[-1]
+            # Unknown extensions map to "text", which we don't index
+            if self._detect_language(filename) == "text" or size >= self.max_file_size:
+                continue
+            selected.append((path, size))
+        selected.sort()
+        kept, total_bytes = 0, 0
+        for _, size in selected:
+            if kept == self.max_files or total_bytes + size > self.max_total_bytes:
+                break
+            kept += 1
+            total_bytes += size
+        self.skipped_files = len(selected) - kept
+        if self.skipped_files:
+            logger.warning(
+                "Repository is over the file or size limit, indexing the first files only",
+                total_files=len(selected),
+                kept_files=kept,
+                max_files=self.max_files,
+                max_total_bytes=self.max_total_bytes,
+            )
+        return selected[:kept]
+
+    def _detect_language(self, filename: str) -> str:
+        """Detect programming language from file extension"""
+        if not filename:
+            return "text"
+
+        ext = filename.lower().split(".")[-1] if "." in filename else ""
+        return EXT_TO_LANGUAGE.get(ext, "text")
+
+    @staticmethod
+    def _decode_content(raw: bytes) -> str | None:
+        """Decode downloaded bytes to text, or None for empty and binary files"""
+        if not raw or b"\x00" in raw:
+            return None
+        return raw.decode("utf-8-sig", errors="replace")
+
+
+class GitHubService(FileSelector):
     """
     GitHub API client for repository analysis with performance optimizations.
     Based on architecture.md: External Integration → GitHub API
@@ -218,12 +328,7 @@ class GitHubService:
         self.raw_base_url = "https://raw.githubusercontent.com"
         self._semaphore = asyncio.Semaphore(MAX_CONCURRENT_REQUESTS)
 
-        # Set processing limits
-        self.max_files = 1000  # Maximum number of files to process
-        self.max_file_size = 1024 * 1024  # 1MB file size limit
-        self.max_total_bytes = 100 * 1024 * 1024  # a run holds every file in memory at once
-        self.skipped_files = 0  # Code files the last listing dropped over max_files / max_total_bytes
-        self.listing_truncated = False  # The last listing stopped at MAX_WALK_REQUESTS directories
+        super().__init__()
         self._walk_requests = 0
 
         if not self.token:
@@ -424,35 +529,6 @@ class GitHubService:
             logger.debug("Failed to get repository files", repo_url=repo_url, error=str(e))
             raise
 
-    def _select_candidates(self, entries: list[tuple[str, int]]) -> list[tuple[str, int]]:
-        """Apply deny-list, extension and size filters, then sort and cap"""
-        selected = []
-        for path, size in entries:
-            if is_denied_path(path):
-                continue
-            filename = path.split("/")[-1]
-            # Unknown extensions map to "text", which we don't index
-            if self._detect_language(filename) == "text" or size >= self.max_file_size:
-                continue
-            selected.append((path, size))
-        selected.sort()
-        kept, total_bytes = 0, 0
-        for _, size in selected:
-            if kept == self.max_files or total_bytes + size > self.max_total_bytes:
-                break
-            kept += 1
-            total_bytes += size
-        self.skipped_files = len(selected) - kept
-        if self.skipped_files:
-            logger.warning(
-                "Repository is over the file or size limit, indexing the first files only",
-                total_files=len(selected),
-                kept_files=kept,
-                max_files=self.max_files,
-                max_total_bytes=self.max_total_bytes,
-            )
-        return selected[:kept]
-
     async def _list_entries(
         self, session: aiohttp.ClientSession, owner: str, repo: str, branch: str
     ) -> list[tuple[str, int]]:
@@ -561,14 +637,6 @@ class GitHubService:
             raise
         return [f for f in results if f is not None]
 
-    def _detect_language(self, filename: str) -> str:
-        """Detect programming language from file extension"""
-        if not filename:
-            return "text"
-
-        ext = filename.lower().split(".")[-1] if "." in filename else ""
-        return EXT_TO_LANGUAGE.get(ext, "text")
-
     @staticmethod
     def _describe_api_error(status: int, headers, owner: str, repo: str, path: str) -> str:
         """Explain a failed contents request in terms a user can act on"""
@@ -584,13 +652,6 @@ class GitHubService:
         if status == 404:
             return f"GitHub repository or path not found (404): {target}; it may be private or misspelled"
         return f"GitHub API error {status} while reading {target}"
-
-    @staticmethod
-    def _decode_content(raw: bytes) -> str | None:
-        """Decode downloaded bytes to text, or None for empty and binary files"""
-        if not raw or b"\x00" in raw:
-            return None
-        return raw.decode("utf-8-sig", errors="replace")
 
     async def _download_file_content(
         self, session: aiohttp.ClientSession, download_url: str, path: str

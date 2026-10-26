@@ -8,7 +8,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-EntityType = Literal["function", "class", "import", "doc_section"]
+EntityType = Literal["function", "class", "import", "doc_section", "terraform_block"]
 
 REPOSITORY_DESCRIPTION = (
     "Repository ID or name. Accepts the numeric ID, the name, or 'owner/name'. "
@@ -66,6 +66,21 @@ class FindPatternsArgs(_Args):
     max_results: int = Field(default=100, ge=1, le=500, description="Maximum matches to return")
 
 
+class AddRepositoryArgs(_Args):
+    url: str = Field(
+        description=(
+            "https URL of the git repository to index. Accepts GitHub, GitLab, Bitbucket and "
+            "self-hosted git servers, e.g. 'https://gitlab.com/group/project'. Branch URLs "
+            "such as '.../tree/dev' are understood. Private repositories work only on GitHub, "
+            "and only when the CodeSage server's token has access; elsewhere the repository "
+            "must be public."
+        ),
+        min_length=1,
+    )
+    branch: str | None = Field(default=None, description="Branch to index. Omit for the default branch.")
+    description: str | None = Field(default=None, description="Optional note describing the repository")
+
+
 class ToolSpec(BaseModel):
     name: str
     description: str
@@ -110,6 +125,15 @@ TOOLS: dict[str, ToolSpec] = {
             name="find_patterns",
             description="Find lines in a repository's files that match a literal string or a regular expression.",
             args_model=FindPatternsArgs,
+        ),
+        ToolSpec(
+            name="add_repository",
+            description=(
+                "Add a git repository to CodeSage and start indexing it. Works with GitHub, "
+                "GitLab, Bitbucket and self-hosted https URLs. Indexing runs in the background; "
+                "use list_repositories to follow progress, and search it once it is completed."
+            ),
+            args_model=AddRepositoryArgs,
         ),
     ]
 }

@@ -65,7 +65,7 @@ async def test_tools_list_matches_schemas_without_backend():
     async with make_client(backend) as client:
         result = await client.list_tools()
     assert [t.name for t in result.tools] == list(TOOLS)
-    assert len(result.tools) == 6
+    assert len(result.tools) == 7
     for tool in result.tools:
         assert tool.input_schema == input_schema(tool.name)
     assert backend.requests == []
@@ -274,7 +274,7 @@ async def test_stdio_subprocess_smoke():
     )
     async with Client(stdio_client(params), mode="legacy") as client:
         tools = await client.list_tools()
-        assert len(tools.tools) == 6
+        assert len(tools.tools) == 7
         result = await client.call_tool("list_repositories", {})
         assert result.is_error
         assert "not reachable" in result.content[0].text

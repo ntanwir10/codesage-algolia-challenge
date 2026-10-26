@@ -339,3 +339,88 @@ def test_create_and_process_need_algolia(client, db_session, monkeypatch):
         assert response.status_code == 503
         assert response.json()["detail"].startswith("Search indexing is not configured")
     assert db_session.query(Repository).count() == 1
+
+
+# --- other git hosts ----------------------------------------------------------
+
+GITLAB = "https://gitlab.com/group/sub/repo"
+
+
+@pytest.fixture
+def remote_checks(monkeypatch):
+    """Record git_source.check_remote calls instead of running git"""
+    from app.services import git_source
+
+    calls = []
+
+    async def record(url, branch=None):
+        calls.append((url, branch))
+
+    monkeypatch.setattr(git_source, "check_remote", record)
+    monkeypatch.setattr(repository_service, "start_processing", lambda *a, **k: None)
+    return calls
+
+
+async def test_a_gitlab_url_goes_through_check_remote_not_the_github_check(
+    db_session, remote_checks, monkeypatch
+):
+    from app.schemas.repository import AnyHostRepositoryCreate
+
+    async def no_github(self, url, branch=None):
+        raise AssertionError("the GitHub check must not run for gitlab.com")
+
+    monkeypatch.setattr(GitHubService, "check_repository", no_github)
+
+    created = await repository_service.add_repository(
+        db_session, AnyHostRepositoryCreate(url=f"{GITLAB}.git/-/tree/dev")
+    )
+
+    assert remote_checks == [(GITLAB, "dev")]
+    assert (created.name, created.url, created.branch) == ("gitlab.com/group/sub/repo", GITLAB, "dev")
+
+
+async def test_a_refused_remote_check_becomes_a_repository_add_error(db_session, monkeypatch):
+    from app.schemas.repository import AnyHostRepositoryCreate
+    from app.services import git_source
+
+    async def refuse(url, branch=None):
+        raise RepositoryCheckError(422, "gitlab.com/group/sub/repo was not found or is private.")
+
+    monkeypatch.setattr(git_source, "check_remote", refuse)
+
+    with pytest.raises(repository_service.RepositoryAddError) as caught:
+        await repository_service.add_repository(db_session, AnyHostRepositoryCreate(url=GITLAB))
+
+    assert (caught.value.status_code, caught.value.repository_id) == (422, None)
+    assert db_session.query(Repository).count() == 0
+
+
+def test_the_rest_api_stays_github_only(client, remote_checks):
+    response = client.post(f"{API}/", json={"url": GITLAB})
+
+    assert response.status_code == 422
+    assert response.json()["detail"][0]["loc"] == ["body", "url"]
+    assert "host must be github.com" in response.json()["detail"][0]["msg"]
+    assert remote_checks == []
+
+
+def test_github_repositories_keep_their_owner_repo_name(client, monkeypatch):
+    monkeypatch.setattr(repository_service, "start_processing", lambda *a, **k: None)
+
+    response = client.post(f"{API}/", json={"url": URL})
+
+    assert (response.status_code, response.json()["name"]) == (201, "octo/demo")
+
+
+async def test_a_duplicate_on_another_host_is_named_without_the_scheme(db_session, remote_checks):
+    from app.schemas.repository import AnyHostRepositoryCreate
+
+    db_session.add(Repository(name="gitlab.com/group/sub/repo", url=GITLAB, status="completed"))
+    db_session.commit()
+
+    with pytest.raises(repository_service.RepositoryAddError) as caught:
+        await repository_service.add_repository(db_session, AnyHostRepositoryCreate(url=GITLAB.title()))
+
+    assert caught.value.status_code == 409
+    assert caught.value.detail == "gitlab.com/Group/Sub/Repo has already been added."
+    assert remote_checks == []
