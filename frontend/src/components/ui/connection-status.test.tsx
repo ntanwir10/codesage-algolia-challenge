@@ -37,4 +37,24 @@ describe("ConnectionStatus", () => {
     act(() => emit("disconnected"));
     expect(screen.getByText(msg)).toBeInTheDocument();
   });
+
+  it("clears the notice when nothing is subscribed any more, and never promises a retry", () => {
+    let emit: (s: "disconnected") => void = () => {};
+    vi.spyOn(websocketService, "onConnectionStatusChange").mockImplementation(
+      (cb) => {
+        emit = (s) => cb(s);
+        return () => {};
+      }
+    );
+    const subs = vi.spyOn(websocketService, "hasSubscribers").mockReturnValue(true);
+    render(<ConnectionStatus />);
+
+    act(() => emit("disconnected"));
+    expect(screen.getByText("Live updates unavailable.")).toBeInTheDocument();
+    expect(screen.queryByText(/Retrying/)).not.toBeInTheDocument();
+
+    subs.mockReturnValue(false);
+    act(() => emit("disconnected"));
+    expect(screen.queryByText(/Live updates unavailable/)).not.toBeInTheDocument();
+  });
 });

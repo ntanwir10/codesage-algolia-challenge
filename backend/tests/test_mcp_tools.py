@@ -451,7 +451,7 @@ async def test_add_repository_names_the_existing_row_for_a_duplicate(db_session,
 @pytest.mark.parametrize(
     ("url", "message"),
     [
-        ("http://gitlab.com/g/r", "only https"),
+        ("ftp://gitlab.com/g/r", "only https"),
         ("https://127.0.0.1/g/r", "private or loopback"),
         ("https://gitlab.com/g", "missing owner"),
     ],

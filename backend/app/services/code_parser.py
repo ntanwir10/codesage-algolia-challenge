@@ -367,8 +367,9 @@ class CodeParser:
         entities = []
         # config_file > body > block; a leading # or // comment run is the docstring
         body = next((c for c in root.children if c.type == "body"), None)
+        # tree-sitter puts comments before the first block at the root, beside body
         comments: list = []
-        for node in body.children if body else []:
+        for node in [c for c in root.children if c.type == "comment"] + list(body.children if body else []):
             if node.type == "comment":
                 if comments and node.start_point[0] != comments[-1].end_point[0] + 1:
                     comments = []
@@ -386,7 +387,10 @@ class CodeParser:
                 line_start, line_end = node.start_point[0] + 1, node.end_point[0] + 1
                 doc = ""
                 if comments and comments[-1].end_point[0] + 1 == node.start_point[0]:
-                    doc = " ".join(self._text(c).lstrip("#/ \t").rstrip() for c in comments)
+                    doc = " ".join(
+                        line.strip().lstrip("#/* \t").removesuffix("*/").rstrip()
+                        for c in comments for line in self._text(c).splitlines()
+                    ).strip()
                 entities.append(ParsedCodeEntity(
                     entity_type="terraform_block",
                     name=name,

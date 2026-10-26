@@ -4,7 +4,7 @@ from typing import ClassVar, Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from pydantic_core import PydanticCustomError
 
-from app.services.github_service import is_valid_branch, parse_repository_url
+from app.services.github_service import is_valid_branch, parse_repository_url, to_https_url
 
 RepositoryStatus = Literal["pending", "processing", "completed", "failed"]
 
@@ -29,6 +29,11 @@ class RepositoryCreate(RepositoryBase):
 
     # The REST API takes github.com only; the MCP tool sets this to accept any https git host
     any_host: ClassVar[bool] = False
+
+    @field_validator("url", mode="before")
+    @classmethod
+    def url_to_https(cls, url):
+        return to_https_url(url) if isinstance(url, str) else url
 
     @field_validator("url")
     @classmethod
@@ -60,6 +65,11 @@ class RepositoryCreate(RepositoryBase):
         if not self.name.strip():
             # GitHub keeps owner/repo; other hosts are prefixed so names don't collide
             self.name = path if host == "github.com" else f"{host}/{path}"
+        # Derived values skip the field limits; without this the row could not be listed back
+        if self.branch and len(self.branch) > 100:
+            raise PydanticCustomError("branch_too_long", "Branch name from the URL is too long (max 100 characters)")
+        if len(self.name) > 255:
+            raise PydanticCustomError("name_too_long", "Repository name from the URL is too long (max 255 characters)")
         return self
 
 

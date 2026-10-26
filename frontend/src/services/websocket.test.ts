@@ -137,6 +137,19 @@ describe("WebSocketService", () => {
     expect(ws.closed).toEqual({ code: 1000 });
   });
 
+  it("reports disconnected when the idle close finds the socket already gone", () => {
+    const off = service.onRepositoryUpdate(1, () => {});
+    last().welcome();
+    last().drop(); // reconnect now pending
+    const statuses: string[] = [];
+    service.onConnectionStatusChange((s) => statuses.push(s));
+    off();
+    vi.advanceTimersByTime(1500);
+    expect(statuses).toEqual(["disconnected"]);
+    vi.advanceTimersByTime(60000);
+    expect(FakeWebSocket.instances).toHaveLength(1); // no reconnect
+  });
+
   it("sends a heartbeat ping every 25s", () => {
     service.onRepositoryUpdate(1, () => {});
     last().welcome();

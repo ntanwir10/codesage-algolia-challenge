@@ -604,3 +604,22 @@ def test_terraform_top_level_blocks_become_named_entities():
     assert logs.content == 'resource "aws_s3_bucket" "logs" {'
     assert "prevent_destroy" in logs.body
     assert CodeParser().parse("main.hcl", TERRAFORM, "hcl") == entities
+
+
+def test_terraform_comment_above_the_first_block_is_its_description():
+    src = '# Bucket for logs\nresource "a" "b" {}\n\n# Second\nresource "c" "d" {}\n'
+    entities = CodeParser().parse("main.tf", src, "terraform")
+
+    assert [e.description for e in entities] == ["Bucket for logs", "Second"]
+
+
+def test_terraform_block_comment_has_no_stray_stars():
+    src = '/*\n * Shared bucket\n * for logs\n */\nresource "a" "b" {}\n'
+    entities = CodeParser().parse("main.tf", src, "terraform")
+
+    assert entities[0].description == "Shared bucket for logs"
+
+
+def test_terraform_only_the_comment_run_directly_above_the_first_block_counts():
+    src = '# Unrelated\n\n# Bucket\n# for logs\nresource "a" "b" {}\n'
+    assert CodeParser().parse("main.tf", src, "terraform")[0].description == "Bucket for logs"

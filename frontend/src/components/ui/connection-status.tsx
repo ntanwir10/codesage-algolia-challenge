@@ -68,7 +68,7 @@ export function ConnectionStatus() {
         <Card className="border text-yellow-700 bg-yellow-50 border-yellow-200">
           <CardContent className="p-3">
             <p role="status" className="text-sm font-medium">
-              Live updates unavailable. Retrying…
+              Live updates unavailable.
             </p>
             <div className="flex items-center gap-2 mt-2">
               <Button

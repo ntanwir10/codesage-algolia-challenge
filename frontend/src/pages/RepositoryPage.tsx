@@ -26,6 +26,15 @@ function sourceLabel(url: string) {
   }
 }
 
+// Stop polling once the repository is gone: react-query keeps the last good data
+// (still "processing") after a 404, which would otherwise keep the interval alive.
+const pollUnlessGone = (query: {
+  state: { data: { status: string } | undefined; error: unknown };
+}) =>
+  query.state.error && describeError(query.state.error).status === 404
+    ? false
+    : pollWhileActive(query.state.data);
+
 export function RepositoryPage() {
   const { id } = useParams<{ id: string }>();
   // Strict: parseInt would load repo 12 for "12abc". 0 means invalid.
@@ -54,14 +63,14 @@ export function RepositoryPage() {
     queryKey: ["repository", repositoryId],
     queryFn: () => api.getRepository(repositoryId),
     enabled: !!repositoryId,
-    refetchInterval: (query) => pollWhileActive(query.state.data),
+    refetchInterval: pollUnlessGone,
   });
 
   const { data: status } = useQuery({
     queryKey: ["repository-status", repositoryId],
     queryFn: () => api.getRepositoryStatus(repositoryId),
     enabled: !!repositoryId,
-    refetchInterval: (query) => pollWhileActive(query.state.data),
+    refetchInterval: pollUnlessGone,
   });
 
   // Live updates: subscribe while the repository is being processed.

@@ -177,6 +177,17 @@ def parse_repository_url(url: str) -> tuple[str, str, str | None]:
     return host, "/".join(segments), branch
 
 
+def to_https_url(url: str) -> str:
+    """Rewrite http:// and git@<host>:<path> forms to https://; anything else is returned stripped"""
+    raw = url.strip()
+    ssh = re.match(r"^git@([^:/\s]+):(.+)$", raw)
+    if ssh:
+        return f"https://{ssh.group(1)}/{ssh.group(2)}"
+    if raw.lower().startswith("http://"):
+        return "https://" + raw[len("http://") :]
+    return raw
+
+
 def parse_github_url(url: str) -> tuple[str, str, str | None]:
     """Parse a GitHub URL into (owner, repo, branch_or_None).
 
@@ -186,14 +197,8 @@ def parse_github_url(url: str) -> tuple[str, str, str | None]:
     """
     if not isinstance(url, str) or not url.strip():
         raise ValueError("Invalid GitHub URL: empty")
-    raw = url.strip()
-    ssh = re.match(r"^git@github\.com:([^/?#]+/[^/?#]+?)/?$", raw)
-    if ssh:
-        raw = f"https://github.com/{ssh.group(1)}"
-    elif raw.lower().startswith("http://"):
-        raw = "https://" + raw[len("http://") :]
     try:
-        host, path, branch = parse_repository_url(raw)
+        host, path, branch = parse_repository_url(to_https_url(url))
     except ValueError as e:
         raise ValueError(str(e).replace("Invalid repository URL", "Invalid GitHub URL", 1)) from e
     if host != "github.com":

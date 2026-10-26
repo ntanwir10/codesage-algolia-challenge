@@ -144,7 +144,7 @@ class GitSource(FileSelector):
             args = ["clone", "--depth", "1", "--single-branch", "--no-tags"]
             if branch:
                 args += ["--branch", branch]
-            args += ["-c", "core.symlinks=false", "--", repo_url, target]
+            args += ["--", repo_url, target]
             logger.info("Cloning repository", host=host, path=path, branch=branch)
             try:
                 code, _, stderr = await _git(args, CLONE_TIMEOUT)
@@ -167,7 +167,7 @@ class GitSource(FileSelector):
         return files
 
     def _read_tree(self, root: Path) -> list[GitHubFile]:
-        """Walk a cloned tree: .git, denied directories and symlinks never get listed"""
+        """Walk a cloned tree: .git, denied directories and symlinks never get listed (a clone keeps symlinks as real links)"""
         sizes: dict[str, int] = {}
         for directory, dirnames, filenames in os.walk(root, followlinks=False):
             dirnames[:] = [d for d in dirnames if d not in DENIED_DIRS]

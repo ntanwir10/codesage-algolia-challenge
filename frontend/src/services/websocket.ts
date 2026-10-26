@@ -280,6 +280,8 @@ export class WebSocketService {
       if (this.hasSubscribers()) return;
       this.clearReconnect();
       this.teardownSocket(1000, "No subscribers");
+      // No socket may be left to report it (closed, retry pending): tell listeners nothing is retrying
+      this.notifyConnection("disconnected");
     }, IDLE_CLOSE_MS);
   }
 

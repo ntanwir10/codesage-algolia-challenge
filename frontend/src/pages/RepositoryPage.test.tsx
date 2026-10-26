@@ -126,6 +126,29 @@ describe("RepositoryPage error states", () => {
     expect(screen.getByRole("link", { name: "Back to Dashboard" })).toBeInTheDocument();
   });
 
+  it("stops polling once a processing repository turns 404", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      renderPage({ ...repository, status: "processing" });
+      expect(await screen.findByText("Processing Status")).toBeInTheDocument();
+      vi.mocked(api.getRepository).mockRejectedValue(httpError(404, "gone"));
+      vi.mocked(api.getRepositoryStatus).mockRejectedValue(httpError(404, "gone"));
+      await vi.advanceTimersByTimeAsync(3100);
+      expect(await screen.findByText("Repository not found")).toBeInTheDocument();
+      const calls = [
+        vi.mocked(api.getRepository).mock.calls.length,
+        vi.mocked(api.getRepositoryStatus).mock.calls.length,
+      ];
+      await vi.advanceTimersByTimeAsync(10000);
+      expect([
+        vi.mocked(api.getRepository).mock.calls.length,
+        vi.mocked(api.getRepositoryStatus).mock.calls.length,
+      ]).toEqual(calls);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("shows the message and retries on a server error", async () => {
     renderPage(repository, undefined, "/repository/1", httpError(500, "Boom"));
     const get = vi.mocked(api.getRepository);

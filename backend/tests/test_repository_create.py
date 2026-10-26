@@ -424,3 +424,56 @@ async def test_a_duplicate_on_another_host_is_named_without_the_scheme(db_sessio
     assert caught.value.status_code == 409
     assert caught.value.detail == "gitlab.com/Group/Sub/Repo has already been added."
     assert remote_checks == []
+
+
+# --- derived values keep the field limits; http and ssh GitHub URLs still work ---
+
+
+@pytest.mark.parametrize("cls_name", ["RepositoryCreate", "AnyHostRepositoryCreate"])
+def test_a_long_branch_from_the_url_is_rejected(cls_name):
+    from pydantic import ValidationError
+
+    from app.schemas import repository as schemas
+
+    with pytest.raises(ValidationError, match="too long"):
+        getattr(schemas, cls_name)(url=f"{URL}/tree/" + "b" * 150)
+
+
+def test_a_long_branch_from_the_url_is_422_on_create(client):
+    assert client.post(f"{API}/", json={"url": f"{URL}/tree/" + "b" * 150}).status_code == 422
+
+
+def test_a_very_long_nested_path_gives_a_422_name():
+    from pydantic import ValidationError
+
+    from app.schemas.repository import AnyHostRepositoryCreate
+
+    with pytest.raises(ValidationError, match="too long"):
+        AnyHostRepositoryCreate(url="https://gitlab.com/" + "/".join(["g" * 40] * 8))
+
+
+@pytest.mark.parametrize("url", ["http://github.com/octo/demo", "git@github.com:octo/demo.git"])
+def test_http_and_ssh_github_urls_are_normalised_on_create(client, monkeypatch, url):
+    seen = []
+
+    async def record(self, url, branch=None):
+        seen.append(url)
+
+    monkeypatch.setattr(GitHubService, "check_repository", record)
+    monkeypatch.setattr(repository_service, "start_processing", lambda *a, **k: None)
+
+    response = client.post(f"{API}/", json={"url": url})
+
+    assert response.status_code == 201
+    assert response.json()["url"] == "https://github.com/octo/demo"
+    assert seen == ["https://github.com/octo/demo"]
+
+
+def test_rest_still_rejects_other_hosts_after_the_rewrite(client):
+    assert client.post(f"{API}/", json={"url": "git@gitlab.com:g/r.git"}).status_code == 422
+
+
+def test_any_host_schema_accepts_an_ssh_gitlab_url():
+    from app.schemas.repository import AnyHostRepositoryCreate
+
+    assert AnyHostRepositoryCreate(url="git@gitlab.com:group/repo.git").url == "https://gitlab.com/group/repo"

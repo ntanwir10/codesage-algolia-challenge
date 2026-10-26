@@ -195,7 +195,7 @@ async def test_fetch_files_walks_the_clone_and_applies_the_selection_rules(monke
     args = seen["args"]
     assert args[:5] == ["clone", "--depth", "1", "--single-branch", "--no-tags"]
     assert args[args.index("--branch") + 1] == "main"
-    assert "core.symlinks=false" in args and args[-2] == URL and "--" in args
+    assert "core.symlinks=false" not in args and args[-2] == URL and "--" in args
     assert seen["timeout"] == 120
     assert not seen["target"].parent.exists()  # the temp dir is removed
 
@@ -271,3 +271,33 @@ async def test_the_temp_dir_is_removed_when_reading_fails(monkeypatch):
     with pytest.raises(RuntimeError):
         await git_source.fetch_files(URL)
     assert not seen["target"].parent.exists()
+
+
+async def test_symlinks_in_a_real_clone_are_not_indexed(tmp_path, monkeypatch):
+    """Real git clone (the production args) of a local repo; only the URL and the protocol allow-list differ"""
+    import shutil
+    import subprocess
+
+    if not shutil.which("git"):
+        pytest.skip("git is not installed")
+    outside = tmp_path / "outside"
+    write(outside, "secret.py", "SECRET = 1\n")
+    src = tmp_path / "src"
+    write(src, "a.py", "x = 1\n")
+    os.symlink("a.py", src / "link.py")
+    os.symlink(outside, src / "linkdir")
+    git = ["git", "-c", "user.name=t", "-c", "user.email=t@example.com", "-C", str(src)]
+    for cmd in (["init", "-q"], ["add", "-A"], ["commit", "-q", "-m", "x"]):
+        subprocess.run([*git, *cmd], check=True, capture_output=True)
+
+    real_git = git_source._git
+
+    async def local_git(args, timeout):
+        return await real_git([src.as_uri() if a == URL else a for a in args], timeout)
+
+    monkeypatch.setattr(git_source, "_git", local_git)
+    monkeypatch.setattr(git_source, "_SAFE_GIT_ARGS", [*git_source._SAFE_GIT_ARGS, "-c", "protocol.file.allow=always"])
+
+    files = await git_source.fetch_files(URL)
+
+    assert [f.path for f in files] == ["a.py"]
