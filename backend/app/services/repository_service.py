@@ -31,6 +31,9 @@ logger = structlog.get_logger()
 # Files written to the database per commit
 DB_BATCH_SIZE = 200
 
+# Appended to a failure recorded after a reprocess already cleared the old index
+INDEX_REMOVED_NOTE = " The previous index was removed; reprocess to rebuild it."
+
 # Languages whose files are documentation or data rather than program source
 NON_PROGRAMMING_LANGUAGES = {"text", "markdown", "json", "yaml", "xml", "css", "scss", "html"}
 
@@ -152,6 +155,7 @@ class RepositoryService:
 
     def __init__(self, db: Session):
         self.db = db
+        self._index_cleared = False  # set once a run has removed the previous index
 
     async def create_repository(self, repository_data: RepositoryCreate) -> Repository:
         """Create a repository and schedule its processing"""
@@ -191,6 +195,7 @@ class RepositoryService:
         repository.error_message = None
         self.db.commit()
         await self._broadcast_repository_status(repository)
+        self._index_cleared = False
 
         try:
             # A run already shows "processing" while it waits here for a free slot
@@ -201,6 +206,11 @@ class RepositoryService:
             self.db.rollback()
             repository.status = "failed"
             repository.error_message = failure_message(e)
+            if self._index_cleared:
+                # The old records are gone, so a failure here leaves nothing to search
+                repository.error_message = (
+                    repository.error_message[: 500 - len(INDEX_REMOVED_NOTE)] + INDEX_REMOVED_NOTE
+                )
             self.db.commit()
             logger.error(
                 "Repository processing failed",
@@ -460,6 +470,7 @@ class RepositoryService:
         """Remove a repository's stored files, entities and Algolia records"""
         if not await algolia_service.delete_repository_index(repository_id, wait=True):
             raise IngestionError("Could not remove previously indexed records from Algolia")
+        self._index_cleared = True
 
         def clear_rows():
             # Entities reference files, so delete them first

@@ -54,25 +54,35 @@ setup:
 	@echo "🏆 Setting up CodeSage - MCP-First Code Discovery for Algolia Challenge..."
 	@test -f backend/.env || cp .env.example backend/.env
 	@if [ ! -x .venv/bin/python ]; then \
+		command -v uv >/dev/null || command -v python3.13 >/dev/null || { echo "❌ Python 3.13 (or uv) is required"; exit 1; }; \
 		if command -v uv >/dev/null; then uv venv --python 3.13 .venv; else python3.13 -m venv .venv; fi; \
 	fi
 	@if command -v uv >/dev/null; then uv pip install --python .venv/bin/python -r backend/requirements-dev.txt; \
 	else .venv/bin/python -m pip install -r backend/requirements-dev.txt; fi
+	@command -v node >/dev/null && [ "$$(node -p 'process.versions.node.split(".")[0]')" -ge 22 ] || { echo "❌ Node.js 22 or newer is required"; exit 1; }
 	@cd frontend && npm ci
 	@echo ""
-	@echo "📋 Edit backend/.env and set at least:"
-	@echo "   ALGOLIA_APP_ID, ALGOLIA_ADMIN_API_KEY  (Algolia dashboard)"
+	@echo "📋 Edit backend/.env (these values are empty by default):"
+	@echo "   ALGOLIA_APP_ID, ALGOLIA_ADMIN_API_KEY  (from the Algolia dashboard; needed for indexing and search)"
 	@echo "   GITHUB_TOKEN                           (optional; raises GitHub rate limits)"
-	@echo "   CODESAGE_API_KEY                       (required unless bound to 127.0.0.1)"
+	@echo "   CODESAGE_API_KEY                       (optional for local use; required when the server listens beyond localhost (Docker))"
 	@echo ""
 	@echo "🎯 Next: 'make start', then 'make install-claude' for Claude Desktop"
 
 # Quick start commands  
 start:
 	@echo "🚀 Starting CodeSage - MCP-First Code Discovery..."
-	@$(MAKE) start-backend &
-	@sleep 5
-	@$(MAKE) start-frontend
+	@$(MAKE) start-backend & pid=$$!; ok=; \
+	for i in $$(seq 1 15); do \
+		kill -0 $$pid 2>/dev/null || break; \
+		curl -fsS http://127.0.0.1:8001/health >/dev/null 2>&1 && ok=1 && break; \
+		sleep 1; \
+	done; \
+	if [ -z "$$ok" ]; then \
+		echo "❌ The backend did not start; see its output above."; \
+		pkill -P $$pid 2>/dev/null; kill $$pid 2>/dev/null; exit 1; \
+	fi; \
+	$(MAKE) start-frontend
 
 
 start-backend:
@@ -124,10 +134,10 @@ shell:
 
 health:
 	@echo "🏥 CodeSage - MCP-First Code Discovery Health Check:"
-	@curl -s http://localhost:8001/health | jq . || echo "❌ Backend not responding"
+	@out=$$(curl -fsS http://127.0.0.1:8001/health) && echo "$$out" | jq . || echo "❌ Backend not responding"
 	@echo ""
 	@echo "🤖 MCP Capabilities:"
-	@curl -s http://localhost:8001/api/v1/ai/mcp/capabilities | jq .tools || echo "❌ MCP not responding"
+	@out=$$(curl -fsS http://127.0.0.1:8001/api/v1/ai/mcp/capabilities) && echo "$$out" | jq .tools || echo "❌ MCP not responding"
 
 # Testing
 test:
@@ -137,9 +147,9 @@ test:
 test-mcp:
 	@echo "🤖 Testing MCP protocol endpoints..."
 	@echo "Testing capabilities..."
-	@curl -s http://localhost:8001/api/v1/ai/mcp/capabilities | jq .
+	@curl -s http://127.0.0.1:8001/api/v1/ai/mcp/capabilities | jq .
 	@echo "Testing tools list..."
-	@curl -s http://localhost:8001/api/v1/ai/mcp/tools | jq .
+	@curl -s http://127.0.0.1:8001/api/v1/ai/mcp/tools | jq .
 
 # Database
 db-reset:

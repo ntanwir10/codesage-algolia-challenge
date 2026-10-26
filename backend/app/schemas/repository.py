@@ -12,20 +12,20 @@ RepositoryStatus = Literal["pending", "processing", "completed", "failed"]
 class RepositoryBase(BaseModel):
     """Base repository schema"""
 
-    name: str = Field(default="", description="Repository name")
+    name: str = Field(default="", max_length=255, description="Repository name")
     description: str | None = Field(None, description="Repository description")
-    url: str | None = Field(None, description="Repository URL")
+    url: str | None = Field(None, max_length=500, description="Repository URL")
     branch: str | None = Field(
-        default=None, description="Branch to index; empty means the repository's default branch"
+        default=None, max_length=100, description="Branch to index; empty means the repository's default branch"
     )
-    language: str | None = Field(None, description="Primary programming language")
-    framework: str | None = Field(None, description="Primary framework")
+    language: str | None = Field(None, max_length=50, description="Primary programming language")
+    framework: str | None = Field(None, max_length=100, description="Primary framework")
 
 
 class RepositoryCreate(RepositoryBase):
     """Schema for creating a repository"""
 
-    url: str = Field(..., description="GitHub repository URL")
+    url: str = Field(..., max_length=500, description="GitHub repository URL")
 
     @field_validator("url")
     @classmethod
@@ -60,11 +60,11 @@ class RepositoryCreate(RepositoryBase):
 class RepositoryUpdate(BaseModel):
     """Schema for updating a repository"""
 
-    name: str | None = None
+    name: str | None = Field(None, max_length=255)
     description: str | None = None
-    branch: str | None = None
-    language: str | None = None
-    framework: str | None = None
+    branch: str | None = Field(None, max_length=100)
+    language: str | None = Field(None, max_length=50)
+    framework: str | None = Field(None, max_length=100)
 
     @field_validator("name")
     @classmethod

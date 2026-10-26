@@ -249,6 +249,8 @@ def test_duplicates_ignore_case_and_name_the_existing_row(client, db_session, mo
     [
         ({"url": "https://example.com/octo/demo"}, ["body", "url"]),
         ({"url": URL, "branch": "a/../b"}, ["body", "branch"]),
+        ({"url": URL, "name": "n" * 256}, ["body", "name"]),
+        ({"url": URL, "branch": "b" * 101}, ["body", "branch"]),
     ],
 )
 def test_validation_errors_point_at_the_field(client, payload, loc):
