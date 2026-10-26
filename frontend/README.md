@@ -10,11 +10,11 @@ Three routes, all rendered inside a shared layout (header, footer and a connecti
 
 | Route | Page | What you can do |
 | --- | --- | --- |
-| `/` | `HomePage` | Add a repository from a GitHub URL (optionally with a branch). On success, land on its repository page. |
+| `/` | `HomePage` | Add a GitHub repository. The field has a fixed `github.com/` prefix; type `owner/repo` or paste a GitHub URL, and it is normalised to `https://github.com/owner/repo` before it is sent. An optional branch field sits below. On success, land on its repository page. |
 | `/dashboard` | `DashboardPage` | List all repositories with status and progress. A failed card shows why. Open one with "View Details", delete one, or go to `/` through "Add Repository". There is no reprocess here. |
-| `/repository/:id` | `RepositoryPage` | See status, progress and statistics. When the repository is `completed`, search it with suggestions and open hits on GitHub. Reprocess or delete it. |
+| `/repository/:id` | `RepositoryPage` | See status, progress and statistics. When the repository is `completed`, search it with suggestions and open hits at the exact line. The source link says "View on GitHub" for github.com and "View source" for any other host. Reprocess or delete it. |
 
-- **Add errors.** The form validates the URL first. Every error from the server appears inline under the URL field, with no redirect and no toast, and the input is kept. Editing the URL clears the error. The text is the server's message, or a fixed one for a timeout ("took too long"), no connection, `401`, `429` and `500` (with the request ID). A `409` adds an "Open it" link to the existing repository. The field is tied to its error with `aria-invalid` and `aria-describedby`. Only success shows a toast.
+- **Add errors.** The form validates `owner/repo` first ("Enter owner/repo, for example facebook/react"). A pasted `.../tree/<branch>` URL does not pass; use the branch field. Every error from the server appears inline under the repository field, with no redirect and no toast, and the input is kept. Editing the URL clears the error. The text is the server's message, or a fixed one for a timeout ("took too long"), no connection, `401`, `429` and `500` (with the request ID). A `409` adds an "Open it" link to the existing repository. The field is tied to its error with `aria-invalid` and `aria-describedby`. Only success shows a toast.
 - **Search.** It has query suggestions and paging (10 hits per page). There is no filter UI. Search is enabled only once the repository is `completed`. For a `failed` repository it says indexing failed and to reprocess; for a `pending` one it shows progress. A failed page change keeps the current results.
 - **Reprocess.** It is offered on the repository page for a completed or failed repository. It calls `POST /repositories/{id}/process?force_reprocess=true`.
 - **Delete.** Both pages ask for confirmation first. The backend refuses to delete a repository while its job is running.
@@ -101,7 +101,7 @@ src/
   components/
     ErrorBoundary.tsx  catches render crashes
     features/         search-interface, repository-stats
-    forms/            github-form (URL and branch validation)
+    forms/            github-form (owner/repo and branch validation)
     layout/           Layout (header, footer, global toasts)
     ui/               buttons, cards, toast, status badge, connection badge, dialogs
   services/           api.ts (HTTP client), websocket.ts (live-update client)

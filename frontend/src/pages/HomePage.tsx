@@ -46,7 +46,7 @@ export function HomePage() {
             Discover Code with AI
           </h2>
           <p className="text-xl text-muted-foreground max-w-2xl mx-auto">
-            Submit a GitHub repository URL and ask natural language questions
+            Add a GitHub repository and ask natural language questions
             about your code. Powered by Algolia search and MCP server
             integration.
           </p>
@@ -68,7 +68,7 @@ export function HomePage() {
               </div>
               <h4 className="font-medium">Submit Repository</h4>
               <p className="text-sm text-muted-foreground">
-                Enter a GitHub URL and we'll fetch and parse its code
+                Enter owner/repo and we'll fetch and parse its code
               </p>
             </div>
             <div className="text-center space-y-2">

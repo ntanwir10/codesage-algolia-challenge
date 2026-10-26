@@ -160,7 +160,7 @@ def _permalink(repository: Repository | None, hit: dict) -> str | None:
     if host == "github.com":
         url = f"{GITHUB_PREFIX}{path}/blob/{ref}/{file}"
         return url + f"#L{start}-L{end}" if start else url
-    if host == "gitlab.com" or "gitlab" in host:
+    if host == "gitlab.com" or host.startswith("gitlab."):  # self-hosted GitLab is usually gitlab.<company>
         url = f"https://{host}/{path}/-/blob/{ref}/{file}"
         return url + f"#L{start}-{end}" if start else url
     if host == "bitbucket.org":

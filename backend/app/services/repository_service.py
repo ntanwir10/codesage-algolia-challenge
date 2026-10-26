@@ -281,7 +281,7 @@ class RepositoryService:
         host = parse_repository_url(repository.url)[0]
         github = GitHubService() if host == "github.com" else GitSource()
         files = await github.get_repository_files(repository.url, repository.branch or None)
-        logger.info("GitHub files retrieved", repository_id=repository.id, file_count=len(files))
+        logger.info("Repository files retrieved", repository_id=repository.id, file_count=len(files))
         if not files:
             raise IngestionError("No supported code files found in repository")
 
