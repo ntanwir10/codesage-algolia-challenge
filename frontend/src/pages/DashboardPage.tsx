@@ -13,9 +13,12 @@ import { useQueryClient } from "@tanstack/react-query";
 import { useToast } from "@/components/ui/toast";
 import { useRealtimeStatus } from "@/hooks/useRealtimeStatus";
 import { describeError } from "@/lib/errors";
-import { isActiveStatus, pollWhileAnyActive } from "@/lib/polling";
+import { isActiveStatus, pollWhileAnyActive, progressStage } from "@/lib/polling";
 import { isHttpUrl, sourceLabel } from "@/lib/utils";
 import type { Repository } from "@/types/repository";
+
+// The most the list endpoint returns in one request
+const MAX_LISTED = 500;
 
 export function DashboardPage() {
   const { addToast } = useToast();
@@ -37,7 +40,8 @@ export function DashboardPage() {
     refetch,
   } = useQuery({
     queryKey: ["repositories"],
-    queryFn: () => api.getRepositories(),
+    // The server's largest page; a note below says when there may be more
+    queryFn: () => api.getRepositories({ limit: MAX_LISTED }),
     // Poll every ~3s while any repository is pending/processing.
     refetchInterval: (query) => pollWhileAnyActive(query.state.data),
     // Pick up repos added in another tab or via Claude (global default is 5 min).
@@ -52,7 +56,7 @@ export function DashboardPage() {
     () => repositories.filter((r) => isActiveStatus(r.status)).map((r) => r.id),
     [repositories]
   );
-  useRealtimeStatus({ repositoryIds: activeIds });
+  const { connectionStatus } = useRealtimeStatus({ repositoryIds: activeIds });
 
   const handleDeleteClick = (repository: Repository) => {
     setDeleteDialog({
@@ -249,6 +253,12 @@ export function DashboardPage() {
           </Card>
         </div>
 
+        {repositories.length >= MAX_LISTED && (
+          <p className="text-sm text-amber-700">
+            Showing the first {MAX_LISTED} repositories; more may exist.
+          </p>
+        )}
+
         {/* Repository List */}
         {repositories.length === 0 ? (
           <Card>
@@ -373,16 +383,17 @@ export function DashboardPage() {
                       />
                       <div className="flex items-center justify-between text-xs text-muted-foreground mt-1">
                         <span>
-                          {repo.processed_files} / {repo.total_files} files
-                          processed
+                          {progressStage(repo)} {repo.processed_files} / {repo.total_files} files
                         </span>
-                        <span className="animate-pulse">🔄 Live updates</span>
+                        {connectionStatus === "connected" && (
+                          <span className="animate-pulse">🔄 Live updates</span>
+                        )}
                       </div>
                     </div>
                   )}
 
                   {/* Indeterminate progress for starting repositories */}
-                  {repo.status === "processing" &&
+                  {isActiveStatus(repo.status) &&
                     repo.processed_files === 0 && (
                       <div className="mt-4">
                         <AnimatedProgress
@@ -392,6 +403,7 @@ export function DashboardPage() {
                           color="blue"
                           size="md"
                         />
+                        <p className="text-xs text-muted-foreground mt-1">{progressStage(repo)}</p>
                       </div>
                     )}
 

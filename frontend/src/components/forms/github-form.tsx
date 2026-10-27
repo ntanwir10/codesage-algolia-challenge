@@ -93,7 +93,10 @@ export function GitHubForm({ onSubmit, isLoading = false }: GitHubFormProps) {
         const id = error.response.data?.repository_id;
         if (typeof id === "number") setExistingId(id);
       }
-      setError("root.server", { message: describeError(error).message });
+      const { message } = describeError(error);
+      // A missing or invalid branch belongs under the Branch field, not the URL
+      if (/\bbranch\b/i.test(message)) setError("branch", { type: "server", message });
+      else setError("root.server", { message });
     }
   };
 
@@ -176,10 +179,12 @@ export function GitHubForm({ onSubmit, isLoading = false }: GitHubFormProps) {
               id="branch"
               placeholder="Default branch (leave empty)"
               {...register("branch")}
+              aria-invalid={!!errors.branch}
+              aria-describedby={errors.branch ? "branch-error" : undefined}
               className={errors.branch ? "border-destructive" : ""}
             />
             {errors.branch && (
-              <p className="text-sm text-destructive">
+              <p id="branch-error" role="alert" className="text-sm text-destructive">
                 {errors.branch.message}
               </p>
             )}

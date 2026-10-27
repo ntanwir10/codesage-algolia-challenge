@@ -80,6 +80,16 @@ describe("GitHubForm", () => {
     expect(urlInput()).toHaveValue(SHORT);
   });
 
+  it("shows a branch error under the Branch field, not the URL", async () => {
+    const msg = "Branch 'dev' does not exist in owner/repo.";
+    renderForm(vi.fn().mockRejectedValue(axiosErr(422, { detail: msg })));
+    await submitValid();
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent(msg);
+    expect(alert).toHaveAttribute("id", "branch-error");
+    expect(urlInput()).not.toHaveAttribute("aria-invalid", "true");
+  });
+
   it("shows a 422 string detail under the URL input", async () => {
     const msg = "Repository owner/repo was not found, or it is private.";
     renderForm(vi.fn().mockRejectedValue(axiosErr(422, { detail: msg })));

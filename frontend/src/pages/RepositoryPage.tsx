@@ -15,7 +15,7 @@ import { DeleteConfirmationDialog } from "@/components/ui/delete-confirmation-di
 import { useRealtimeStatus } from "@/hooks/useRealtimeStatus";
 import { useToast } from "@/components/ui/toast";
 import { describeError } from "@/lib/errors";
-import { isActiveStatus, pollWhileActive } from "@/lib/polling";
+import { isActiveStatus, pollWhileActive, progressStage } from "@/lib/polling";
 import { isHttpUrl, sourceLabel } from "@/lib/utils";
 
 // Stop polling once the repository is gone: react-query keeps the last good data
@@ -313,17 +313,22 @@ export function RepositoryPage() {
                         size="lg"
                       />
                       <div className="text-sm mt-2 text-muted-foreground">
-                        {processed} / {total} files
+                        {progressStage(repository)} {processed} / {total} files
                       </div>
                     </div>
                   ) : (
-                    <AnimatedProgress
-                      value={0}
-                      indeterminate={true}
-                      animated={true}
-                      color="blue"
-                      size="lg"
-                    />
+                    <div>
+                      <AnimatedProgress
+                        value={0}
+                        indeterminate={true}
+                        animated={true}
+                        color="blue"
+                        size="lg"
+                      />
+                      <div className="text-sm mt-2 text-muted-foreground">
+                        {progressStage(repository)}
+                      </div>
+                    </div>
                   );
                 })()}
               </div>
