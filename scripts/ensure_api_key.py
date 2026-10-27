@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Make sure backend/.env has a CODESAGE_API_KEY and frontend/.env carries the same one.
 
-Generates a key only when it is missing or empty; a non-empty key is never changed.
-Never prints the key. Standard library only.
+Generates a key only when it is missing, empty or a `your-...-here` placeholder;
+any other key is never changed. Never prints the key. Standard library only.
 """
 
 import os
@@ -17,6 +17,8 @@ from install_claude_desktop import read_env_value, write_atomic  # noqa: E402
 REPO = Path(__file__).resolve().parent.parent
 BACKEND_KEY = "CODESAGE_API_KEY"
 FRONTEND_KEY = "VITE_CODESAGE_API_KEY"
+# Same rule as _placeholder_is_unset in backend/app/core/config.py
+PLACEHOLDER = re.compile(r"your-.*-here")
 
 
 def _assign(env_file: Path, name: str, value: str, only_empty: bool) -> None:
@@ -38,10 +40,11 @@ def ensure(backend_env: Path, frontend_env: Path) -> int:
         print("error: backend/.env not found; run 'make setup' first", file=sys.stderr)
         return 1
     key = read_env_value(backend_env, BACKEND_KEY)
-    generated = not key
+    placeholder = bool(key and PLACEHOLDER.fullmatch(key))
+    generated = not key or placeholder
     if generated:
         key = secrets.token_urlsafe(32)
-        _assign(backend_env, BACKEND_KEY, key, only_empty=True)
+        _assign(backend_env, BACKEND_KEY, key, only_empty=not placeholder)
         print("Generated a CodeSage API key in backend/.env")
     synced = read_env_value(frontend_env, FRONTEND_KEY) == key
     if not synced:

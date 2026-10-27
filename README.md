@@ -94,7 +94,7 @@ The dashboard shows every refusal under the repository field and stays on the Ho
 | "owner/repo has already been added", with an "Open it" link | 409 | Same URL as an existing repository. Case doesn't matter. The body also has `repository_id` |
 | "GitHub's API rate limit was reached; try again in about N minutes" | 503 | GitHub is rate-limiting the server. `Retry-After` says how long |
 | "GitHub rejected the server's GITHUB_TOKEN" or "Could not reach GitHub; try again" | 502 | The token is invalid, or GitHub is down or unreachable |
-| "GitHub did not respond in time; try again" | 504 | GitHub took longer than the 10 s check |
+| "GitHub did not respond in time; try again" | 504 | A GitHub request took longer than 10 s. The check makes up to two, so it can take about 20 s |
 | "Search indexing is not configured on the server" | 503 | `ALGOLIA_APP_ID` or `ALGOLIA_ADMIN_API_KEY` is unset |
 
 The GitHub check makes one attempt per call, with no retries. A repository that passes can still fail later, during the run; the dashboard then shows the reason on its card.
@@ -201,10 +201,12 @@ More detail is in [docs/architecture.md](docs/architecture.md) (data model, sear
 | Language | Parser | Entities |
 | --- | --- | --- |
 | Python | `ast`, with a line scanner for files `ast` can't parse | functions, classes, methods, imports |
-| JavaScript, TypeScript, Java, Go, Rust, C, C++, C#, PHP, Ruby | tree-sitter | functions, classes, methods, imports |
+| JavaScript, TypeScript, Java, Go, Rust, C (`.c`), C++ (`.cpp`), C#, PHP, Ruby | tree-sitter | functions, classes, methods, imports |
 | Markdown | heading scanner | a `doc_section` per heading |
 | Terraform (`.tf`, `.tfvars`), HCL (`.hcl`) | tree-sitter HCL grammar | a `terraform_block` per top-level block, named like `resource aws_s3_bucket.logs`, `module network`, `variable region` or `output api_url` |
-| CSS, HTML, JSON, YAML, XML | none | stored and readable, but no entities |
+| CSS, SCSS, HTML, JSON, YAML, XML, SQL | none | stored and readable, but no entities |
+
+Files with any other extension are skipped. That includes C and C++ headers (`.h`, `.hpp`) and `.cc` sources.
 
 ## Quick start
 
@@ -221,7 +223,7 @@ You need:
 make setup
 ```
 
-This copies `.env.example` to `backend/.env` if it's missing, creates `.venv` and installs the backend dependencies into it, and runs `npm ci` in `frontend/`. It stops with a message if Python 3.13 (or `uv`) or Node 22 is missing.
+This copies `.env.example` to `backend/.env` if it's missing, creates `.venv` and installs the backend dependencies into it, and runs `npm ci` in `frontend/`. It stops with a message if Node 22 is missing, or if `.venv` doesn't exist yet and neither Python 3.13 nor `uv` is found. An existing `.venv` is reused without checking its Python version.
 
 **2. Configure.** Edit `backend/.env`:
 
@@ -231,7 +233,7 @@ ALGOLIA_ADMIN_API_KEY=...
 GITHUB_TOKEN=...
 ```
 
-You don't need to create `CODESAGE_API_KEY`. `make setup`, `make start` and `make install-claude` generate it in `backend/.env` if it's missing, copy it to `frontend/.env` as `VITE_CODESAGE_API_KEY`, and keep the two in sync. To rotate it, delete the `CODESAGE_API_KEY` line in `backend/.env`, run `make setup` and `make install-claude`, and restart Claude Desktop and Vite. A value left empty, or left as a `your-...-here` placeholder, counts as unset. See [Security](#security).
+You don't need to create `CODESAGE_API_KEY`. `make setup`, `make start` and `make install-claude` generate it in `backend/.env` if it's missing, copy it to `frontend/.env` as `VITE_CODESAGE_API_KEY`, and keep the two in sync. To rotate it, delete the `CODESAGE_API_KEY` line in `backend/.env`, run `make setup` and `make install-claude`, and restart Claude Desktop and Vite. They replace a key that is empty or a leftover `your-...-here` placeholder, and keep any other value. The backend itself doesn't treat a placeholder key as unset: if it starts without one of these targets running first, it uses the placeholder as the real key. See [Security](#security).
 
 **3. Run.**
 
@@ -239,7 +241,7 @@ You don't need to create `CODESAGE_API_KEY`. `make setup`, `make start` and `mak
 make start   # backend on http://127.0.0.1:8001, dashboard on http://localhost:5173
 ```
 
-`make start` waits up to 15 seconds for the backend to answer `/health`, and exits with an error if it doesn't. The dashboard needs port 5173; if it's taken, Vite exits instead of picking another port. `make start-backend` and `make start-frontend` run them separately, `make stop` stops both, and `make health` reports whether the backend answers. API docs are at http://127.0.0.1:8001/docs.
+`make start` waits up to 15 seconds for the backend to answer `/health`, and exits with an error if it doesn't. The dashboard needs port 5173; if it's taken, Vite exits instead of picking another port. `make start-backend` and `make start-frontend` run them separately, `make stop` stops both, and `make health` reports whether the backend answers. `make health` needs `jq`; without it, it prints "Backend not responding" even when the backend is up. API docs are at http://127.0.0.1:8001/docs.
 
 **4. Index a repository.** Open http://localhost:5173 and enter `owner/repo` (a pasted GitHub URL works too). The repository page shows progress live and turns searchable when it's done. If GitHub or Algolia refuses the repository, the form says why; see [Adding a repository](#adding-a-repository).
 
@@ -247,7 +249,7 @@ make start   # backend on http://127.0.0.1:8001, dashboard on http://localhost:5
 
 ```bash
 make install-claude                 # add CodeSage to the Claude Desktop config
-make install-claude ARGS=--dry-run  # preview first; the key is masked
+make install-claude ARGS=--dry-run  # preview first; the key is masked, but it is still generated in .env if missing
 ```
 
 Restart Claude Desktop and keep the backend running. Then ask Claude something like *"Search the zustand repository for where the store is created"*.
@@ -258,11 +260,11 @@ Restart Claude Desktop and keep the backend running. Then ask Claude something l
 
 | Page | What you can do |
 | --- | --- |
-| Home (`/`) | Add a GitHub repository. The field has a `github.com/` prefix: type `owner/repo` or paste a GitHub URL, and it is trimmed to `owner/repo`. The branch has its own optional field. |
+| Home (`/`) | Add a GitHub repository. The field has a `github.com/` prefix: type `owner/repo` or paste a GitHub URL, and it is trimmed to `owner/repo`. The branch and a description have their own optional fields; the description shows on the repository page. |
 | Repository (`/repository/:id`) | Watch indexing progress. Afterwards, search with suggestions and open results at the exact line. The source link says "View on GitHub", or "View source" for a repository on another host. Reprocess or delete the repository. |
 | Dashboard (`/dashboard`) | All repositories with their status and progress. Delete a repository from here. |
 
-A finished repository shows a green card. It shows amber if it was only partially indexed and red if it failed; both say why.
+On the repository page, a finished repository shows a green card. It shows amber if it was only partially indexed and red if it failed; both say why. The Dashboard doesn't make this distinction: a partially indexed repository there has a plain "Completed" badge, and only a failed one shows its reason.
 
 An unknown path shows "Page not found". A repository that doesn't exist says so; any other load error shows the message with "Try again". A failed repository says why on its page and on its dashboard card.
 
@@ -286,10 +288,10 @@ For the HTTPS prod stack, use `make install-claude ARGS="--server-url https://yo
 
 Ask Claude: *"Add https://gitlab.com/group/project to CodeSage"*. Claude calls `add_repository` and you follow progress with `list_repositories`.
 
-- **Hosts.** https URLs on GitHub, GitLab (nested groups too), Bitbucket and self-hosted servers. Branch URLs such as `.../-/tree/dev` work.
+- **Hosts.** GitHub, GitLab (nested groups too), Bitbucket and self-hosted servers. `http://` and `git@host:path` URLs are rewritten to `https://`, and git always fetches over https. Branch URLs such as `.../-/tree/dev` work.
 - **Public only.** Private repositories are refused on every host but github.com, where the server's `GITHUB_TOKEN` can read them. The message is "... was not found or is private; only public repositories are supported on <host>."
 - **Rejected URLs.** Ports, credentials, `localhost` and private IP addresses.
-- **Names and links.** Repositories on other hosts are named `<host>/<path>`. Search results link to GitLab and Bitbucket at the exact line. Other hosts get no link.
+- **Names and links.** Repositories on other hosts are named `<host>/<path>`. Search results link to the exact line on GitLab (gitlab.com, and any host whose name starts with `gitlab.`) and on bitbucket.org. Other hosts, including self-hosted Bitbucket, get no link.
 - **Not in the dashboard.** The web form and `POST /api/v1/repositories/` take github.com only.
 - **Needs git.** The backend runs `git ls-remote` to check (10 s) and a shallow `git clone` to read (120 s). The prod Docker image includes git.
 
@@ -333,14 +335,14 @@ curl -X POST http://127.0.0.1:8001/api/v1/repositories/ \
 | Variable | Default | Notes |
 | --- | --- | --- |
 | `CODESAGE_API_KEY` | generated by `make setup` | Required unless the server listens on loopback only. Generated if missing and copied to `frontend/.env`; see [Configure](#quick-start) |
-| `MCP_SERVER_HOST`, `MCP_SERVER_PORT` | `127.0.0.1`, `8001` | A non-loopback host requires the key |
+| `MCP_SERVER_HOST`, `MCP_SERVER_PORT` | `127.0.0.1`, `8001` | A non-loopback host requires the key. They don't move the server: `make start-backend` always binds `127.0.0.1:8001` and the Docker images `0.0.0.0:8001`. They set the startup check, the server URL in the OpenAPI schema, and the bind address only for `python -m app.main` |
 | `ALGOLIA_APP_ID`, `ALGOLIA_ADMIN_API_KEY` | unset | Required for indexing and search. Empty or `your-...-here` values count as unset: adding or reprocessing a repository returns `503`, MCP search says Algolia isn't configured, and `/health` is `degraded` |
 | `ALGOLIA_INDEX_NAME` | `codesage_code_entities` | One index per database; the Compose files use their own |
 | `GITHUB_TOKEN` | unset | Raises GitHub rate limits and allows private github.com repositories. If GitHub rejects it, adding a repository returns `502` |
 | `DATABASE_URL` | `sqlite:///./codesage.db` | SQLite only |
-| `CORS_ORIGINS` | localhost ports 3000, 5173, 5174 | Comma-separated list of origins; `*` is rejected. Also decides which browser origins may write |
+| `CORS_ORIGINS` | localhost ports 3000, 5173, 5174 (`.env.example`, which `make setup` copies, sets only 3000 and 5173) | Comma-separated list of origins; `*` is rejected. Also decides which browser origins may write |
 | `ALLOWED_HOSTS` | unset | With a key set, extra hostnames the API answers to, besides loopback and the `CORS_ORIGINS` hosts. Comma-separated; `*.example.com` allows subdomains, `*` allows any host |
-| `ENVIRONMENT`, `LOG_LEVEL` | `development`, `INFO` | `production` hides `/docs` |
+| `ENVIRONMENT`, `LOG_LEVEL` | `development`, `INFO` | `production` hides `/docs` and `/redoc`. `/openapi.json` stays on; the prod stack's nginx doesn't route it |
 
 Rate limits are per client address: 100 per minute for repository create and process and for search suggestions, and 30 per minute for MCP tool calls and resource reads.
 

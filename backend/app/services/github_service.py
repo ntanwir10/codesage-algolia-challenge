@@ -19,7 +19,7 @@ logger = structlog.get_logger()
 
 # Performance constants
 MAX_CONCURRENT_REQUESTS = 5  # GitHub API rate limiting
-MAX_RETRIES = 3  # Retry timeouts and 5xx responses
+MAX_RETRIES = 3  # Attempts in total, so 2 retries
 RETRY_BACKOFF_BASE = 1.0  # Seconds; attempt n waits base * 2**n
 MAX_RATE_LIMIT_WAIT = 60  # Longest we will sleep for a rate-limit reset
 # Directories the contents-API fallback lists (one request each) before it stops. It only runs
@@ -416,8 +416,8 @@ class GitHubService(FileSelector):
     async def check_repository(self, url: str, branch: str | None = None) -> None:
         """Fail fast, before a row exists, if the repository or branch can't be read.
 
-        One attempt each for the repository and its branch, 10 s in total: no retries or
-        rate-limit sleeps, since the caller is an HTTP request with its own timeout.
+        One attempt each for the repository and its branch, 10 s per request (so about 20 s at
+        worst): no retries or rate-limit sleeps, since the caller is an HTTP request.
         Raises RepositoryCheckError carrying the HTTP status and message to return.
         """
         owner, repo, url_branch = parse_github_url(url)

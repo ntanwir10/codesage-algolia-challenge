@@ -15,16 +15,7 @@ import { useRealtimeStatus } from "@/hooks/useRealtimeStatus";
 import { useToast } from "@/components/ui/toast";
 import { describeError } from "@/lib/errors";
 import { isActiveStatus, pollWhileActive } from "@/lib/polling";
-import { isHttpUrl } from "@/lib/utils";
-
-// "View on GitHub" only for github.com; other hosts get a neutral label.
-function sourceLabel(url: string) {
-  try {
-    return new URL(url).hostname === "github.com" ? "View on GitHub" : "View source";
-  } catch {
-    return "View source";
-  }
-}
+import { isHttpUrl, sourceLabel } from "@/lib/utils";
 
 // Stop polling once the repository is gone: react-query keeps the last good data
 // (still "processing") after a 404, which would otherwise keep the interval alive.
