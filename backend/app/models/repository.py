@@ -46,6 +46,7 @@ class Repository(Base):
     @property
     def processing_progress(self) -> float:
         """Calculate processing progress percentage"""
-        if self.total_files == 0:
+        # The count columns are nullable; a NULL would otherwise raise in /status
+        if not self.total_files:
             return 0.0
-        return (self.processed_files / self.total_files) * 100
+        return ((self.processed_files or 0) / self.total_files) * 100

@@ -110,13 +110,18 @@ def is_denied_path(path: str) -> bool:
     return any(fnmatch.fnmatchcase(name, pat) for pat in DENIED_FILE_PATTERNS)
 
 
+# What `git check-ref-format` forbids in a branch name: control characters, space and ~^:?*[\,
+# "..", "@{", "//", a part starting with "." or ending in ".lock", and a leading or trailing "/" or "."
+_BAD_REF = re.compile(r"[\x00-\x20\x7f~^:?*\[\\]|\.\.|@\{|//|(^|/)\.|\.lock(/|$)|^/|/$|\.$|^@$")
+
+
 def is_valid_branch(branch: str) -> bool:
-    """False for names that could step outside the repository in an API path"""
+    """git's branch-name rules, so a bad name gets 'invalid' instead of 'does not exist'. They also
+    keep a name from stepping outside the repository in an API path"""
     return (
         bool(branch)
-        and ".." not in branch.split("/")
-        and "\x00" not in branch
         and not branch.startswith("-")  # would read as an option to git
+        and not _BAD_REF.search(branch)
     )
 
 

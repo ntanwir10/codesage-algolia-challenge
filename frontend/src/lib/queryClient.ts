@@ -21,6 +21,9 @@ export const queryClient = new QueryClient({
       gcTime: 10 * 60 * 1000, // 10 minutes (formerly cacheTime)
       retry: shouldRetryQuery,
       refetchOnWindowFocus: false,
+      // Fetch even when the browser says it's offline: the backend is often on localhost, and a
+      // paused query has no data and no error, which pages would show as "No repositories yet"
+      networkMode: "always",
     },
     mutations: {
       retry: false,

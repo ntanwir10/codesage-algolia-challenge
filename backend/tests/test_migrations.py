@@ -1,4 +1,5 @@
 import sqlite3
+from contextlib import closing
 from pathlib import Path
 
 import pytest
@@ -19,8 +20,21 @@ DROPPED = {
 NEW_TABLES = {"repositories", "code_files", "code_entities", "alembic_version"}
 
 
+_engines = []
+
+
 def _engine(path: Path):
-    return create_engine(f"sqlite:///{path}")
+    engine = create_engine(f"sqlite:///{path}")
+    _engines.append(engine)
+    return engine
+
+
+@pytest.fixture(autouse=True)
+def _dispose_engines():
+    """Close each test's pooled connections; left open, they surface as ResourceWarnings later"""
+    yield
+    while _engines:
+        _engines.pop().dispose()
 
 
 def _cfg(path: Path) -> Config:
@@ -33,7 +47,7 @@ def _cfg(path: Path) -> Config:
 def _build_legacy(path: Path) -> None:
     """A pre-Alembic database: baseline schema via migration SQL, then alembic_version dropped."""
     command.upgrade(_cfg(path), "baseline")
-    with sqlite3.connect(path) as conn:
+    with closing(sqlite3.connect(path)) as conn, conn:  # closing: the with alone only commits
         conn.execute("DROP TABLE alembic_version")
         for rid, url in ((1, "https://x/dup"), (2, "https://x/dup"), (3, "https://x/solo")):
             conn.execute(
@@ -60,7 +74,7 @@ def _build_legacy(path: Path) -> None:
 
 
 def _counts(path: Path) -> dict:
-    with sqlite3.connect(path) as conn:
+    with closing(sqlite3.connect(path)) as conn, conn:  # closing: the with alone only commits
         return {
             t: conn.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0]
             for t in ("repositories", "code_files", "code_entities")
@@ -91,7 +105,7 @@ def test_legacy_database_is_stamped_and_cleaned(tmp_path):
     upgrade_database(engine)
 
     assert set(inspect(engine).get_table_names()) == NEW_TABLES
-    with sqlite3.connect(db) as conn:
+    with closing(sqlite3.connect(db)) as conn, conn:  # closing: the with alone only commits
         repos = conn.execute("SELECT id, name, url FROM repositories ORDER BY id").fetchall()
         assert repos == [(2, "repo2", "https://x/dup"), (3, "repo3", "https://x/solo")]
         files = conn.execute("SELECT id, repository_id FROM code_files ORDER BY id").fetchall()
@@ -107,7 +121,7 @@ def test_legacy_database_without_legacy_tables_upgrades(tmp_path):
     # Older create_all() runs could leave out sessions and search_indexes
     db = tmp_path / "legacy-minimal.db"
     _build_legacy(db)
-    with sqlite3.connect(db) as conn:
+    with closing(sqlite3.connect(db)) as conn, conn:  # closing: the with alone only commits
         conn.execute("DROP TABLE sessions")
         conn.execute("DROP TABLE search_indexes")
     engine = _engine(db)
@@ -132,7 +146,7 @@ def test_upgrade_twice_is_noop(tmp_path):
 def test_upgrade_from_cleanup_keeps_rows(tmp_path):
     db = tmp_path / "keep.db"
     command.upgrade(_cfg(db), "cleanup")
-    with sqlite3.connect(db) as conn:
+    with closing(sqlite3.connect(db)) as conn, conn:  # closing: the with alone only commits
         conn.execute(
             "INSERT INTO repositories (id, name, url, status, security_score, repo_metadata) "
             "VALUES (1, 'r', 'https://x/r', 'completed', 90, '{}')"
@@ -156,7 +170,7 @@ def test_upgrade_from_cleanup_keeps_rows(tmp_path):
         assert not dropped & {c["name"] for c in insp.get_columns(table)}
     index_names = {i["name"] for t in DROPPED for i in insp.get_indexes(t)}
     assert not {"ix_code_entities_full_name", "ix_code_files_file_name"} & index_names
-    with sqlite3.connect(db) as conn:
+    with closing(sqlite3.connect(db)) as conn, conn:  # closing: the with alone only commits
         assert conn.execute("SELECT id, name, url, status FROM repositories").fetchall() == [
             (1, "r", "https://x/r", "completed")
         ]
@@ -173,7 +187,7 @@ def test_downgrade_from_head_restores_nullable_columns(tmp_path):
     db = tmp_path / "head_down.db"
     engine = _engine(db)
     upgrade_database(engine)
-    with sqlite3.connect(db) as conn:
+    with closing(sqlite3.connect(db)) as conn, conn:  # closing: the with alone only commits
         conn.execute("INSERT INTO repositories (id, name, url) VALUES (1, 'r', 'https://x/r')")
         conn.execute(
             "INSERT INTO code_files (id, repository_id, file_path, content) "
@@ -190,7 +204,7 @@ def test_downgrade_from_head_restores_nullable_columns(tmp_path):
     assert "ix_code_entities_full_name" in {
         i["name"] for i in insp.get_indexes("code_entities")
     }
-    with sqlite3.connect(db) as conn:
+    with closing(sqlite3.connect(db)) as conn, conn:  # closing: the with alone only commits
         assert conn.execute("SELECT COUNT(*) FROM code_files").fetchone() == (1,)
     # and forward again
     upgrade_database(engine)
@@ -213,5 +227,6 @@ def test_downgrade_to_baseline(tmp_path):
 
 def test_memory_database_uses_create_all():
     engine = create_engine("sqlite://")
+    _engines.append(engine)  # disposed after the test like the file-backed ones
     upgrade_database(engine)
     assert set(inspect(engine).get_table_names()) == NEW_TABLES - {"alembic_version"}

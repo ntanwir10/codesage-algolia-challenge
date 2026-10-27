@@ -8,6 +8,21 @@ export function isActiveStatus(status: string | undefined): boolean {
   return status === "pending" || status === "processing";
 }
 
+/**
+ * What an active run is doing. The backend reports file counts only while it parses, so the
+ * counts tell the stages apart: none yet while it downloads, all of them while Algolia indexes.
+ */
+export function progressStage(repo: {
+  status: string;
+  processed_files: number;
+  total_files: number;
+}): string {
+  if (repo.status === "pending") return "Queued";
+  if (!repo.processed_files) return "Fetching files…";
+  if (repo.processed_files < repo.total_files) return "Parsing and storing files…";
+  return "Indexing in Algolia…";
+}
+
 function interval(): number {
   return websocketService.getStatus() === "connected"
     ? LIVE_POLL_INTERVAL_MS

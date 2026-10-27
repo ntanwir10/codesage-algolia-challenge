@@ -222,8 +222,9 @@ class RepositoryService:
 
         try:
             # A run already shows "processing" while it waits here for a free slot
-            async with _run_slot(), monitor_repository_processing(repository.id):
+            async with _run_slot(), monitor_repository_processing(repository.name) as metrics:
                 await self.process_repository_files(repository)
+                metrics.items_processed = repository.processed_files  # files per second, not 0
         except Exception as e:
             # Discard any half-written work so recording the failure can't fail too
             self.db.rollback()

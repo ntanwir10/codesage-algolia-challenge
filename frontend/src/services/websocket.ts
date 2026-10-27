@@ -71,6 +71,7 @@ export class WebSocketService {
   private repoListeners = new Map<number, Set<StatusUpdateCallback>>();
   private globalListeners = new Set<StatusUpdateCallback>();
   private connectionListeners = new Set<ConnectionStatusCallback>();
+  private authRejected = false; // the server closed with 1008: the key is wrong
   private visibilityHandler = () => {
     if (
       !document.hidden &&
@@ -153,6 +154,7 @@ export class WebSocketService {
 
   /** Manual reconnect (only meaningful while something is subscribed). */
   reconnect(): void {
+    this.authRejected = false;
     this.reconnectAttempts = 0;
     this.clearReconnect();
     this.teardownSocket(1000, "Manual reconnect");
@@ -175,7 +177,8 @@ export class WebSocketService {
   // --- connection management ---------------------------------------------
 
   private connect(): void {
-    if (this.ws || this.isConnecting || !this.hasSubscribers()) return;
+    // After a 1008 only a manual reconnect retries: tab focus or a new page would just re-toast
+    if (this.ws || this.isConnecting || this.authRejected || !this.hasSubscribers()) return;
 
     this.isConnecting = true;
     this.notifyConnection("connecting");
@@ -228,7 +231,8 @@ export class WebSocketService {
       this.notifyConnection("disconnected");
       // 1008: the server rejected the API key, so retrying can't succeed
       if (event.code === 1008) {
-        console.warn("WebSocket rejected by the server: check VITE_CODESAGE_API_KEY");
+        console.warn("WebSocket rejected by the server: the API key doesn't match");
+        this.authRejected = true;
         notifyAuthError(); // same toast as an HTTP 401
         return;
       }

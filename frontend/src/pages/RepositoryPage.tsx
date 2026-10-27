@@ -1,7 +1,8 @@
 import { useParams, Link, useNavigate } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { api } from "@/services/api";
+import type { Repository } from "@/types/repository";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { LoadingSpinner } from "@/components/ui/loading-spinner";
@@ -15,7 +16,7 @@ import { DeleteConfirmationDialog } from "@/components/ui/delete-confirmation-di
 import { useRealtimeStatus } from "@/hooks/useRealtimeStatus";
 import { useToast } from "@/components/ui/toast";
 import { describeError } from "@/lib/errors";
-import { isActiveStatus, pollWhileActive } from "@/lib/polling";
+import { isActiveStatus, pollWhileActive, progressStage } from "@/lib/polling";
 import { isHttpUrl, sourceLabel } from "@/lib/utils";
 
 // Stop polling once the repository is gone: react-query keeps the last good data
@@ -44,6 +45,7 @@ export function RepositoryPage() {
   const queryClient = useQueryClient();
   const { addToast } = useToast();
   const [isReprocessing, setIsReprocessing] = useState(false);
+  const [confirmReprocess, setConfirmReprocess] = useState(false);
 
   // Poll every ~3s while pending/processing; stops once completed/failed.
   const {
@@ -57,6 +59,12 @@ export function RepositoryPage() {
     enabled: !!repositoryId,
     refetchInterval: pollUnlessGone,
   });
+
+  // Layout leaves this page's title to it: the repository's name, once it's loaded
+  const repositoryName = repository?.name;
+  useEffect(() => {
+    document.title = repositoryName ? `CodeSage - ${repositoryName}` : "CodeSage - Repository";
+  }, [repositoryName]);
 
   // Shares the stats card's query; its languages with entities feed the search filter
   const { data: stats } = useQuery({
@@ -99,6 +107,10 @@ export function RepositoryPage() {
       addToast({ type: "success", title: "Repository deleted" });
       // Don't remove this page's queries: its observers would refetch the deleted repository
       // (404s) before navigating unmounts them. Once unmounted they're inactive and expire.
+      // Drop it from the list now, so it doesn't flash back on the dashboard before the refetch
+      queryClient.setQueryData<Repository[]>(["repositories"], (old) =>
+        old?.filter((repo) => repo.id !== repository.id)
+      );
       navigate("/dashboard");
       queryClient.invalidateQueries({ queryKey: ["repositories"] });
     } catch (error) {
@@ -237,7 +249,7 @@ export function RepositoryPage() {
               <span className="text-3xl">📂</span>
             </div>
             <div className="min-w-0">
-              <h1 className="text-3xl font-bold break-words">{repository.name}</h1>
+              <h1 className="text-2xl sm:text-3xl font-bold break-words">{repository.name}</h1>
               {repository.description && (
                 <p className="text-muted-foreground mt-1 text-lg">
                   {repository.description}
@@ -271,8 +283,10 @@ export function RepositoryPage() {
               variant="outline"
               size="sm"
               onClick={handleDeleteClick}
+              // The server refuses (409) while a run holds the repository
+              disabled={isActiveStatus(repository.status)}
               className="text-red-600 hover:text-red-700 hover:bg-red-50"
-              title="Delete repository"
+              title={isActiveStatus(repository.status) ? "Can't delete while processing" : "Delete repository"}
             >
               <span className="mr-1">🗑️</span>
               Delete
@@ -313,17 +327,22 @@ export function RepositoryPage() {
                         size="lg"
                       />
                       <div className="text-sm mt-2 text-muted-foreground">
-                        {processed} / {total} files
+                        {progressStage(repository)} {processed} / {total} files
                       </div>
                     </div>
                   ) : (
-                    <AnimatedProgress
-                      value={0}
-                      indeterminate={true}
-                      animated={true}
-                      color="blue"
-                      size="lg"
-                    />
+                    <div>
+                      <AnimatedProgress
+                        value={0}
+                        indeterminate={true}
+                        animated={true}
+                        color="blue"
+                        size="lg"
+                      />
+                      <div className="text-sm mt-2 text-muted-foreground">
+                        {progressStage(repository)}
+                      </div>
+                    </div>
                   );
                 })()}
               </div>
@@ -373,7 +392,7 @@ export function RepositoryPage() {
                   <Button
                     variant="outline"
                     className="mt-2"
-                    onClick={handleReprocess}
+                    onClick={() => setConfirmReprocess(true)}
                     disabled={isReprocessing}
                   >
                     {isReprocessing ? "Reprocessing..." : "Reprocess"}
@@ -404,7 +423,7 @@ export function RepositoryPage() {
                   <Button
                     variant="outline"
                     className="mt-2"
-                    onClick={handleReprocess}
+                    onClick={() => setConfirmReprocess(true)}
                     disabled={isReprocessing}
                   >
                     {isReprocessing ? "Reprocessing..." : "Reprocess"}
@@ -429,18 +448,16 @@ export function RepositoryPage() {
 
         {/* Quick Actions */}
         <div className="flex flex-wrap gap-4">
-          <Link to="/dashboard">
-            <Button variant="outline" className="gap-2">
-              ← Back to Dashboard
-            </Button>
-          </Link>
+          <Button asChild variant="outline" className="gap-2">
+            <Link to="/dashboard">← Back to Dashboard</Link>
+          </Button>
           {isHttpUrl(repository.url) && (
-            <a href={repository.url} target="_blank" rel="noopener noreferrer">
-              <Button variant="outline" className="gap-2">
+            <Button asChild variant="outline" className="gap-2">
+              <a href={repository.url} target="_blank" rel="noopener noreferrer">
                 <span>🔗</span>
                 {sourceLabel(repository.url)}
-              </Button>
-            </a>
+              </a>
+            </Button>
           )}
         </div>
       </div>
@@ -459,6 +476,19 @@ export function RepositoryPage() {
         }
         confirmText="Delete Repository"
         variant="danger"
+      />
+
+      <DeleteConfirmationDialog
+        isOpen={confirmReprocess}
+        onClose={() => setConfirmReprocess(false)}
+        onConfirm={() => {
+          setConfirmReprocess(false);
+          void handleReprocess();
+        }}
+        title="Reprocess Repository"
+        description="This removes the current index and builds it again. Search is unavailable until the run finishes."
+        confirmText="Reprocess"
+        variant="warning"
       />
     </div>
   );

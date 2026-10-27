@@ -13,9 +13,14 @@ import { useQueryClient } from "@tanstack/react-query";
 import { useToast } from "@/components/ui/toast";
 import { useRealtimeStatus } from "@/hooks/useRealtimeStatus";
 import { describeError } from "@/lib/errors";
-import { isActiveStatus, pollWhileAnyActive } from "@/lib/polling";
+import { isActiveStatus, POLL_INTERVAL_MS, pollWhileAnyActive, progressStage } from "@/lib/polling";
 import { isHttpUrl, sourceLabel } from "@/lib/utils";
 import type { Repository } from "@/types/repository";
+
+// The most the list endpoint returns in one request
+const MAX_LISTED = 500;
+// The most repositories one WebSocket may subscribe to (MAX_SUBSCRIPTIONS_PER_CONNECTION on the server)
+const MAX_SUBSCRIPTIONS = 100;
 
 export function DashboardPage() {
   const { addToast } = useToast();
@@ -37,9 +42,15 @@ export function DashboardPage() {
     refetch,
   } = useQuery({
     queryKey: ["repositories"],
-    queryFn: () => api.getRepositories(),
+    // The server's largest page; a note below says when there may be more
+    queryFn: () => api.getRepositories({ limit: MAX_LISTED }),
     // Poll every ~3s while any repository is pending/processing.
-    refetchInterval: (query) => pollWhileAnyActive(query.state.data),
+    refetchInterval: (query) => {
+      const data = query.state.data;
+      // Past the subscription cap some active repositories get no pushed updates: poll fast for them
+      const active = data?.filter((r) => isActiveStatus(r.status)).length ?? 0;
+      return active > MAX_SUBSCRIPTIONS ? POLL_INTERVAL_MS : pollWhileAnyActive(data);
+    },
     // Pick up repos added in another tab or via Claude (global default is 5 min).
     staleTime: 30_000,
   });
@@ -49,10 +60,14 @@ export function DashboardPage() {
   // Live updates for repositories still being processed.
   // Completion toasts are handled globally in Layout.
   const activeIds = useMemo(
-    () => repositories.filter((r) => isActiveStatus(r.status)).map((r) => r.id),
+    () =>
+      repositories
+        .filter((r) => isActiveStatus(r.status))
+        .map((r) => r.id)
+        .slice(0, MAX_SUBSCRIPTIONS),
     [repositories]
   );
-  useRealtimeStatus({ repositoryIds: activeIds });
+  const { connectionStatus } = useRealtimeStatus({ repositoryIds: activeIds });
 
   const handleDeleteClick = (repository: Repository) => {
     setDeleteDialog({
@@ -78,9 +93,12 @@ export function DashboardPage() {
       });
 
       addToast({ type: "success", title: "Repository deleted" });
-      queryClient.removeQueries({
-        queryKey: ["repository", deleteDialog.repository.id],
-      });
+      const deletedId = deleteDialog.repository.id;
+      queryClient.removeQueries({ queryKey: ["repository", deletedId] });
+      // Drop it now, so the card doesn't come back until the refetch lands
+      queryClient.setQueryData<Repository[]>(["repositories"], (old) =>
+        old?.filter((repo) => repo.id !== deletedId)
+      );
       refetch();
     } catch (error) {
       const { message, status } = describeError(error);
@@ -166,12 +184,12 @@ export function DashboardPage() {
               Manage and explore your code repositories with real-time updates
             </p>
           </div>
-          <Link to="/">
-            <Button className="gap-2 whitespace-nowrap">
+          <Button asChild className="gap-2 whitespace-nowrap">
+            <Link to="/">
               <span>+</span>
               Add Repository
-            </Button>
-          </Link>
+            </Link>
+          </Button>
         </div>
 
         {error && (
@@ -249,6 +267,12 @@ export function DashboardPage() {
           </Card>
         </div>
 
+        {repositories.length >= MAX_LISTED && (
+          <p className="text-sm text-amber-700">
+            Showing the first {MAX_LISTED} repositories; more may exist.
+          </p>
+        )}
+
         {/* Repository List */}
         {repositories.length === 0 ? (
           <Card>
@@ -300,17 +324,17 @@ export function DashboardPage() {
                     <div className="flex flex-wrap items-center gap-3">
                       <StatusBadge status={repo.status} />
                       <div className="flex items-center gap-2">
-                        <Link to={`/repository/${repo.id}`}>
-                          <Button variant="outline" size="sm" className="whitespace-nowrap">
-                            View Details
-                          </Button>
-                        </Link>
+                        <Button asChild variant="outline" size="sm" className="whitespace-nowrap">
+                          <Link to={`/repository/${repo.id}`}>View Details</Link>
+                        </Button>
                         <Button
                           variant="outline"
                           size="sm"
                           onClick={() => handleDeleteClick(repo)}
+                          // The server refuses (409) while a run holds the repository
+                          disabled={isActiveStatus(repo.status)}
                           className="text-red-600 hover:text-red-700 hover:bg-red-50"
-                          title="Delete repository"
+                          title={isActiveStatus(repo.status) ? "Can't delete while processing" : "Delete repository"}
                           aria-label={`Delete ${repo.name}`}
                         >
                           <span className="text-sm">🗑️</span>
@@ -373,16 +397,17 @@ export function DashboardPage() {
                       />
                       <div className="flex items-center justify-between text-xs text-muted-foreground mt-1">
                         <span>
-                          {repo.processed_files} / {repo.total_files} files
-                          processed
+                          {progressStage(repo)} {repo.processed_files} / {repo.total_files} files
                         </span>
-                        <span className="animate-pulse">🔄 Live updates</span>
+                        {connectionStatus === "connected" && (
+                          <span className="animate-pulse">🔄 Live updates</span>
+                        )}
                       </div>
                     </div>
                   )}
 
                   {/* Indeterminate progress for starting repositories */}
-                  {repo.status === "processing" &&
+                  {isActiveStatus(repo.status) &&
                     repo.processed_files === 0 && (
                       <div className="mt-4">
                         <AnimatedProgress
@@ -392,6 +417,7 @@ export function DashboardPage() {
                           color="blue"
                           size="md"
                         />
+                        <p className="text-xs text-muted-foreground mt-1">{progressStage(repo)}</p>
                       </div>
                     )}
 

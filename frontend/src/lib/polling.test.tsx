@@ -2,8 +2,20 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, renderHook } from "@testing-library/react";
 import { QueryClient, QueryClientProvider, useQuery } from "@tanstack/react-query";
 import type { ReactNode } from "react";
-import { POLL_INTERVAL_MS, pollWhileActive, pollWhileAnyActive } from "./polling";
+import { POLL_INTERVAL_MS, pollWhileActive, pollWhileAnyActive, progressStage } from "./polling";
 import type { Repository } from "@/types/repository";
+
+describe("progressStage", () => {
+  it("names the stage from the counts the backend reports", () => {
+    const at = (status: string, processed_files: number, total_files: number) =>
+      progressStage({ status, processed_files, total_files });
+    expect(at("pending", 0, 0)).toBe("Queued");
+    // A reprocess keeps the previous total until its first batch lands
+    expect(at("processing", 0, 120)).toBe("Fetching files…");
+    expect(at("processing", 200, 500)).toBe("Parsing and storing files…");
+    expect(at("processing", 500, 500)).toBe("Indexing in Algolia…");
+  });
+});
 
 describe("polling helpers", () => {
   it("polls for pending/processing only", () => {

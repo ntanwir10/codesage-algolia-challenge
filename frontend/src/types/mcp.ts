@@ -14,17 +14,6 @@ export interface MCPToolCallResponse<T = unknown> {
   error: string | null;
 }
 
-interface MCPTool {
-  name: string;
-  description: string;
-  inputSchema: Record<string, unknown>;
-}
-
-export interface MCPToolsResponse {
-  tools: MCPTool[];
-  count: number;
-}
-
 export type EntityType = "function" | "class" | "import" | "doc_section" | "terraform_block";
 
 /** The `result` payload of get_file: at most 400 lines per call. */

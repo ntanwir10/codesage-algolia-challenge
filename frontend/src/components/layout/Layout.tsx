@@ -49,6 +49,7 @@ export function Layout({ children }: LayoutProps) {
                   <Link
                     key={item.name}
                     to={item.href}
+                    aria-current={item.current ? "page" : undefined}
                     className={`px-3 py-2 rounded-md text-sm font-medium transition-colors ${
                       item.current
                         ? "bg-primary text-primary-foreground"

@@ -162,10 +162,24 @@ async def update_repository(
             ),
         )
 
+    # The index belongs to the old branch: rebuild it from the new one. A pending repository's
+    # first run reads the new branch anyway
+    reindex = (
+        "branch" in update_data
+        and update_data["branch"] != repository.branch
+        and repository.status in ("completed", "failed")
+    )
+    if reindex:
+        require_algolia()
+
     # Update repository fields
     for key, value in update_data.items():
         setattr(repository, key, value)
 
+    if reindex:
+        start_processing(repository_id, force_reprocess=True)
+        repository.status = "processing"
+        repository.error_message = None
     db.commit()
     db.refresh(repository)
 

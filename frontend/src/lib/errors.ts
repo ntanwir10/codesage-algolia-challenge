@@ -69,11 +69,14 @@ export function describeError(error: unknown): DescribedError {
     let message: string;
     switch (status) {
       case 401:
-        message =
-          "Invalid or missing API key. Set VITE_CODESAGE_API_KEY to the key the server expects.";
+        message = "The server rejected the API key: this app's key doesn't match the server's.";
         break;
       case 429:
-        message = "Too many requests. Please wait a moment and try again.";
+        // The server's own text says how long to wait
+        message =
+          typeof data?.detail === "string"
+            ? data.detail
+            : "Too many requests. Please wait a moment and try again.";
         break;
       case 500:
         message = `Server error${requestId ? ` (request ${requestId})` : ""}. Please try again later.`;

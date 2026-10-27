@@ -84,7 +84,7 @@ describe("RepositoryPage completion card", () => {
 
   it("shows progress from the repository the WebSocket keeps patched", async () => {
     renderPage({ ...repository, status: "processing", processed_files: 200, total_files: 500 });
-    expect(await screen.findByText("200 / 500 files")).toBeInTheDocument();
+    expect(await screen.findByText("Parsing and storing files… 200 / 500 files")).toBeInTheDocument();
   });
 
   it("says View source for a non-GitHub host", async () => {

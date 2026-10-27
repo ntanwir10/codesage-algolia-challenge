@@ -19,10 +19,13 @@ import {
 function parseRepo(input: string): string | null {
   const path = input
     .trim()
+    .replace(/^git@github\.com:/i, "")
     .replace(/^(https?:\/\/)?(www\.)?(github\.com\/)?/i, "")
     .replace(/\/+$/, "")
-    .replace(/\.git$/, "");
-  return /^[\w.-]+\/[\w.-]+$/.test(path) ? path : null;
+    // Only the repository's clone suffix: a branch in /tree/ may itself end in ".git"
+    .replace(/^([\w.-]+\/[\w.-]+?)\.git(?=\/tree\/|$)/, "$1");
+  // owner/repo, optionally with /tree/<branch>: the server reads the branch from the URL
+  return /^[\w.-]+\/[\w.-]+(\/tree\/[^\s]+)?$/.test(path) ? path : null;
 }
 
 // Validation schema: submits the normalised full URL.
@@ -93,7 +96,17 @@ export function GitHubForm({ onSubmit, isLoading = false }: GitHubFormProps) {
         const id = error.response.data?.repository_id;
         if (typeof id === "number") setExistingId(id);
       }
-      setError("root.server", { message: describeError(error).message });
+      const { message, status } = describeError(error);
+      // A missing or invalid branch belongs under the Branch field, not the URL: a 422 on the
+      // branch field, or the server's branch messages. Never a 409, whose text names the repository
+      const detail = isAxiosError(error) ? error.response?.data?.detail : undefined;
+      const branchField =
+        Array.isArray(detail) &&
+        detail.some((d: { loc?: unknown }) => Array.isArray(d?.loc) && d.loc.includes("branch"));
+      const branchError =
+        status !== 409 && (branchField || /^Branch '|invalid branch|branch name/i.test(message));
+      if (branchError) setError("branch", { type: "server", message });
+      else setError("root.server", { message });
     }
   };
 
@@ -176,10 +189,12 @@ export function GitHubForm({ onSubmit, isLoading = false }: GitHubFormProps) {
               id="branch"
               placeholder="Default branch (leave empty)"
               {...register("branch")}
+              aria-invalid={!!errors.branch}
+              aria-describedby={errors.branch ? "branch-error" : undefined}
               className={errors.branch ? "border-destructive" : ""}
             />
             {errors.branch && (
-              <p className="text-sm text-destructive">
+              <p id="branch-error" role="alert" className="text-sm text-destructive">
                 {errors.branch.message}
               </p>
             )}

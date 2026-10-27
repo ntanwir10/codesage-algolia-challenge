@@ -45,6 +45,7 @@ REGEX_CALL_TIMEOUT = 10.0  # the per-file budget alone allows files x 1s per cal
 MAX_SKIPPED_LISTED = 50
 MAX_RESOURCE_FILES = 5000
 MAX_ID_DIGITS = 19  # int64
+MAX_SEARCH_HITS = 1000  # Algolia's paginationLimitedTo default
 GITHUB_PREFIX = "https://github.com/"
 
 REPOSITORIES_URI = "codesage://repositories"
@@ -183,6 +184,23 @@ async def search_code(db: Session, args: schemas.SearchCodeArgs) -> dict:
     if args.repository is not None:
         repository = resolve_repository(db, args.repository)
         _require_ready(repository)
+
+    # Algolia drops punctuation, so a query of nothing else would match every record
+    if not any(c.isalnum() for c in args.query):
+        return {
+            "query": args.query,
+            "repository": repository.name if repository else None,
+            "total_hits": 0,
+            "page": args.page,
+            "pages": 0,
+            "results": [],
+        }
+    # Algolia pages through the first 1000 hits only; past that it reports none at all
+    if args.page * args.limit >= MAX_SEARCH_HITS:
+        raise ToolError(
+            f"Search returns only the first {MAX_SEARCH_HITS} hits; narrow the query, "
+            "or use list_definitions to list everything"
+        )
 
     service = algolia_service.AlgoliaService()
     if not service.is_available():
