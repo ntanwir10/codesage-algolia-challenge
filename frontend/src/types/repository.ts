@@ -11,6 +11,8 @@ export interface Repository {
   url?: string | null;
   /** null means the repository's default branch. */
   branch: string | null;
+  /** The commit the index was built from; links point at it. */
+  commit_sha?: string | null;
   language?: string | null;
   framework?: string | null;
   status: RepositoryStatus;
@@ -58,6 +60,8 @@ export interface RepositoryStatsData {
   total_entities: number;
   entities_by_type: Record<string, number>;
   files_by_language: Record<string, number>;
+  /** Languages with indexed entities: the ones search can filter on. */
+  entities_by_language?: Record<string, number>;
   language?: string | null;
   framework?: string | null;
 }

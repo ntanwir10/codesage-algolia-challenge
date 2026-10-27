@@ -69,12 +69,14 @@ async def test_background_job_processes_with_its_own_session(
 ):
     repo = make_repository(db_session, status="pending")
     github.files = [github_file("pkg/a.py", MODULE)]
+    github.commit_sha = "c0ffee"
 
     await start_processing(repo.id)
 
     db_session.refresh(repo)
     assert repo.status == "completed"
     assert repo.processed_at is not None
+    assert repo.commit_sha == "c0ffee"  # permalinks point at the indexed commit
     assert len(algolia_index.records) == 2
 
 
@@ -325,6 +327,7 @@ async def test_statistics_count_stored_entities(db_session, github, algolia_inde
     assert stats["total_entities"] == 3
     assert stats["entities_by_type"] == {"function": 2, "doc_section": 1}
     assert stats["files_by_language"] == {"python": 1, "markdown": 1}
+    assert stats["entities_by_language"] == {"python": 2, "markdown": 1}
     # Markdown doesn't count as the repository's programming language
     assert stats["language"] == "python"
 

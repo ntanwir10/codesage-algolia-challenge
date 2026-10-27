@@ -28,6 +28,7 @@ async def github_api():
     """Fake API + raw host. Records requests; per-route failures are queued"""
     state = {
         "default_branch": "main",
+        "shas": {},  # branch -> the commit its branches/ lookup reports (default: the name)
         "trees": {},  # branch -> list of tree entries (or full response dict)
         "listings": {},  # contents path -> list
         "raw": {},  # path -> bytes
@@ -85,8 +86,17 @@ async def github_api():
         finally:
             state["in_flight"] -= 1
 
+    async def branch_info(request):
+        # A branch's commit; by default its own name, so trees and raw stay keyed by branch
+        state["requests"].append(request.path_qs)
+        branch = request.match_info["branch"]
+        if (err := failure("branch")) is not None:
+            return err
+        return web.json_response({"commit": {"sha": state["shas"].get(branch, branch)}})
+
     app = web.Application()
     app.router.add_get("/repos/octo/demo", repo_info)
+    app.router.add_get("/repos/octo/demo/branches/{branch:.*}", branch_info)
     app.router.add_get("/repos/octo/demo/git/trees/{branch}", tree)
     app.router.add_get("/repos/octo/demo/contents/{path:.*}", contents)
     app.router.add_get("/raw/octo/demo/{branch}/{path:.*}", raw)
@@ -454,7 +464,7 @@ async def test_rate_limit_that_persists_raises_after_one_retry(github_api):
     assert len(tree_calls) == 2
 
 
-@pytest.mark.parametrize("route", ["repo", "tree"])
+@pytest.mark.parametrize("route", ["repo", "branch", "tree"])
 @pytest.mark.parametrize(
     "status, headers, phrase",
     [
@@ -468,19 +478,33 @@ async def test_api_errors_raise_instead_of_returning_no_files(
     github_api, route, status, headers, phrase
 ):
     github_api["always_fail"][route] = (status, headers)
-    branch = "main" if route == "tree" else None
+    branch = None if route == "repo" else "main"
 
     with pytest.raises(GitHubAPIError) as excinfo:
         await service_for(github_api).get_repository_files(REPO_URL, branch)
 
-    # A missing tree on a repository that exists names the branch instead
-    missing_branch = (route, status) == ("tree", 404)
+    # A missing branch or tree on a repository that exists names the branch instead
+    missing_branch = route != "repo" and status == 404
     assert excinfo.value.status == status
     assert ("Branch 'main' not found" if missing_branch else phrase) in str(excinfo.value)
     assert "octo/demo" in str(excinfo.value)
-    # Non-retryable errors are not repeated (a missing tree checks the repository once)
-    expected_calls = 2 if missing_branch else 1
+    # Non-retryable errors are not repeated: one call per step reached (repo, or branch then
+    # tree), plus one repository check when the branch turns out to be missing
+    expected_calls = {"repo": 1, "branch": 1, "tree": 2}[route] + missing_branch
     assert len([r for r in github_api["requests"] if r.startswith("/repos")]) == expected_calls
+
+
+async def test_listing_and_downloads_read_the_branchs_commit(github_api):
+    # A push mid-run can't mix two commits: the tree and every file come from one SHA
+    github_api["shas"]["main"] = "c0ffee"
+    github_api["trees"]["c0ffee"] = [blob("a.py", 5)]
+    github_api["raw"] = {"c0ffee:a.py": b"x = 1\n"}
+    service = service_for(github_api)
+
+    files = await service.get_repository_files(REPO_URL, "main")
+
+    assert [f.path for f in files] == ["a.py"] and service.commit_sha == "c0ffee"
+    assert "/raw/octo/demo/c0ffee/a.py" in github_api["requests"]
 
 
 async def test_error_in_a_subdirectory_of_the_fallback_walk_is_not_swallowed(

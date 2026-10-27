@@ -11,6 +11,7 @@ import { Layout } from "@/components/layout/Layout";
 import { HomePage } from "@/pages/HomePage";
 import { DashboardPage } from "@/pages/DashboardPage";
 import { RepositoryPage } from "@/pages/RepositoryPage";
+import { FileViewerPage } from "@/pages/FileViewerPage";
 import { ToastProvider } from "@/components/ui/toast";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { EmptyState } from "@/components/ui/empty-state";
@@ -24,6 +25,7 @@ export function AppRoutes() {
         <Route path="/" element={<HomePage />} />
         <Route path="/dashboard" element={<DashboardPage />} />
         <Route path="/repository/:id" element={<RepositoryPage />} />
+        <Route path="/repository/:id/file" element={<FileViewerPage />} />
         <Route
           path="*"
           element={

@@ -123,6 +123,16 @@ async def test_search_permalink_and_snippet(db_session, repo, algolia_index):
     assert seen[-1]["hitsPerPage"] == 10
 
 
+async def test_permalinks_use_the_indexed_commit(db_session, repo, algolia_index):
+    repo.commit_sha = "c0ffee"
+    db_session.commit()
+    algolia_index.search = lambda q, params: {"hits": [{**HIT, "repository_id": repo.id}], "nbHits": 1}
+
+    result = await call_tool(db_session, "search_code", {"query": "create", "repository": "pmndrs/zustand"})
+
+    assert result["results"][0]["url"] == "https://github.com/pmndrs/zustand/blob/c0ffee/src/vanilla.ts#L5-L20"
+
+
 async def test_search_query_is_capped_in_bytes(db_session, algolia_index):
     # Algolia refuses a query over 512 bytes; a 4-byte emoji reaches that at 129 characters
     with pytest.raises(ValidationError, match="512 bytes"):

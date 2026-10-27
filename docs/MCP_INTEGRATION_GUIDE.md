@@ -151,7 +151,7 @@ Full-text search over functions, classes (including interfaces, type aliases and
 | `page` | integer >= 0 | 0 | Zero-based |
 
 - **Plain-words queries.** If no result matches every word, Algolia drops the words that miss, ignores stop words and plurals, and returns the best partial matches. A question works as a query.
-- **Source links.** GitHub gets `#L<start>-L<end>`, GitLab `/-/blob/...#L<start>-<end>` and Bitbucket `/src/...#lines-<start>:<end>`. GitLab links go to gitlab.com and to any host whose name starts with `gitlab.`; Bitbucket links only to bitbucket.org. A repository on any other host has no link.
+- **Source links.** Links point at the commit that was indexed (`list_repositories` reports it as `commit_sha`), so their line numbers stay right after the branch moves on. A repository indexed before commits were recorded links to its branch until it is reprocessed. GitHub gets `#L<start>-L<end>`, GitLab `/-/blob/...#L<start>-<end>` and Bitbucket `/src/...#lines-<start>:<end>`. GitLab links go to gitlab.com and to any host whose name starts with `gitlab.`; Bitbucket links only to bitbucket.org. A repository on any other host has no link.
 - **Truncation.** Snippets are cut at 600 characters, and signatures and descriptions at 300.
 - **Errors.** A repository that is `failed`, `pending` or `processing` is refused, as for every tool. If Algolia isn't configured, the error says `ALGOLIA_APP_ID` and `ALGOLIA_ADMIN_API_KEY` are missing. Any other Algolia failure becomes the generic "Search is unavailable; try again later." The detail is logged on the backend only, because it can name the Algolia host or app ID.
 

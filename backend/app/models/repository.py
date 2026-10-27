@@ -15,6 +15,7 @@ class Repository(Base):
     description = Column(Text, nullable=True)
     url = Column(String(500), nullable=True, unique=True)
     branch = Column(String(100), nullable=True)  # None: the repository's default branch
+    commit_sha = Column(String(64), nullable=True)  # the commit the index was built from
     language = Column(String(50), nullable=True, index=True)
     framework = Column(String(100), nullable=True, index=True)
 

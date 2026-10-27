@@ -25,7 +25,37 @@ export interface MCPToolsResponse {
   count: number;
 }
 
-type EntityType = "function" | "class" | "import" | "doc_section" | "terraform_block";
+export type EntityType = "function" | "class" | "import" | "doc_section" | "terraform_block";
+
+/** The `result` payload of get_file: at most 400 lines per call. */
+export interface FileContent {
+  repository: string;
+  path: string;
+  language: string | null;
+  total_lines: number;
+  start_line: number;
+  end_line: number;
+  truncated: boolean;
+  /** One line per row, each prefixed with its right-aligned number and "| ". */
+  content: string;
+}
+
+export interface Definition {
+  entity_type: string;
+  entity_name: string;
+  file_path: string;
+  line_start: number | null;
+  line_end: number | null;
+  signature: string | null;
+  description: string | null;
+}
+
+/** The `result` payload of list_definitions. */
+export interface DefinitionsResponse {
+  repository: string;
+  total: number;
+  definitions: Definition[];
+}
 
 /** Arguments accepted by the search_code tool (unknown keys are rejected: 422). */
 export interface SearchQuery {

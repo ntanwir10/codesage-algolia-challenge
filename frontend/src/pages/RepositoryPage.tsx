@@ -9,6 +9,7 @@ import { StatusBadge } from "@/components/ui/status-badge";
 import { EmptyState } from "@/components/ui/empty-state";
 import { RepositoryStats } from "@/components/features/repository-stats";
 import { SearchInterface } from "@/components/features/search-interface";
+import { DefinitionsBrowser } from "@/components/features/definitions-browser";
 import { AnimatedProgress } from "@/components/ui/animated-progress";
 import { DeleteConfirmationDialog } from "@/components/ui/delete-confirmation-dialog";
 import { useRealtimeStatus } from "@/hooks/useRealtimeStatus";
@@ -56,6 +57,17 @@ export function RepositoryPage() {
     enabled: !!repositoryId,
     refetchInterval: pollUnlessGone,
   });
+
+  // Shares the stats card's query; its languages with entities feed the search filter
+  const { data: stats } = useQuery({
+    queryKey: ["repository-stats", repositoryId],
+    queryFn: () => api.getRepositoryStats(repositoryId),
+    enabled: !!repositoryId,
+  });
+  const languages = useMemo(
+    () => Object.keys(stats?.entities_by_language ?? {}).sort(),
+    [stats]
+  );
 
   // Live updates: subscribe while the repository is being processed.
   const repositoryIds = useMemo(
@@ -245,6 +257,11 @@ export function RepositoryPage() {
                 <span className="text-sm text-muted-foreground">
                   Created {new Date(repository.created_at).toLocaleDateString()}
                 </span>
+                {repository.commit_sha && (
+                  <span className="text-sm text-muted-foreground" title={repository.commit_sha}>
+                    Indexed at <code>{repository.commit_sha.slice(0, 7)}</code>
+                  </span>
+                )}
               </div>
             </div>
           </div>
@@ -405,7 +422,10 @@ export function RepositoryPage() {
           repositoryId={repositoryId}
           canSearch={!!canSearch}
           status={repository.status}
+          languages={languages}
         />
+
+        {canSearch && <DefinitionsBrowser repositoryId={repositoryId} />}
 
         {/* Quick Actions */}
         <div className="flex flex-wrap gap-4">

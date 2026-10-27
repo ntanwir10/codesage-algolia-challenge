@@ -1,5 +1,6 @@
 import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { MemoryRouter } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { api } from "@/services/api";
 import { MCPToolError } from "@/lib/errors";
@@ -7,6 +8,9 @@ import type { SearchHit } from "@/types/mcp";
 import { SearchInterface } from "./search-interface";
 
 const queryInput = () => screen.getByRole("combobox", { name: /search query/i });
+
+// Results link into the file viewer, so they need a router
+const renderSearch = (ui: React.ReactElement) => render(ui, { wrapper: MemoryRouter });
 
 function mockApi() {
   const suggestions = vi
@@ -28,14 +32,14 @@ describe("SearchInterface suggestions", () => {
 
   it("opens after the debounce", async () => {
     mockApi();
-    render(<SearchInterface repositoryId={2} canSearch />);
+    renderSearch(<SearchInterface repositoryId={2} canSearch />);
     await userEvent.type(queryInput(), "deb");
     expect(await screen.findByRole("listbox")).toBeInTheDocument();
   });
 
   it("stays closed when Enter is pressed before the debounce fires", async () => {
     const suggestions = mockApi();
-    render(<SearchInterface repositoryId={2} canSearch />);
+    renderSearch(<SearchInterface repositoryId={2} canSearch />);
     await userEvent.type(queryInput(), "deb{enter}");
 
     // The pending timer still fires; its response must not reopen the dropdown
@@ -51,7 +55,7 @@ describe("SearchInterface suggestions from the keyboard", () => {
   it("moves with the arrows, searches the pick on Enter and closes on Escape", async () => {
     mockApi();
     vi.mocked(api.getSearchSuggestions).mockResolvedValue(["debounce", "debug"]);
-    render(<SearchInterface repositoryId={2} canSearch />);
+    renderSearch(<SearchInterface repositoryId={2} canSearch />);
     await userEvent.type(queryInput(), "deb");
     await screen.findByRole("listbox");
 
@@ -81,19 +85,46 @@ describe("SearchInterface states", () => {
 
   it("explains a failed repository", () => {
     mockApi();
-    render(<SearchInterface repositoryId={2} canSearch={false} status="failed" />);
+    renderSearch(<SearchInterface repositoryId={2} canSearch={false} status="failed" />);
     expect(screen.getByText(/Indexing failed, so search isn't available/)).toBeInTheDocument();
   });
 
   it("disables Search for an empty query", async () => {
     mockApi();
-    render(<SearchInterface repositoryId={2} canSearch />);
+    renderSearch(<SearchInterface repositoryId={2} canSearch />);
     const button = screen.getByRole("button", { name: "Search" });
     expect(button).toBeDisabled();
     await userEvent.type(queryInput(), "  ");
     expect(button).toBeDisabled();
     await userEvent.type(queryInput(), "x");
     expect(button).toBeEnabled();
+  });
+
+  it("re-runs the search when a filter changes, and links hits to the viewer", async () => {
+    mockApi();
+    const hit = { entity_name: "foo", file_path: "src/a.py", line_start: 3, line_end: 9 } as SearchHit;
+    const search = vi.spyOn(api, "searchCode").mockResolvedValue({
+      query: "foo",
+      repository: "2",
+      total_hits: 1,
+      page: 0,
+      pages: 1,
+      results: [hit],
+    });
+    renderSearch(<SearchInterface repositoryId={2} canSearch languages={["python", "typescript"]} />);
+    await userEvent.type(queryInput(), "foo{enter}");
+
+    expect(await screen.findByRole("link", { name: "foo" })).toHaveAttribute(
+      "href",
+      "/repository/2/file?path=src%2Fa.py&line=3&end=9"
+    );
+    await userEvent.selectOptions(screen.getByRole("combobox", { name: "Filter by language" }), "python");
+    await userEvent.selectOptions(screen.getByRole("combobox", { name: "Filter by kind" }), "class");
+    await waitFor(() =>
+      expect(search).toHaveBeenLastCalledWith(
+        expect.objectContaining({ query: "foo", language: "python", entity_type: "class", page: 0 })
+      )
+    );
   });
 
   it("keeps results and pager when a page change fails", async () => {
@@ -114,7 +145,7 @@ describe("SearchInterface states", () => {
       results: [hit],
     });
     search.mockRejectedValueOnce(new MCPToolError("search_code", "Still indexing"));
-    render(<SearchInterface repositoryId={2} canSearch />);
+    renderSearch(<SearchInterface repositoryId={2} canSearch />);
     await userEvent.type(queryInput(), "foo{enter}");
     await userEvent.click(await screen.findByRole("button", { name: "Next" }));
     expect(await screen.findByText("Still indexing")).toBeInTheDocument();

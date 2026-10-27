@@ -110,6 +110,7 @@ class RepositoryResponse(RepositoryBase):
     model_config = ConfigDict(from_attributes=True)
 
     id: int
+    commit_sha: str | None = Field(None, description="The commit the index was built from")
     status: RepositoryStatus = Field(..., description="Processing status")
     error_message: str | None = Field(
         None, description="Why the last run failed, or what a completed run left out"

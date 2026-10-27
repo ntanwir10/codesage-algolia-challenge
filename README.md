@@ -261,10 +261,11 @@ Restart Claude Desktop and keep the backend running. Then ask Claude something l
 | Page | What you can do |
 | --- | --- |
 | Home (`/`) | Add a GitHub repository. The field has a `github.com/` prefix: type `owner/repo` or paste a GitHub URL, and it is trimmed to `owner/repo`. The branch and a description have their own optional fields; the description shows on the repository page. |
-| Repository (`/repository/:id`) | Watch indexing progress. Afterwards, search with suggestions and open results at the exact line. The source link says "View on GitHub", or "View source" for a repository on another host. Reprocess or delete the repository. |
+| Repository (`/repository/:id`) | Watch indexing progress. Afterwards, search with suggestions (arrow keys and Enter work), filter by language and kind, and browse every definition by name and kind. A result opens in the file viewer; "source ↗" opens it on the host at the indexed commit. The header shows that commit ("Indexed at abc1234"). Reprocess or delete the repository. |
+| File viewer (`/repository/:id/file?path=…&line=…&end=…`) | Read an indexed file 400 lines at a time, with the target lines highlighted and the file's definitions listed beside it. |
 | Dashboard (`/dashboard`) | All repositories with their status and progress. Delete a repository from here. |
 
-On the repository page, a finished repository shows a green card. It shows amber if it was only partially indexed and red if it failed; both say why. The Dashboard doesn't make this distinction: a partially indexed repository there has a plain "Completed" badge, and only a failed one shows its reason.
+On the repository page, a finished repository shows a green card. It shows amber if it was only partially indexed and red if it failed; both say why. The Dashboard shows a partially indexed repository's note in amber, and a failed one's reason in red.
 
 An unknown path shows "Page not found". A repository that doesn't exist says so; any other load error shows the message with "Try again". A failed repository says why on its page and on its dashboard card.
 

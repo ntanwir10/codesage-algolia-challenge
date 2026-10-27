@@ -191,6 +191,8 @@ def fake_clone(monkeypatch, populate, code=0, stderr=""):
     seen = {}
 
     async def run(args, timeout):
+        if "rev-parse" in args:
+            return 0, "c0ffee\n", ""
         seen["args"], seen["timeout"] = args, timeout
         target = Path(args[-1])
         seen["target"] = target
@@ -261,6 +263,7 @@ async def test_the_source_reports_what_it_skipped_over_the_limit(monkeypatch):
     # then drop out, and src/app.py and README.md were over the cap
     assert [f.path for f in files] == ["infra/main.tf"]
     assert source.skipped_files == 2
+    assert source.commit_sha == "c0ffee"  # read from the clone's HEAD
 
 
 @pytest.mark.parametrize(

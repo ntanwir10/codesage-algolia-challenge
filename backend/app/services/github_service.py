@@ -289,6 +289,7 @@ class FileSelector:
         self.max_total_bytes = 100 * 1024 * 1024  # a run holds every file in memory at once
         self.skipped_files = 0  # Code files the last listing dropped over max_files / max_total_bytes
         self.listing_truncated = False  # The last listing stopped at MAX_WALK_REQUESTS directories
+        self.commit_sha: str | None = None  # The commit the last listing read
 
     def _select_candidates(self, entries: list[tuple[str, int]]) -> list[tuple[str, int]]:
         """Apply deny-list, extension and size filters, then sort and cap"""
@@ -537,9 +538,11 @@ class GitHubService(FileSelector):
                 logger.info("Fetching repository files", owner=owner, repo=repo, branch=branch)
 
                 self._walk_requests, self.listing_truncated = 0, False
-                entries = await self._list_entries(session, owner, repo, branch)
+                # One commit for the listing and every download: a push mid-run can't mix two
+                self.commit_sha = await self._resolve_commit(session, owner, repo, branch)
+                entries = await self._list_entries(session, owner, repo, self.commit_sha)
                 candidates = self._select_candidates(entries)
-                files = await self._download_all(session, owner, repo, branch, candidates)
+                files = await self._download_all(session, owner, repo, self.commit_sha, candidates)
             finally:
                 await session.close()
 
@@ -555,6 +558,27 @@ class GitHubService(FileSelector):
             # The caller records the failure on the repository; just trace it here
             logger.debug("Failed to get repository files", repo_url=repo_url, error=str(e))
             raise
+
+    async def _resolve_commit(
+        self, session: aiohttp.ClientSession, owner: str, repo: str, branch: str
+    ) -> str:
+        """The commit `branch` points at"""
+        try:
+            info = await self._make_request_with_retries(
+                session, f"{self.base_url}/repos/{owner}/{repo}/branches/{quote_path(branch)}", owner, repo
+            )
+        except GitHubAPIError as e:
+            if e.status != 404:
+                raise
+            # Say which is missing: a missing repository raises its own 404 from this lookup
+            await self._make_request_with_retries(
+                session, f"{self.base_url}/repos/{owner}/{repo}", owner, repo
+            )
+            raise GitHubAPIError(404, f"Branch '{branch}' not found in {owner}/{repo}") from e
+        sha = (info.get("commit") or {}).get("sha") if isinstance(info, dict) else None
+        if not isinstance(sha, str) or not sha:
+            raise GitHubAPIError(502, f"GitHub did not report a commit for {owner}/{repo} branch '{branch}'")
+        return sha
 
     async def _list_entries(
         self, session: aiohttp.ClientSession, owner: str, repo: str, branch: str

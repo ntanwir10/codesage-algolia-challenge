@@ -127,6 +127,7 @@ def _repository_summary(repository: Repository, entity_count: int) -> dict[str, 
         "name": repository.name,
         "url": repository.url,
         "branch": repository.branch,
+        "commit_sha": repository.commit_sha,
         "status": repository.status,
         "total_files": repository.total_files,
         "total_entities": entity_count,
@@ -162,7 +163,9 @@ def _permalink(repository: Repository | None, hit: dict) -> str | None:
         return None
     start = hit.get("line_start")
     end = hit.get("line_end") or start
-    ref, file = quote_path(repository.branch or "HEAD"), quote_path(file_path)
+    # The indexed commit: line numbers stay right after the branch moves on
+    ref = quote_path(repository.commit_sha or repository.branch or "HEAD")
+    file = quote_path(file_path)
     if host == "github.com":
         url = f"{GITHUB_PREFIX}{path}/blob/{ref}/{file}"
         return url + f"#L{start}-L{end}" if start else url
@@ -325,6 +328,7 @@ async def analyze_repository(db: Session, args: schemas.AnalyzeRepositoryArgs) -
     repository = resolve_repository(db, args.repository)
     _require_ready(repository)
     stats = await RepositoryService(db).get_repository_statistics(repository)
+    by_language = stats.pop("entities_by_language")  # reported below as definitions_by_language
 
     files = (
         db.query(CodeFile.file_path, CodeFile.line_count)
@@ -333,14 +337,6 @@ async def analyze_repository(db: Session, args: schemas.AnalyzeRepositoryArgs) -
     )
     directories = Counter(path.split("/", 1)[0] if "/" in path else "(root)" for path, _ in files)
     largest = sorted(files, key=lambda row: row[1] or 0, reverse=True)[:10]
-    by_language = (
-        db.query(CodeFile.language, func.count())
-        .select_from(CodeEntity)
-        .join(CodeFile, CodeEntity.file_id == CodeFile.id)
-        .filter(CodeEntity.repository_id == repository.id)
-        .group_by(CodeFile.language)
-        .all()
-    )
     return {
         "repository": repository.name,
         **stats,
@@ -348,7 +344,7 @@ async def analyze_repository(db: Session, args: schemas.AnalyzeRepositoryArgs) -
             {"directory": name, "files": count} for name, count in directories.most_common(10)
         ],
         "largest_files": [{"file_path": path, "line_count": lines} for path, lines in largest],
-        "definitions_by_language": {language or "unknown": count for language, count in by_language},
+        "definitions_by_language": {language or "unknown": count for language, count in by_language.items()},
     }
 
 

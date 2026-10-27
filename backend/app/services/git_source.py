@@ -204,6 +204,8 @@ class GitSource(FileSelector):
                         404, f"{name} was not found or is private; only public repositories are supported on {host}"
                     )
                 raise GitHubAPIError(502, f"Could not clone {name} from {host}")
+            code, out, _ = await _git(["-C", target, "rev-parse", "HEAD"], CHECK_TIMEOUT)
+            self.commit_sha = out.strip() if code == 0 and out.strip() else None
             files = await asyncio.to_thread(self._read_tree, Path(target))
         logger.info("Repository files retrieved", host=host, path=path, downloaded=len(files))
         return files
