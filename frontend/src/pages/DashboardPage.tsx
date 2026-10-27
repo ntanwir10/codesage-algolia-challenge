@@ -55,7 +55,10 @@ export function DashboardPage() {
     staleTime: 30_000,
   });
 
-  const repositories = useMemo(() => loaded ?? [], [loaded]);
+  // Newest first: ids grow with each repository added
+  // shortcut: sorts the first MAX_LISTED the server returns (oldest first), so past 500 repositories
+  // the newest can be missing; have the list endpoint order newest first if that ever happens
+  const repositories = useMemo(() => [...(loaded ?? [])].sort((a, b) => b.id - a.id), [loaded]);
 
   // Live updates for repositories still being processed.
   // Completion toasts are handled globally in Layout.

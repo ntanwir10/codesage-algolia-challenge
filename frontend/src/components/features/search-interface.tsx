@@ -7,7 +7,7 @@ import { Input } from "@/components/ui/input";
 import { LoadingSpinner } from "@/components/ui/loading-spinner";
 import { describeError, type DescribedError } from "@/lib/errors";
 import { ENTITY_TYPES, fileViewerPath, isHttpUrl } from "@/lib/utils";
-import { Link } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import type { EntityType, SearchHit } from "@/types/mcp";
 import type { RepositoryStatus } from "@/types/repository";
 
@@ -49,6 +49,7 @@ export function SearchInterface({
   const [totalHits, setTotalHits] = useState(0);
 
   const searchInputRef = useRef<HTMLInputElement>(null);
+  const [params, setParams] = useSearchParams();
   const blurTimer = useRef<ReturnType<typeof setTimeout> | undefined>(
     undefined
   );
@@ -117,6 +118,15 @@ export function SearchInterface({
       setPages(response.pages);
       setPage(response.page ?? targetPage);
       setActiveQuery(trimmed);
+      // Keep the query in the URL (replacing, not adding, a history entry) so reload and Back keep it
+      setParams(
+        (current) => {
+          const next = new URLSearchParams(current);
+          next.set("q", trimmed);
+          return next;
+        },
+        { replace: true }
+      );
       setHasSearched(true);
     } catch (error: unknown) {
       if (requestId !== searchRequestId.current) return;
@@ -132,6 +142,16 @@ export function SearchInterface({
       if (requestId === searchRequestId.current) setIsSearching(false);
     }
   };
+
+  // A query in the URL (a reload, or Back from the file viewer) runs once search is possible
+  useEffect(() => {
+    const query = params.get("q");
+    if (query && canSearch && !activeQuery) {
+      setSearchQuery(query);
+      void runSearch(query, 0);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- only when search becomes possible
+  }, [canSearch]);
 
   // A filter change re-runs the shown search from its first page
   useEffect(() => {
