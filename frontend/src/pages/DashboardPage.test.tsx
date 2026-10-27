@@ -57,6 +57,18 @@ describe("DashboardPage", () => {
     expect(await screen.findByText("Repository not found")).toBeInTheDocument();
   });
 
+  it("lists the newest repository first", async () => {
+    vi.spyOn(api, "getRepositories").mockResolvedValue([
+      repository,
+      { ...repository, id: 3, name: "octo/newest" },
+      { ...repository, id: 2, name: "octo/middle" },
+    ]);
+    renderPage();
+    await screen.findByText("octo/newest");
+    const names = screen.getAllByText(/^octo\/(newest|middle|demo)$/).map((el) => el.textContent);
+    expect(names).toEqual(["octo/newest", "octo/middle", "octo/demo"]);
+  });
+
   it("labels the source link by host", async () => {
     vi.spyOn(api, "getRepositories").mockResolvedValue([
       repository,

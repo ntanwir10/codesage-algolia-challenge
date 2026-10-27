@@ -1,6 +1,6 @@
 import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { MemoryRouter } from "react-router-dom";
+import { MemoryRouter, useLocation } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { api } from "@/services/api";
 import { MCPToolError } from "@/lib/errors";
@@ -125,6 +125,36 @@ describe("SearchInterface states", () => {
         expect.objectContaining({ query: "foo", language: "python", entity_type: "class", page: 0 })
       )
     );
+  });
+
+  it("runs the search named in the URL, and puts a new one there", async () => {
+    mockApi();
+    const search = vi.spyOn(api, "searchCode").mockResolvedValue({
+      query: "store",
+      repository: "2",
+      total_hits: 0,
+      page: 0,
+      pages: 0,
+      results: [],
+    });
+    let location = "";
+    function Where() {
+      location = useLocation().search;
+      return null;
+    }
+    render(
+      <MemoryRouter initialEntries={["/repository/2?q=store"]}>
+        <SearchInterface repositoryId={2} canSearch />
+        <Where />
+      </MemoryRouter>
+    );
+
+    await waitFor(() => expect(search).toHaveBeenCalledWith(expect.objectContaining({ query: "store" })));
+    expect(queryInput()).toHaveValue("store");
+
+    await userEvent.clear(queryInput());
+    await userEvent.type(queryInput(), "create{enter}");
+    await waitFor(() => expect(location).toBe("?q=create"));
   });
 
   it("keeps results and pager when a page change fails", async () => {
