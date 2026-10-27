@@ -51,6 +51,8 @@ async def test_initialize_succeeds():
         assert client.server_info.name == "codesage"
 
 
+# The SDK warns that ping is legacy-only; testing that legacy path is the point here
+@pytest.mark.filterwarnings("ignore:ping is removed")
 async def test_ping_legacy_handshake():
     # ping only exists in the initialize-handshake era, which is what Claude Desktop speaks
     async with make_client(Backend(), mode="legacy") as client:
@@ -278,7 +280,8 @@ async def test_stdio_subprocess_smoke():
         result = await client.call_tool("list_repositories", {})
         assert result.is_error
         assert "not reachable" in result.content[0].text
-        await client.send_ping()
+        # Still answering after the failed call
+        assert len((await client.list_tools()).tools) == 7
 
 
 async def test_proxy_401_blames_the_login_not_the_api_key():
