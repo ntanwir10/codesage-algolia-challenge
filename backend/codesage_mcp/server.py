@@ -198,8 +198,8 @@ class CodeSageBridge:
             )
         if status == 401 and not self.config.api_key:
             return (
-                "No API key is configured; set CODESAGE_API_KEY in the MCP server's env "
-                "in the Claude Desktop config."
+                "No API key is configured; set CODESAGE_API_KEY in the MCP server's env in "
+                "your MCP client's config (for Claude Desktop, run `make install-claude`)."
             )
         if status == 401:
             return "CodeSage backend rejected the API key (401); check CODESAGE_API_KEY in the MCP server config"

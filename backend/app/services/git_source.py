@@ -6,7 +6,9 @@ needs credentials is refused instead of asking for them.
 """
 
 import asyncio
+import ipaddress
 import os
+import socket
 import tempfile
 from pathlib import Path
 
@@ -26,7 +28,10 @@ logger = structlog.get_logger()
 CHECK_TIMEOUT = 10  # seconds; the caller is an HTTP request or a tool call
 CLONE_TIMEOUT = 120
 
-# No credential helper (the user's keychain), https only, whatever the user's git config says
+# No credential helper (the user's keychain), https only, whatever the user's git config says.
+# Redirects stay on: gitlab.com answers /group/repo with a 301 to /group/repo.git.
+# shortcut: git follows that first redirect unchecked, so a hostile public host could point it at an
+# internal address; route git through an egress proxy that refuses private addresses if that matters
 _SAFE_GIT_ARGS = [
     "-c", "credential.helper=",
     "-c", "protocol.allow=never",
@@ -86,6 +91,35 @@ async def _git(args: list[str], timeout: float) -> tuple[int, str, str]:
     return process.returncode, stdout.decode("utf-8", "replace"), stderr.decode("utf-8", "replace")
 
 
+async def _resolve(host: str) -> set[str]:
+    infos = await asyncio.get_running_loop().getaddrinfo(host, 443, type=socket.SOCK_STREAM)
+    return {info[4][0] for info in infos}
+
+
+def _is_public(address: str) -> bool:
+    try:
+        return ipaddress.ip_address(address.split("%", 1)[0]).is_global
+    except ValueError:
+        return False
+
+
+async def _pin_public_address(host: str) -> list[str]:
+    """`-c` arguments that make git reach `host` at a public address checked here.
+
+    parse_repository_url refuses private IP literals, but a name such as 10.0.0.1.nip.io resolves
+    to one. Pinning the checked address also stops git resolving the name again, so a DNS answer
+    that changes in between (rebinding) can't send it elsewhere. Raises ValueError otherwise.
+    """
+    try:
+        addresses = await _resolve(host)
+    except OSError as e:
+        raise ValueError(f"{host} could not be resolved") from e
+    if not addresses or not all(_is_public(a) for a in addresses):
+        raise ValueError(f"{host} resolves to a private or loopback address")
+    address = min(addresses, key=lambda a: ":" in a)  # IPv4 when there is one
+    return ["-c", f"http.curloptResolve={host}:443:{f'[{address}]' if ':' in address else address}"]
+
+
 def _looks_missing(stderr: str) -> bool:
     text = stderr.lower()
     return any(marker in text for marker in _NOT_FOUND_MARKERS)
@@ -99,7 +133,11 @@ async def check_remote(url: str, branch: str | None = None) -> None:
     host, path, url_branch = parse_repository_url(url)
     branch = branch or url_branch
     name = f"{host}/{path}"
-    args = ["ls-remote", "--heads", "--symref", "--", url]
+    try:
+        pin = await _pin_public_address(host)
+    except ValueError as e:
+        raise RepositoryCheckError(422, f"Can't index {name}: {e}.") from e
+    args = [*pin, "ls-remote", "--heads", "--symref", "--", url]
     if branch:
         args.append(f"refs/heads/{branch}")
     try:
@@ -139,9 +177,13 @@ class GitSource(FileSelector):
         host, path, url_branch = parse_repository_url(repo_url)
         branch = branch or url_branch
         name = f"{host}/{path}"
+        try:
+            pin = await _pin_public_address(host)
+        except ValueError as e:
+            raise GitHubAPIError(422, f"Can't clone {name}: {e}") from e
         with tempfile.TemporaryDirectory(prefix="codesage-clone-") as tmp:
             target = str(Path(tmp) / "repo")
-            args = ["clone", "--depth", "1", "--single-branch", "--no-tags"]
+            args = [*pin, "clone", "--depth", "1", "--single-branch", "--no-tags"]
             if branch:
                 args += ["--branch", branch]
             args += ["--", repo_url, target]

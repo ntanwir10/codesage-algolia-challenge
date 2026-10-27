@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import ClassVar, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -122,3 +122,9 @@ class RepositoryResponse(RepositoryBase):
     processed_at: datetime | None = Field(
         None, description="Processing completion timestamp"
     )
+
+    @field_validator("created_at", "updated_at", "processed_at")
+    @classmethod
+    def as_utc(cls, value: datetime | None) -> datetime | None:
+        # SQLite drops the offset but stores UTC; without one, browsers read the time as local
+        return value.replace(tzinfo=UTC) if value is not None and value.tzinfo is None else value

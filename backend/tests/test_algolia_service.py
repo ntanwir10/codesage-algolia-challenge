@@ -22,7 +22,27 @@ async def test_search_scopes_by_repository_with_a_numeric_filter(algolia_index):
 
     await service.search_code("debounce", repository_id=2, language="javascript")
 
-    assert algolia_index.searches[-1]["filters"] == 'repository_id=2 AND language:"javascript"'
+    assert algolia_index.searches[-1]["filters"] == (
+        'repository_id=2 AND language:"javascript" AND NOT entity_type:"import"'
+    )
+
+
+async def test_search_skips_imports_unless_asked(algolia_index):
+    service = algolia_module.AlgoliaService()
+
+    await service.search_code("x")
+    assert algolia_index.searches[-1]["filters"] == 'NOT entity_type:"import"'
+    await service.search_code("x", entity_type="import")
+    assert algolia_index.searches[-1]["filters"] == 'entity_type:"import"'
+
+
+def test_records_mark_test_files(algolia_index):
+    service = algolia_module.AlgoliaService()
+    entity = ParsedCodeEntity("function", "createStore", "", 1, 2)
+
+    [source] = service.build_documents([entity], 2, "src/vanilla.ts", "typescript")
+    [test] = service.build_documents([entity], 2, "tests/persist.test.tsx", "typescript")
+    assert (source["is_test"], test["is_test"]) == (False, True)
 
 
 async def test_facet_values_cannot_add_filter_clauses(algolia_index):

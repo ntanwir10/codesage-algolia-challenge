@@ -88,7 +88,7 @@ A run turns a git repository into stored files, entities and Algolia records. Th
 2. **Mark and wait.** The repository becomes `processing` with `processed_files` back at 0, and the status is broadcast. A run waits for one of two slots while already showing `processing`.
 3. **Check Algolia.** The endpoints already refuse a missing configuration, so this only fails a run when the credentials went away after it was scheduled. The run fails with a message.
 4. **List.** The branch is the repository's, the URL's, or the default branch from the GitHub API. For github.com, one recursive git trees call lists the blobs; symlinks are ignored. For other hosts, a shallow clone is walked instead (step 6 does not apply).
-5. **Select.** Denied directories (`node_modules`, `dist`, `build`, `vendor`, `third_party`, `.git`, `__pycache__`, `.next`, `coverage`), minified and generated files (`*.min.js`, `*.min.css`, `*.bundle.js`, `*.map`), lockfiles, unknown extensions and files of 1 MB or more are dropped. The rest are sorted by path and kept in order until 1000 files or 100 MB; the remainder counts as skipped.
+5. **Select.** Denied directories (`node_modules`, `dist`, `build`, `vendor`, `third_party`, `.git`, `__pycache__`, `.next`, `coverage`), minified and generated files (`*.min.js`, `*.min.css`, `*.bundle.js`, `*.map`), lockfiles, unknown extensions and files of 1 MB or more are dropped. The rest are kept in order until 1000 files or 100 MB, and the remainder counts as skipped. The order is source files first, then test files, then Markdown, then files that yield no entities (JSON, YAML, CSS, ...); each group is sorted by path.
 6. **Truncated trees.** If GitHub marks the tree truncated, the contents API is walked breadth-first from the root, one request per directory and 300 at most, pruning denied directories. Its result is merged with the entries the truncated tree did return. If the cap is hit, the deepest unlisted directories are left out and the run is flagged.
 7. **Download.** Files download five at a time (other hosts: read from the clone). Empty and binary files are skipped. One failed download fails the run. No files at all fails it too.
 8. **Clear.** Only after a successful fetch are the repository's Algolia records, then its rows, deleted, so a transient GitHub error does not wipe a working index. The Algolia delete is awaited (up to 120 s), and if it fails the run fails. A plain repository delete does not wait.
@@ -266,7 +266,7 @@ The bridge sends the key itself when it talks to the backend directly. Through n
 - **One worker.** Job state, the two-run limit and WebSocket subscriptions live in the process, so run exactly one worker.
 - **SQLite only.** The database is a single local file.
 - **Synchronous Algolia client.** Calls run in worker threads.
-- **Partial results.** A repository over 1000 files or 100 MB, or too large for the trees API, is indexed in part. The first files by path are kept.
+- **Partial results.** A repository over 1000 files or 100 MB, or too large for the trees API, is indexed in part. Source files are kept first, then tests, docs and data files.
 - **No automatic retry.** An interrupted or failed run waits for a manual reprocess.
 - **Search scope.** Searching all repositories includes ones being reprocessed.
 - **Tests and CI.** Frontend tests are unit tests only. CI builds the Docker images but never runs them; the prod stack, with nginx, basic auth and the browser checks, was last run by hand.

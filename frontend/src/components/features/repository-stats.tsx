@@ -16,7 +16,8 @@ export function RepositoryStats({
   const { data: stats, isError } = useQuery({
     queryKey: ["repository-stats", repository.id],
     queryFn: () => api.getRepositoryStats(repository.id),
-    refetchInterval: (query) => pollWhileActive(query.state.data),
+    // The page's repository is the live status; the cached stats still say "completed" during a reprocess
+    refetchInterval: () => pollWhileActive(repository),
   });
 
   const entityBreakdown = Object.entries(stats?.entities_by_type ?? {})

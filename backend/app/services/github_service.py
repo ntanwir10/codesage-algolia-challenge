@@ -14,6 +14,7 @@ import aiohttp
 import structlog
 
 from app.core.config import get_settings
+from app.services.code_parser import LANGUAGE_SPECS
 
 logger = structlog.get_logger()
 
@@ -83,6 +84,19 @@ EXT_TO_LANGUAGE: dict[str, str] = {
 }
 
 _NAME_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
+
+# Directory names and file name shapes that hold tests rather than the code under test
+_TEST_DIRS = frozenset({"test", "tests", "__tests__", "spec", "specs", "__mocks__", "e2e", "testing"})
+_TEST_FILE_RE = re.compile(r"^test_.*\.py$|_test\.(py|go)$|\.(test|spec)\.[cm]?[jt]sx?$|Tests?\.(java|cs|kt)$|_spec\.rb$")
+
+# Languages the parser turns into entities; selection fills the file budget with these first
+_SOURCE_LANGUAGES = frozenset({"python", "terraform", "hcl", *LANGUAGE_SPECS})
+
+
+def is_test_path(path: str) -> bool:
+    """True for files under a test directory or named like a test"""
+    parts = path.split("/")
+    return any(part.lower() in _TEST_DIRS for part in parts[:-1]) or bool(_TEST_FILE_RE.search(parts[-1]))
 
 
 def is_denied_path(path: str) -> bool:
@@ -287,7 +301,8 @@ class FileSelector:
             if self._detect_language(filename) == "text" or size >= self.max_file_size:
                 continue
             selected.append((path, size))
-        selected.sort()
+        # Source before tests, docs and data, so a capped listing keeps src/ over docs/ or examples/
+        selected.sort(key=lambda entry: (self._priority(entry[0]), entry[0]))
         kept, total_bytes = 0, 0
         for _, size in selected:
             if kept == self.max_files or total_bytes + size > self.max_total_bytes:
@@ -304,6 +319,13 @@ class FileSelector:
                 max_total_bytes=self.max_total_bytes,
             )
         return selected[:kept]
+
+    def _priority(self, path: str) -> int:
+        """0 source, 1 test source, 2 markdown (doc sections), 3 files that yield no entities"""
+        language = self._detect_language(path.split("/")[-1])
+        if language in _SOURCE_LANGUAGES:
+            return 1 if is_test_path(path) else 0
+        return 2 if language == "markdown" else 3
 
     def _detect_language(self, filename: str) -> str:
         """Detect programming language from file extension"""

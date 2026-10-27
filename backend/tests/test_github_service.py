@@ -251,6 +251,29 @@ async def test_max_files_applies_after_filtering_in_sorted_order(github_api):
     assert service.skipped_files == 1
 
 
+def test_capped_selection_keeps_source_before_tests_docs_and_data():
+    service = gh.FileSelector()
+    service.max_files = 3
+    entries = [(p, 10) for p in ("docs/a.md", "config.json", "tests/test_x.py", "src/z.py", "src/a.ts")]
+
+    kept = [path for path, _ in service._select_candidates(entries)]
+
+    assert kept == ["src/a.ts", "src/z.py", "tests/test_x.py"]
+    assert service.skipped_files == 2
+
+
+@pytest.mark.parametrize(
+    ("path", "is_test"),
+    [
+        ("tests/conftest.py", True), ("src/__tests__/a.ts", True), ("pkg/store_test.go", True),
+        ("src/app.spec.tsx", True), ("test_api.py", True), ("src/UserTest.java", True),
+        ("src/contest.py", False), ("src/latest.ts", False), ("src/testing_utils.py", False),
+    ],
+)
+def test_is_test_path(path, is_test):
+    assert gh.is_test_path(path) is is_test
+
+
 async def test_truncated_tree_falls_back_to_contents_walk_on_the_branch(github_api):
     github_api["trees"]["dev"] = {"tree": [], "truncated": True}
     github_api["listings"] = {

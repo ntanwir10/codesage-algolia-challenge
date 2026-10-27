@@ -30,6 +30,21 @@ class FakeProcess:
         return self.returncode
 
 
+PUBLIC_ADDRESS = "140.82.112.3"
+
+
+@pytest.fixture(autouse=True)
+def resolve(monkeypatch):
+    """Answer DNS from `resolve.answers` (host -> addresses), never the network"""
+    resolve.answers = {}
+
+    async def fake(host):
+        return set(resolve.answers.get(host, {PUBLIC_ADDRESS}))
+
+    monkeypatch.setattr(git_source, "_resolve", fake)
+    return resolve
+
+
 @pytest.fixture
 def spawn(monkeypatch):
     """Mock asyncio.create_subprocess_exec; `spawn.process` is what it returns"""
@@ -58,6 +73,33 @@ async def check(url=URL, branch=None) -> RepositoryCheckError | None:
 SHA = "a" * 40
 
 
+@pytest.mark.parametrize(
+    "answers",
+    [{"10.0.0.1"}, {"127.0.0.1"}, {"169.254.169.254"}, {"fd00::1"}, {PUBLIC_ADDRESS, "192.168.1.5"}, set()],
+)
+async def test_hosts_that_resolve_to_private_addresses_are_refused(spawn, resolve, answers):
+    # A name like 10.0.0.1.nip.io passes the URL's IP-literal check but must not reach git
+    resolve.answers["gitlab.com"] = answers
+
+    error = await check()
+    assert error is not None and error.status_code == 422
+    with pytest.raises(GitHubAPIError, match="private or loopback") as clone_error:
+        await git_source.fetch_files(URL)
+    assert clone_error.value.status == 422
+    assert spawn.calls == []
+
+
+async def test_the_pinned_address_prefers_ipv4(spawn, resolve):
+    resolve.answers["gitlab.com"] = {"2606:4700::1111", PUBLIC_ADDRESS}
+    await check()
+    [(argv, _)] = spawn.calls
+    assert f"http.curloptResolve=gitlab.com:443:{PUBLIC_ADDRESS}" in argv
+
+    resolve.answers["gitlab.com"] = {"2606:4700::1111"}
+    await check()
+    assert "http.curloptResolve=gitlab.com:443:[2606:4700::1111]" in spawn.calls[-1][0]
+
+
 async def test_a_reachable_repository_passes(spawn):
     spawn.process = FakeProcess(out=f"ref: refs/heads/main\tHEAD\n{SHA}\trefs/heads/main\n")
     assert await check() is None
@@ -70,7 +112,10 @@ async def test_git_runs_without_a_shell_prompt_credentials_or_other_protocols(sp
     [(argv, kwargs)] = spawn.calls
     assert argv[0] == "git"
     joined = " ".join(argv)
-    for flag in ("credential.helper=", "protocol.allow=never", "protocol.https.allow=always"):
+    for flag in (
+        "credential.helper=", "protocol.allow=never", "protocol.https.allow=always",
+        f"http.curloptResolve=gitlab.com:443:{PUBLIC_ADDRESS}",
+    ):  # fmt: skip
         assert f"-c {flag}" in joined
     assert argv[argv.index("ls-remote") :] == (
         "ls-remote", "--heads", "--symref", "--", URL, "refs/heads/dev"
@@ -193,7 +238,8 @@ async def test_fetch_files_walks_the_clone_and_applies_the_selection_rules(monke
     app = next(f for f in files if f.path == "src/app.py")
     assert (app.filename, app.content, app.size) == ("app.py", "def f():\n    pass\n", 18)
     args = seen["args"]
-    assert args[:5] == ["clone", "--depth", "1", "--single-branch", "--no-tags"]
+    assert args[:2] == ["-c", f"http.curloptResolve=gitlab.com:443:{PUBLIC_ADDRESS}"]
+    assert args[2:7] == ["clone", "--depth", "1", "--single-branch", "--no-tags"]
     assert args[args.index("--branch") + 1] == "main"
     assert "core.symlinks=false" not in args and args[-2] == URL and "--" in args
     assert seen["timeout"] == 120
@@ -209,11 +255,12 @@ async def test_fetch_files_without_a_branch_clones_the_default(monkeypatch):
 async def test_the_source_reports_what_it_skipped_over_the_limit(monkeypatch):
     fake_clone(monkeypatch, populate)
     source = git_source.GitSource()
-    source.max_files = 2
+    source.max_files = 3
     files = await source.get_repository_files(URL, None)
-    # the cap counts selected paths: README.md and the binary blob.py; blob.py then drops out
-    assert [f.path for f in files] == ["README.md"]
-    assert source.skipped_files == 3
+    # Source fills the cap first (blob.py, empty.py, infra/main.tf); the binary and the empty file
+    # then drop out, and src/app.py and README.md were over the cap
+    assert [f.path for f in files] == ["infra/main.tf"]
+    assert source.skipped_files == 2
 
 
 @pytest.mark.parametrize(

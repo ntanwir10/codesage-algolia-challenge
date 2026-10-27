@@ -45,6 +45,37 @@ describe("SearchInterface suggestions", () => {
   });
 });
 
+describe("SearchInterface suggestions from the keyboard", () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it("moves with the arrows, searches the pick on Enter and closes on Escape", async () => {
+    mockApi();
+    vi.mocked(api.getSearchSuggestions).mockResolvedValue(["debounce", "debug"]);
+    render(<SearchInterface repositoryId={2} canSearch />);
+    await userEvent.type(queryInput(), "deb");
+    await screen.findByRole("listbox");
+
+    await userEvent.keyboard("{ArrowDown}{ArrowDown}");
+    const [first, second] = screen.getAllByRole("option");
+    expect(second).toHaveAttribute("aria-selected", "true");
+    expect(first).toHaveAttribute("aria-selected", "false");
+    expect(queryInput()).toHaveAttribute("aria-activedescendant", second.id);
+
+    await userEvent.keyboard("{ArrowDown}"); // wraps to the first
+    expect(first).toHaveAttribute("aria-selected", "true");
+    await userEvent.keyboard("{Escape}");
+    expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
+
+    await userEvent.type(queryInput(), "u");
+    await screen.findByRole("listbox");
+    await userEvent.keyboard("{ArrowUp}{Enter}"); // up from nothing: the last one
+    expect(queryInput()).toHaveValue("debug");
+    await waitFor(() =>
+      expect(api.searchCode).toHaveBeenCalledWith(expect.objectContaining({ query: "debug" }))
+    );
+  });
+});
+
 describe("SearchInterface states", () => {
   afterEach(() => vi.restoreAllMocks());
 

@@ -273,7 +273,7 @@ An unknown path shows "Page not found". A repository that doesn't exist says so;
 | Tool | What it returns |
 | --- | --- |
 | `list_repositories` | Indexed repositories with status and size |
-| `search_code` | Full-text matches over functions, classes, imports, doc sections and Terraform blocks, with source links. A question in plain words returns the best partial matches |
+| `search_code` | Full-text matches over functions, classes (with interfaces, type aliases and enums), doc sections and Terraform blocks, with source links. Imports only with `entity_type: "import"`. Part of a camelCase name matches, and source ranks before tests. A question in plain words returns the best partial matches |
 | `get_file` | A file with line numbers: at most 400 lines and 100,000 characters per call |
 | `list_definitions` | Definitions in a repository, by file and line |
 | `analyze_repository` | File, line and entity counts, languages, top directories, largest files |
@@ -290,7 +290,7 @@ Ask Claude: *"Add https://gitlab.com/group/project to CodeSage"*. Claude calls `
 
 - **Hosts.** GitHub, GitLab (nested groups too), Bitbucket and self-hosted servers. `http://` and `git@host:path` URLs are rewritten to `https://`, and git always fetches over https. Branch URLs such as `.../-/tree/dev` work.
 - **Public only.** Private repositories are refused on every host but github.com, where the server's `GITHUB_TOKEN` can read them. The message is "... was not found or is private; only public repositories are supported on <host>."
-- **Rejected URLs.** Ports, credentials, `localhost` and private IP addresses.
+- **Rejected URLs.** Ports, credentials, `localhost`, private IP addresses, and host names that resolve to one. git then connects to the address that was checked.
 - **Names and links.** Repositories on other hosts are named `<host>/<path>`. Search results link to the exact line on GitLab (gitlab.com, and any host whose name starts with `gitlab.`) and on bitbucket.org. Other hosts, including self-hosted Bitbucket, get no link.
 - **Not in the dashboard.** The web form and `POST /api/v1/repositories/` take github.com only.
 - **Needs git.** The backend runs `git ls-remote` to check (10 s) and a shallow `git clone` to read (120 s). The prod Docker image includes git.

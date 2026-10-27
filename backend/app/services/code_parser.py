@@ -56,7 +56,8 @@ LANGUAGE_SPECS = {
     "javascript": _spec("JavaScript", "javascript", _JS_FUNCTIONS, _JS_CLASSES, ("import_statement",),
                         return_fields=()),
     "typescript": _spec("TypeScript", "typescript", _JS_FUNCTIONS + ("function_signature",),
-                        _JS_CLASSES + ("abstract_class_declaration", "interface_declaration"),
+                        _JS_CLASSES + ("abstract_class_declaration", "interface_declaration",
+                                       "type_alias_declaration", "enum_declaration"),
                         ("import_statement",)),
     "java": _spec("Java", "java", ("method_declaration", "constructor_declaration"),
                   ("class_declaration", "interface_declaration", "enum_declaration",
@@ -85,6 +86,12 @@ LANGUAGE_SPECS = {
 }
 
 _ANON_FUNCTIONS = frozenset({"arrow_function", "function_expression", "function", "generator_function"})
+# Expressions around a function that leave it a function: (fn), fn as T, fn satisfies T, fn!, <T>fn
+_TRANSPARENT_WRAPPERS = frozenset({"parenthesized_expression", "as_expression", "satisfies_expression",
+                                   "non_null_expression", "type_assertion"})
+# How descriptions name class-like definitions that aren't classes
+_CLASS_KIND_LABELS = {"interface_declaration": "interface", "type_alias_declaration": "type",
+                      "enum_declaration": "enum"}
 _WRAPPERS = frozenset({"export_statement", "lexical_declaration", "variable_declaration"})
 _DECLARATOR_WRAPPERS = frozenset({"pointer_declarator", "reference_declarator", "parenthesized_declarator",
                                   "function_declarator", "array_declarator"})
@@ -504,7 +511,7 @@ class CodeParser:
         entities.append(ParsedCodeEntity(
             entity_type="class",
             name=name,
-            description=f"{spec.label} class: {name}",
+            description=f"{spec.label} {_CLASS_KIND_LABELS.get(node.type, 'class')}: {name}",
             line_start=start,
             line_end=end,
             parameters=parents or None,
@@ -655,6 +662,10 @@ class CodeParser:
             name, value = self._text(left), node.child_by_field_name("right")
         elif kind in _ANON_FUNCTIONS and node.parent is not None and node.parent.type == "export_statement":
             name, value = "default", node
+        while value is not None and value.type in _TRANSPARENT_WRAPPERS:
+            # <T>fn puts the type first; every other wrapper puts the expression first
+            inner = value.named_children
+            value = (inner[-1] if value.type == "type_assertion" else inner[0]) if inner else None
         if not name or value is None or value.type not in _ANON_FUNCTIONS or value.id in claimed:
             return None
         claimed.add(value.id)

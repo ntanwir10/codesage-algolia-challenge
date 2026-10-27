@@ -57,13 +57,6 @@ export function RepositoryPage() {
     refetchInterval: pollUnlessGone,
   });
 
-  const { data: status } = useQuery({
-    queryKey: ["repository-status", repositoryId],
-    queryFn: () => api.getRepositoryStatus(repositoryId),
-    enabled: !!repositoryId,
-    refetchInterval: pollUnlessGone,
-  });
-
   // Live updates: subscribe while the repository is being processed.
   const repositoryIds = useMemo(
     () => (repositoryId ? [repositoryId] : []),
@@ -132,9 +125,7 @@ export function RepositoryPage() {
         description: "The repository will be re-analyzed and re-indexed.",
       });
       queryClient.invalidateQueries({ queryKey: ["repository", repositoryId] });
-      queryClient.invalidateQueries({
-        queryKey: ["repository-status", repositoryId],
-      });
+      queryClient.invalidateQueries({ queryKey: ["repository-stats", repositoryId] });
     } catch (error) {
       const { message, status: httpStatus } = describeError(error);
       if (httpStatus === 401) return; // the global auth toast covers it
@@ -276,7 +267,7 @@ export function RepositoryPage() {
         <RepositoryStats repository={repository} />
 
         {/* Processing Status */}
-        {status && isActiveStatus(repository.status) && (
+        {isActiveStatus(repository.status) && (
           <Card className="border-blue-200 bg-blue-50/50">
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
@@ -292,8 +283,9 @@ export function RepositoryPage() {
             <CardContent>
               <div className="space-y-4">
                 {(() => {
-                  const processed = status.processed_files;
-                  const total = status.total_files;
+                  // The WebSocket patches these into the cached repository as batches land
+                  const processed = repository.processed_files;
+                  const total = repository.total_files;
                   return total > 0 && processed > 0 ? (
                     <div>
                       <AnimatedProgress

@@ -36,6 +36,7 @@ export function SearchInterface({
   const [isSearching, setIsSearching] = useState(false);
   const [suggestions, setSuggestions] = useState<string[]>([]);
   const [showSuggestions, setShowSuggestions] = useState(false);
+  const [activeSuggestion, setActiveSuggestion] = useState(-1); // keyboard highlight; -1 for none
   const [searchError, setSearchError] = useState<DescribedError | null>(null);
   const [page, setPage] = useState(0); // zero-based, as the server expects
   const [pages, setPages] = useState(0);
@@ -138,6 +139,26 @@ export function SearchInterface({
   const hasNext = page + 1 < pages;
   const hasPrev = page > 0;
   const suggestionsOpen = showSuggestions && suggestions.length > 0;
+  const active = suggestionsOpen && activeSuggestion < suggestions.length ? activeSuggestion : -1;
+
+  // Combobox keys: arrows move through the suggestions, Enter picks one, Escape closes the list
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (!suggestionsOpen) return;
+    const count = suggestions.length;
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      e.preventDefault();
+      const step = e.key === "ArrowDown" ? 1 : -1;
+      setActiveSuggestion(
+        active < 0 ? (step > 0 ? 0 : count - 1) : (active + step + count) % count
+      );
+    } else if (e.key === "Enter" && active >= 0) {
+      e.preventDefault();
+      setShowSuggestions(false);
+      handleSuggestionClick(suggestions[active]);
+    } else if (e.key === "Escape") {
+      setShowSuggestions(false);
+    }
+  };
 
   return (
     <Card className={className}>
@@ -165,10 +186,17 @@ export function SearchInterface({
                 aria-expanded={suggestionsOpen}
                 aria-controls={listboxId}
                 aria-autocomplete="list"
+                aria-activedescendant={active >= 0 ? `${listboxId}-${active}` : undefined}
                 autoComplete="off"
+                // The server caps queries at 512 bytes; 170 UTF-16 units is at most 510
+                maxLength={170}
                 placeholder="Search your code... (e.g., 'authentication middleware')"
                 value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
+                onChange={(e) => {
+                  setSearchQuery(e.target.value);
+                  setActiveSuggestion(-1);
+                }}
+                onKeyDown={handleKeyDown}
                 onFocus={() => {
                   clearTimeout(blurTimer.current);
                   setShowSuggestions(suggestions.length > 0);
@@ -191,12 +219,15 @@ export function SearchInterface({
                   aria-label="Search suggestions"
                   className="absolute top-full left-0 right-0 mt-1 bg-white border rounded-md shadow-lg z-10"
                 >
-                  {suggestions.map((suggestion) => (
+                  {suggestions.map((suggestion, index) => (
                     <div
                       key={suggestion}
+                      id={`${listboxId}-${index}`}
                       role="option"
-                      aria-selected={false}
-                      className="w-full text-left px-3 py-2 hover:bg-gray-50 text-sm cursor-pointer"
+                      aria-selected={index === active}
+                      className={`w-full text-left px-3 py-2 hover:bg-gray-50 text-sm cursor-pointer ${
+                        index === active ? "bg-gray-100" : ""
+                      }`}
                       // mousedown fires before blur, so the click is not lost
                       onMouseDown={(e) => e.preventDefault()}
                       onClick={() => handleSuggestionClick(suggestion)}

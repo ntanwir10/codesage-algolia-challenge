@@ -11,6 +11,7 @@ import re
 import time
 from collections import Counter
 from collections.abc import Awaitable, Callable
+from datetime import UTC
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -130,7 +131,12 @@ def _repository_summary(repository: Repository, entity_count: int) -> dict[str, 
         "total_files": repository.total_files,
         "total_entities": entity_count,
         "error_message": repository.error_message,
-        "processed_at": repository.processed_at.isoformat() if repository.processed_at else None,
+        # Stored as UTC without an offset (SQLite); say so, like the REST API does
+        "processed_at": (
+            repository.processed_at.replace(tzinfo=repository.processed_at.tzinfo or UTC).isoformat()
+            if repository.processed_at
+            else None
+        ),
     }
 
 

@@ -139,7 +139,7 @@ Lists indexed repositories with `id`, `name`, `url`, `branch`, `status`, `total_
 
 ### `search_code`
 
-Full-text search over functions, classes, imports, doc sections and Terraform blocks. Each result has the entity name and type, file path, line range, language, a signature, a snippet and a source link.
+Full-text search over functions, classes (including interfaces, type aliases and enums), doc sections and Terraform blocks. Imports are searched only when `entity_type` is `"import"`. The query is at most 512 bytes. Each result has the entity name and type, file path, line range, language, a signature, a snippet and a source link.
 
 | Argument | Type | Default | Notes |
 | --- | --- | --- | --- |
@@ -288,7 +288,7 @@ curl -X POST http://127.0.0.1:8001/api/v1/ai/mcp/tools/call \
 | No answer in 30 s | `CodeSage backend did not answer within 30 s.` |
 | Other transport error | `CodeSage backend request failed: <type>: <message>` |
 | 401 with a Basic `WWW-Authenticate` | `The proxy in front of CodeSage rejected the login (401)...` |
-| 401, no key configured | `No API key is configured; set CODESAGE_API_KEY in the MCP server's env in the Claude Desktop config.` |
+| 401, no key configured | `No API key is configured; set CODESAGE_API_KEY in the MCP server's env in your MCP client's config (for Claude Desktop, run `make install-claude`).` For a local backend the launcher reads the key from `backend/.env` when the config leaves it empty, so this means that file has no key either |
 | 401, key sent | `CodeSage backend rejected the API key (401); check CODESAGE_API_KEY in the MCP server config` |
 | 403 | `CodeSage refused the request (403): <detail>. If the backend runs on another host, add that host to ALLOWED_HOSTS on the backend and check MCP_SERVER_URL.` |
 | 404 | `The backend returned 404 for <path>; check that MCP_SERVER_URL points at the backend root (no /api/v1).` Unknown tool names never get this far: the bridge answers `Unknown tool '<name>'. Available tools: ...` itself |
