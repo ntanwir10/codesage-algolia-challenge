@@ -261,10 +261,11 @@ Restart Claude Desktop and keep the backend running. Then ask Claude something l
 | Page | What you can do |
 | --- | --- |
 | Home (`/`) | Add a GitHub repository. The field has a `github.com/` prefix: type `owner/repo` or paste a GitHub URL, and it is trimmed to `owner/repo`. The branch and a description have their own optional fields; the description shows on the repository page. |
-| Repository (`/repository/:id`) | Watch indexing progress. Afterwards, search with suggestions and open results at the exact line. The source link says "View on GitHub", or "View source" for a repository on another host. Reprocess or delete the repository. |
+| Repository (`/repository/:id`) | Watch indexing progress. Afterwards, search with suggestions (arrow keys and Enter work), filter by language and kind, and browse every definition by name and kind. A result opens in the file viewer; "source ↗" opens it on the host at the indexed commit. The header shows that commit ("Indexed at abc1234"). Reprocess or delete the repository. |
+| File viewer (`/repository/:id/file?path=…&line=…&end=…`) | Read an indexed file 400 lines at a time, with the target lines highlighted and the file's definitions listed beside it. |
 | Dashboard (`/dashboard`) | All repositories with their status and progress. Delete a repository from here. |
 
-On the repository page, a finished repository shows a green card. It shows amber if it was only partially indexed and red if it failed; both say why. The Dashboard doesn't make this distinction: a partially indexed repository there has a plain "Completed" badge, and only a failed one shows its reason.
+On the repository page, a finished repository shows a green card. It shows amber if it was only partially indexed and red if it failed; both say why. The Dashboard shows a partially indexed repository's note in amber, and a failed one's reason in red.
 
 An unknown path shows "Page not found". A repository that doesn't exist says so; any other load error shows the message with "Try again". A failed repository says why on its page and on its dashboard card.
 
@@ -273,7 +274,7 @@ An unknown path shows "Page not found". A repository that doesn't exist says so;
 | Tool | What it returns |
 | --- | --- |
 | `list_repositories` | Indexed repositories with status and size |
-| `search_code` | Full-text matches over functions, classes, imports, doc sections and Terraform blocks, with source links. A question in plain words returns the best partial matches |
+| `search_code` | Full-text matches over functions, classes (with interfaces, type aliases and enums), doc sections and Terraform blocks, with source links. Imports only with `entity_type: "import"`. Part of a camelCase name matches, and source ranks before tests. A question in plain words returns the best partial matches |
 | `get_file` | A file with line numbers: at most 400 lines and 100,000 characters per call |
 | `list_definitions` | Definitions in a repository, by file and line |
 | `analyze_repository` | File, line and entity counts, languages, top directories, largest files |
@@ -290,7 +291,7 @@ Ask Claude: *"Add https://gitlab.com/group/project to CodeSage"*. Claude calls `
 
 - **Hosts.** GitHub, GitLab (nested groups too), Bitbucket and self-hosted servers. `http://` and `git@host:path` URLs are rewritten to `https://`, and git always fetches over https. Branch URLs such as `.../-/tree/dev` work.
 - **Public only.** Private repositories are refused on every host but github.com, where the server's `GITHUB_TOKEN` can read them. The message is "... was not found or is private; only public repositories are supported on <host>."
-- **Rejected URLs.** Ports, credentials, `localhost` and private IP addresses.
+- **Rejected URLs.** Ports, credentials, `localhost`, private IP addresses, and host names that resolve to one. git then connects to the address that was checked.
 - **Names and links.** Repositories on other hosts are named `<host>/<path>`. Search results link to the exact line on GitLab (gitlab.com, and any host whose name starts with `gitlab.`) and on bitbucket.org. Other hosts, including self-hosted Bitbucket, get no link.
 - **Not in the dashboard.** The web form and `POST /api/v1/repositories/` take github.com only.
 - **Needs git.** The backend runs `git ls-remote` to check (10 s) and a shallow `git clone` to read (120 s). The prod Docker image includes git.

@@ -25,11 +25,20 @@ export function useRealtimeStatus({
     () => websocketService.getStatus()
   );
 
-  useEffect(
-    () =>
-      websocketService.onConnectionStatusChange(setConnectionStatus),
-    []
-  );
+  useEffect(() => {
+    let previous = websocketService.getStatus();
+    return websocketService.onConnectionStatusChange((next) => {
+      setConnectionStatus(next);
+      // The backend is back: queries that failed meanwhile don't retry on their own
+      if (next === "connected" && previous !== "connected") {
+        queryClient.refetchQueries({
+          type: "active",
+          predicate: (query) => query.state.status === "error",
+        });
+      }
+      previous = next;
+    });
+  }, [queryClient]);
 
   const handleUpdate = useCallback(
     (update: RepositoryStatusUpdate) => {
@@ -41,7 +50,12 @@ export function useRealtimeStatus({
         total_files: update.total_files ?? repo.total_files,
       });
 
-      const previous = queryClient.getQueryData<Repository>(["repository", id]);
+      // The dashboard only caches the list, so look there too
+      const previous =
+        queryClient.getQueryData<Repository>(["repository", id]) ??
+        queryClient
+          .getQueryData<Repository[]>(["repositories"])
+          ?.find((repo) => repo.id === id);
       queryClient.setQueryData<Repository | undefined>(
         ["repository", id],
         (old) => (old ? patch(old) : old)
@@ -56,7 +70,6 @@ export function useRealtimeStatus({
       const changed = !previous || previous.status !== status;
       if (changed || status === "completed" || status === "failed") {
         queryClient.invalidateQueries({ queryKey: ["repository", id] });
-        queryClient.invalidateQueries({ queryKey: ["repository-status", id] });
         queryClient.invalidateQueries({ queryKey: ["repository-stats", id] });
         queryClient.invalidateQueries({ queryKey: ["repositories"] });
       }

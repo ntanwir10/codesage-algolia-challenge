@@ -281,6 +281,7 @@ class RepositoryService:
         host = parse_repository_url(repository.url)[0]
         github = GitHubService() if host == "github.com" else GitSource()
         files = await github.get_repository_files(repository.url, repository.branch or None)
+        repository.commit_sha = github.commit_sha
         logger.info("Repository files retrieved", repository_id=repository.id, file_count=len(files))
         if not files:
             raise IngestionError("No supported code files found in repository")
@@ -429,6 +430,15 @@ class RepositoryService:
             .group_by(CodeFile.language)
             .all()
         )
+        # The languages search can filter on: only those with indexed entities
+        entity_languages = dict(
+            self.db.query(CodeFile.language, func.count())
+            .select_from(CodeEntity)
+            .join(CodeFile, CodeEntity.file_id == CodeFile.id)
+            .filter(CodeEntity.repository_id == repository.id)
+            .group_by(CodeFile.language)
+            .all()
+        )
         return {
             "repository_id": repository.id,
             "status": repository.status,
@@ -438,6 +448,7 @@ class RepositoryService:
             "total_entities": sum(entity_counts.values()),
             "entities_by_type": entity_counts,
             "files_by_language": language_counts,
+            "entities_by_language": entity_languages,
             "language": repository.language,
             "framework": repository.framework,
         }

@@ -6,7 +6,7 @@ it must stay free of app, database, Algolia and settings imports.
 
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 EntityType = Literal["function", "class", "import", "doc_section", "terraform_block"]
 
@@ -25,8 +25,21 @@ class ListRepositoriesArgs(_Args):
     pass
 
 
+MAX_QUERY_BYTES = 512  # Algolia rejects longer queries
+
+
 class SearchCodeArgs(_Args):
-    query: str = Field(description="Search text matched against names, descriptions and code", min_length=1)
+    query: str = Field(
+        description=f"Search text matched against names, descriptions and code (at most {MAX_QUERY_BYTES} bytes)",
+        min_length=1,
+    )
+
+    @field_validator("query")
+    @classmethod
+    def query_fits(cls, query: str) -> str:
+        if len(query.encode()) > MAX_QUERY_BYTES:
+            raise ValueError(f"query is too long; the limit is {MAX_QUERY_BYTES} bytes")
+        return query
     repository: str | None = Field(
         default=None,
         description=REPOSITORY_DESCRIPTION + " Omit to search all indexed repositories.",
@@ -98,9 +111,9 @@ TOOLS: dict[str, ToolSpec] = {
         ToolSpec(
             name="search_code",
             description=(
-                "Full-text search over indexed functions, classes, imports, doc sections and "
-                "Terraform blocks. Returns ranked hits with file locations, snippets and links to "
-                "the source on GitHub, GitLab or Bitbucket."
+                "Full-text search over indexed functions, classes, doc sections and Terraform "
+                "blocks; imports only when entity_type is 'import'. Returns ranked hits with file "
+                "locations, snippets and links to the source on GitHub, GitLab or Bitbucket."
             ),
             args_model=SearchCodeArgs,
         ),

@@ -17,6 +17,18 @@ if ! (cd "$REPO/backend" && "$PYTHON" -c 'import codesage_mcp, mcp'); then
   exit 1
 fi
 
+# No key in the config: a local backend's own key is in backend/.env, so a regenerated key can't
+# leave Claude behind. Never for a remote MCP_SERVER_URL, which has its own key.
+if [ -z "${CODESAGE_API_KEY:-}" ] && [ -z "${CODESAGE_BASIC_AUTH_USER:-}" ]; then
+  case "${MCP_SERVER_URL:-http://127.0.0.1:8001}" in
+    http://127.0.0.1 | http://127.0.0.1[:/]* | http://localhost | http://localhost[:/]* | http://\[::1\]*)
+      CODESAGE_API_KEY="$(cd "$REPO/scripts" && "$PYTHON" -c \
+        'from install_claude_desktop import ENV_FILE, read_env_value; print(read_env_value(ENV_FILE, "CODESAGE_API_KEY") or "")')"
+      export CODESAGE_API_KEY
+      ;;
+  esac
+fi
+
 # A basic-auth password lives in the macOS Keychain, not in the Claude Desktop config
 if [ -n "${CODESAGE_BASIC_AUTH_USER:-}" ] && [ -z "${CODESAGE_BASIC_AUTH_PASSWORD:-}" ] \
     && command -v security >/dev/null; then

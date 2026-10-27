@@ -18,7 +18,15 @@ export function useGlobalToasts(): void {
         lastStatus.current.set(update.repository_id, update.status);
         if (previous === update.status) return; // de-duplicate repeats
         const name = update.name || `Repository ${update.repository_id}`;
-        if (update.status === "completed") {
+        // The backend sends error_message as the message of a run that left files out
+        if (update.status === "completed" && update.message?.startsWith("Partially indexed")) {
+          addToast({
+            type: "warning",
+            title: "Repository partially indexed",
+            description: `${name}: ${update.message}`,
+            duration: 8000,
+          });
+        } else if (update.status === "completed") {
           addToast({
             type: "success",
             title: "Repository analysis complete",

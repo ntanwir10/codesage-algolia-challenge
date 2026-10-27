@@ -325,6 +325,12 @@ export function DashboardPage() {
                       {repo.error_message}
                     </p>
                   )}
+                  {/* A completed run's error_message says what it left out */}
+                  {repo.status === "completed" && repo.error_message && (
+                    <p className="text-sm text-amber-700 break-words mb-4">
+                      ⚠️ {repo.error_message}
+                    </p>
+                  )}
                   <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm mb-4">
                     <div className="flex items-center gap-2">
                       <span className="text-gray-500">📄</span>

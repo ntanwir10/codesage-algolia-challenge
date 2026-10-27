@@ -14,6 +14,7 @@ import aiohttp
 import structlog
 
 from app.core.config import get_settings
+from app.services.code_parser import LANGUAGE_SPECS
 
 logger = structlog.get_logger()
 
@@ -83,6 +84,19 @@ EXT_TO_LANGUAGE: dict[str, str] = {
 }
 
 _NAME_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
+
+# Directory names and file name shapes that hold tests rather than the code under test
+_TEST_DIRS = frozenset({"test", "tests", "__tests__", "spec", "specs", "__mocks__", "e2e", "testing"})
+_TEST_FILE_RE = re.compile(r"^test_.*\.py$|_test\.(py|go)$|\.(test|spec)\.[cm]?[jt]sx?$|Tests?\.(java|cs|kt)$|_spec\.rb$")
+
+# Languages the parser turns into entities; selection fills the file budget with these first
+_SOURCE_LANGUAGES = frozenset({"python", "terraform", "hcl", *LANGUAGE_SPECS})
+
+
+def is_test_path(path: str) -> bool:
+    """True for files under a test directory or named like a test"""
+    parts = path.split("/")
+    return any(part.lower() in _TEST_DIRS for part in parts[:-1]) or bool(_TEST_FILE_RE.search(parts[-1]))
 
 
 def is_denied_path(path: str) -> bool:
@@ -275,6 +289,7 @@ class FileSelector:
         self.max_total_bytes = 100 * 1024 * 1024  # a run holds every file in memory at once
         self.skipped_files = 0  # Code files the last listing dropped over max_files / max_total_bytes
         self.listing_truncated = False  # The last listing stopped at MAX_WALK_REQUESTS directories
+        self.commit_sha: str | None = None  # The commit the last listing read
 
     def _select_candidates(self, entries: list[tuple[str, int]]) -> list[tuple[str, int]]:
         """Apply deny-list, extension and size filters, then sort and cap"""
@@ -287,7 +302,8 @@ class FileSelector:
             if self._detect_language(filename) == "text" or size >= self.max_file_size:
                 continue
             selected.append((path, size))
-        selected.sort()
+        # Source before tests, docs and data, so a capped listing keeps src/ over docs/ or examples/
+        selected.sort(key=lambda entry: (self._priority(entry[0]), entry[0]))
         kept, total_bytes = 0, 0
         for _, size in selected:
             if kept == self.max_files or total_bytes + size > self.max_total_bytes:
@@ -304,6 +320,13 @@ class FileSelector:
                 max_total_bytes=self.max_total_bytes,
             )
         return selected[:kept]
+
+    def _priority(self, path: str) -> int:
+        """0 source, 1 test source, 2 markdown (doc sections), 3 files that yield no entities"""
+        language = self._detect_language(path.split("/")[-1])
+        if language in _SOURCE_LANGUAGES:
+            return 1 if is_test_path(path) else 0
+        return 2 if language == "markdown" else 3
 
     def _detect_language(self, filename: str) -> str:
         """Detect programming language from file extension"""
@@ -515,9 +538,11 @@ class GitHubService(FileSelector):
                 logger.info("Fetching repository files", owner=owner, repo=repo, branch=branch)
 
                 self._walk_requests, self.listing_truncated = 0, False
-                entries = await self._list_entries(session, owner, repo, branch)
+                # One commit for the listing and every download: a push mid-run can't mix two
+                self.commit_sha = await self._resolve_commit(session, owner, repo, branch)
+                entries = await self._list_entries(session, owner, repo, self.commit_sha)
                 candidates = self._select_candidates(entries)
-                files = await self._download_all(session, owner, repo, branch, candidates)
+                files = await self._download_all(session, owner, repo, self.commit_sha, candidates)
             finally:
                 await session.close()
 
@@ -533,6 +558,27 @@ class GitHubService(FileSelector):
             # The caller records the failure on the repository; just trace it here
             logger.debug("Failed to get repository files", repo_url=repo_url, error=str(e))
             raise
+
+    async def _resolve_commit(
+        self, session: aiohttp.ClientSession, owner: str, repo: str, branch: str
+    ) -> str:
+        """The commit `branch` points at"""
+        try:
+            info = await self._make_request_with_retries(
+                session, f"{self.base_url}/repos/{owner}/{repo}/branches/{quote_path(branch)}", owner, repo
+            )
+        except GitHubAPIError as e:
+            if e.status != 404:
+                raise
+            # Say which is missing: a missing repository raises its own 404 from this lookup
+            await self._make_request_with_retries(
+                session, f"{self.base_url}/repos/{owner}/{repo}", owner, repo
+            )
+            raise GitHubAPIError(404, f"Branch '{branch}' not found in {owner}/{repo}") from e
+        sha = (info.get("commit") or {}).get("sha") if isinstance(info, dict) else None
+        if not isinstance(sha, str) or not sha:
+            raise GitHubAPIError(502, f"GitHub did not report a commit for {owner}/{repo} branch '{branch}'")
+        return sha
 
     async def _list_entries(
         self, session: aiohttp.ClientSession, owner: str, repo: str, branch: str

@@ -13,8 +13,10 @@ const getPageTitle = (pathname: string): string => {
       return `${baseTitle} - Repository`;
     default:
       if (pathname.startsWith("/repository/")) {
-        const id = pathname.split("/")[2];
-        return `${baseTitle} - Repository ${id}`;
+        const [, , id, page] = pathname.split("/");
+        return page === "file"
+          ? `${baseTitle} - File in repository ${id}`
+          : `${baseTitle} - Repository ${id}`;
       }
       return baseTitle;
   }

@@ -6,14 +6,17 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { LoadingSpinner } from "@/components/ui/loading-spinner";
 import { describeError, type DescribedError } from "@/lib/errors";
-import { isHttpUrl } from "@/lib/utils";
-import type { SearchHit } from "@/types/mcp";
+import { ENTITY_TYPES, fileViewerPath, isHttpUrl } from "@/lib/utils";
+import { Link } from "react-router-dom";
+import type { EntityType, SearchHit } from "@/types/mcp";
 import type { RepositoryStatus } from "@/types/repository";
 
 interface SearchInterfaceProps {
   repositoryId: number;
   canSearch: boolean;
   status?: RepositoryStatus;
+  /** Languages with indexed entities, offered as a filter */
+  languages?: string[];
   className?: string;
 }
 
@@ -24,10 +27,13 @@ export function SearchInterface({
   repositoryId,
   canSearch,
   status,
+  languages = [],
   className,
 }: SearchInterfaceProps) {
   const listboxId = useId();
   const [searchQuery, setSearchQuery] = useState("");
+  const [language, setLanguage] = useState("");
+  const [entityType, setEntityType] = useState<EntityType | "">("");
   // The query that produced the current results (pagination must reuse it,
   // not whatever is currently typed in the input).
   const [activeQuery, setActiveQuery] = useState("");
@@ -36,6 +42,7 @@ export function SearchInterface({
   const [isSearching, setIsSearching] = useState(false);
   const [suggestions, setSuggestions] = useState<string[]>([]);
   const [showSuggestions, setShowSuggestions] = useState(false);
+  const [activeSuggestion, setActiveSuggestion] = useState(-1); // keyboard highlight; -1 for none
   const [searchError, setSearchError] = useState<DescribedError | null>(null);
   const [page, setPage] = useState(0); // zero-based, as the server expects
   const [pages, setPages] = useState(0);
@@ -99,6 +106,8 @@ export function SearchInterface({
       const response = await api.searchCode({
         query: trimmed,
         repository: String(repositoryId),
+        language: language || undefined,
+        entity_type: entityType || undefined,
         limit: PAGE_SIZE,
         page: targetPage,
       });
@@ -124,6 +133,12 @@ export function SearchInterface({
     }
   };
 
+  // A filter change re-runs the shown search from its first page
+  useEffect(() => {
+    if (activeQuery) void runSearch(activeQuery, 0);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- only filter changes re-run it
+  }, [language, entityType]);
+
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     void runSearch(searchQuery, 0);
@@ -138,6 +153,26 @@ export function SearchInterface({
   const hasNext = page + 1 < pages;
   const hasPrev = page > 0;
   const suggestionsOpen = showSuggestions && suggestions.length > 0;
+  const active = suggestionsOpen && activeSuggestion < suggestions.length ? activeSuggestion : -1;
+
+  // Combobox keys: arrows move through the suggestions, Enter picks one, Escape closes the list
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (!suggestionsOpen) return;
+    const count = suggestions.length;
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      e.preventDefault();
+      const step = e.key === "ArrowDown" ? 1 : -1;
+      setActiveSuggestion(
+        active < 0 ? (step > 0 ? 0 : count - 1) : (active + step + count) % count
+      );
+    } else if (e.key === "Enter" && active >= 0) {
+      e.preventDefault();
+      setShowSuggestions(false);
+      handleSuggestionClick(suggestions[active]);
+    } else if (e.key === "Escape") {
+      setShowSuggestions(false);
+    }
+  };
 
   return (
     <Card className={className}>
@@ -165,10 +200,17 @@ export function SearchInterface({
                 aria-expanded={suggestionsOpen}
                 aria-controls={listboxId}
                 aria-autocomplete="list"
+                aria-activedescendant={active >= 0 ? `${listboxId}-${active}` : undefined}
                 autoComplete="off"
+                // The server caps queries at 512 bytes; 170 UTF-16 units is at most 510
+                maxLength={170}
                 placeholder="Search your code... (e.g., 'authentication middleware')"
                 value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
+                onChange={(e) => {
+                  setSearchQuery(e.target.value);
+                  setActiveSuggestion(-1);
+                }}
+                onKeyDown={handleKeyDown}
                 onFocus={() => {
                   clearTimeout(blurTimer.current);
                   setShowSuggestions(suggestions.length > 0);
@@ -191,12 +233,15 @@ export function SearchInterface({
                   aria-label="Search suggestions"
                   className="absolute top-full left-0 right-0 mt-1 bg-white border rounded-md shadow-lg z-10"
                 >
-                  {suggestions.map((suggestion) => (
+                  {suggestions.map((suggestion, index) => (
                     <div
                       key={suggestion}
+                      id={`${listboxId}-${index}`}
                       role="option"
-                      aria-selected={false}
-                      className="w-full text-left px-3 py-2 hover:bg-gray-50 text-sm cursor-pointer"
+                      aria-selected={index === active}
+                      className={`w-full text-left px-3 py-2 hover:bg-gray-50 text-sm cursor-pointer ${
+                        index === active ? "bg-gray-100" : ""
+                      }`}
                       // mousedown fires before blur, so the click is not lost
                       onMouseDown={(e) => e.preventDefault()}
                       onClick={() => handleSuggestionClick(suggestion)}
@@ -217,6 +262,37 @@ export function SearchInterface({
             </Button>
           </div>
         </form>
+
+        {canSearch && (
+          <div className="flex flex-wrap gap-2 text-sm">
+            <select
+              aria-label="Filter by language"
+              value={language}
+              onChange={(e) => setLanguage(e.target.value)}
+              className="border rounded-md px-2 py-1 bg-background"
+            >
+              <option value="">All languages</option>
+              {languages.map((l) => (
+                <option key={l} value={l}>
+                  {l}
+                </option>
+              ))}
+            </select>
+            <select
+              aria-label="Filter by kind"
+              value={entityType}
+              onChange={(e) => setEntityType(e.target.value as EntityType | "")}
+              className="border rounded-md px-2 py-1 bg-background"
+            >
+              <option value="">All kinds</option>
+              {ENTITY_TYPES.map((t) => (
+                <option key={t.value} value={t.value}>
+                  {t.label}
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
 
         {searchError && (
           <div
@@ -292,17 +368,21 @@ export function SearchInterface({
                 <CardContent className="p-4">
                   <div className="flex items-start justify-between mb-2 gap-2">
                     <h4 className="font-medium text-lg break-all">
-                      {isHttpUrl(result.url) ? (
+                      <Link
+                        to={fileViewerPath(repositoryId, result.file_path, result.line_start, result.line_end)}
+                        className="text-blue-600 hover:underline"
+                      >
+                        {result.entity_name}
+                      </Link>
+                      {isHttpUrl(result.url) && (
                         <a
                           href={result.url}
                           target="_blank"
                           rel="noopener noreferrer"
-                          className="text-blue-600 hover:underline"
+                          className="ml-2 text-xs font-normal text-muted-foreground hover:underline"
                         >
-                          {result.entity_name}
+                          source ↗
                         </a>
-                      ) : (
-                        result.entity_name
                       )}
                     </h4>
                     {result.entity_type && (

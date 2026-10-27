@@ -395,6 +395,29 @@ async def test_typescript_type_annotations():
     assert [e.name for e in entities if e.entity_type == "import"] == ["import { X } from 'x';"]
 
 
+async def test_typescript_wrapped_functions_types_and_enums():
+    # zustand's createStore is `((createState) => ...) as CreateStore`; the wrapper hid it
+    source = textwrap.dedent(
+        '''\
+        export type StateCreator<T> = (set: (s: T) => void) => T
+        export enum Mode { A, B }
+        export const createStore = ((createState) => createState) as CreateStore
+        const checked = ((x: number) => x) satisfies Fn
+        const forced = (function named() {})!
+        const asserted = <Fn>(() => 1)
+        '''
+    )
+    entities = await parse(source, "typescript")
+    classes = by_name(entities, "class")
+    functions = by_name(entities, "function")
+
+    assert classes["StateCreator"].description == "TypeScript type: StateCreator"
+    assert classes["Mode"].description == "TypeScript enum: Mode"
+    assert set(functions) == {"createStore", "checked", "forced", "asserted"}
+    assert (functions["createStore"].line_start, functions["createStore"].line_end) == (3, 3)
+    assert functions["createStore"].parameters == ["createState"]
+
+
 async def test_tsx_files_parse_jsx():
     source = "export function App() {\n  return <div>hi</div>;\n}\n"
     entities = await CodeParser().extract_entities("src/App.tsx", source, "typescript")

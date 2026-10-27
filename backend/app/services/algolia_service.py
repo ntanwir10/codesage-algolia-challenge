@@ -20,6 +20,7 @@ from algoliasearch.search_client import SearchClient
 
 from app.core.config import get_settings
 from app.services.code_parser import ParsedCodeEntity
+from app.services.github_service import is_test_path
 
 logger = structlog.get_logger()
 settings = get_settings()
@@ -69,7 +70,10 @@ INDEX_SETTINGS = {
         "language",
         "file_path",
     ],
-    "customRanking": ["desc(rank_weight)"],
+    # getUserById also matches "user" and "ById"
+    "camelCaseAttributes": ["entity_name"],
+    # Among equally relevant hits, the code under test before its tests
+    "customRanking": ["asc(is_test)", "desc(rank_weight)"],
     "highlightPreTag": "<mark>",
     "highlightPostTag": "</mark>",
     "hitsPerPage": 20,
@@ -248,6 +252,7 @@ class AlgoliaService:
             "signature": signature,
             "content": content,
             "rank_weight": RANK_WEIGHTS.get(entity.entity_type, 0),
+            "is_test": is_test_path(file_path),
             "parameter_count": len(entity.parameters) if entity.parameters else 0,
             "lines_of_code": max(entity.line_end - entity.line_start + 1, 1),
         })
@@ -287,8 +292,10 @@ class AlgoliaService:
             filters.append(f'language:"{self._escape_filter_value(language)}"')
         if entity_type:
             filters.append(f'entity_type:"{self._escape_filter_value(entity_type)}"')
-        if filters:
-            search_params["filters"] = " AND ".join(filters)
+        else:
+            # Import lines repeat every name they import and crowd out the definitions
+            filters.append('NOT entity_type:"import"')
+        search_params["filters"] = " AND ".join(filters)
 
         results = await asyncio.to_thread(self.index.search, query, search_params)
         logger.info(

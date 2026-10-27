@@ -1,4 +1,4 @@
-import { useEffect, useId } from "react";
+import { useEffect, useId, useRef } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 
@@ -26,11 +26,33 @@ export function DeleteConfirmationDialog({
   variant = "danger",
 }: DeleteConfirmationDialogProps) {
   const titleId = useId();
+  const dialogRef = useRef<HTMLDivElement>(null);
+
+  // Focus Cancel, and give focus back to whatever opened the dialog once it closes.
+  // Not autoFocus: that runs first, so the opener would read as Cancel
+  useEffect(() => {
+    if (!isOpen) return;
+    const opener = document.activeElement as HTMLElement | null;
+    dialogRef.current?.querySelector("button")?.focus();
+    return () => opener?.focus();
+  }, [isOpen]);
 
   useEffect(() => {
     if (!isOpen) return;
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.key === "Escape" && !isDeleting) onClose();
+      if (e.key !== "Tab" || !dialogRef.current) return;
+      // A modal keeps Tab inside: wrap between its first and last enabled button
+      const buttons = dialogRef.current.querySelectorAll<HTMLElement>("button:not(:disabled)");
+      const first = buttons[0];
+      const last = buttons[buttons.length - 1];
+      const inside = dialogRef.current.contains(document.activeElement);
+      if (!first) {
+        e.preventDefault();
+      } else if (!inside || document.activeElement === (e.shiftKey ? first : last)) {
+        e.preventDefault();
+        (e.shiftKey ? last : first).focus();
+      }
     };
     document.addEventListener("keydown", onKeyDown);
     return () => document.removeEventListener("keydown", onKeyDown);
@@ -65,7 +87,9 @@ export function DeleteConfirmationDialog({
       onClick={handleBackdropClick}
     >
       <Card
+        ref={dialogRef}
         role="dialog"
+        aria-modal="true"
         aria-labelledby={titleId}
         className="w-full max-w-md mx-auto"
       >
@@ -84,7 +108,6 @@ export function DeleteConfirmationDialog({
             <Button
               variant="outline"
               onClick={onClose}
-              autoFocus
               disabled={isDeleting}
               className="min-w-20"
             >

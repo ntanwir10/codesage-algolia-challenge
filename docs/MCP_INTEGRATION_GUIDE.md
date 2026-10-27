@@ -139,7 +139,7 @@ Lists indexed repositories with `id`, `name`, `url`, `branch`, `status`, `total_
 
 ### `search_code`
 
-Full-text search over functions, classes, imports, doc sections and Terraform blocks. Each result has the entity name and type, file path, line range, language, a signature, a snippet and a source link.
+Full-text search over functions, classes (including interfaces, type aliases and enums), doc sections and Terraform blocks. Imports are searched only when `entity_type` is `"import"`. The query is at most 512 bytes. Each result has the entity name and type, file path, line range, language, a signature, a snippet and a source link.
 
 | Argument | Type | Default | Notes |
 | --- | --- | --- | --- |
@@ -151,7 +151,7 @@ Full-text search over functions, classes, imports, doc sections and Terraform bl
 | `page` | integer >= 0 | 0 | Zero-based |
 
 - **Plain-words queries.** If no result matches every word, Algolia drops the words that miss, ignores stop words and plurals, and returns the best partial matches. A question works as a query.
-- **Source links.** GitHub gets `#L<start>-L<end>`, GitLab `/-/blob/...#L<start>-<end>` and Bitbucket `/src/...#lines-<start>:<end>`. GitLab links go to gitlab.com and to any host whose name starts with `gitlab.`; Bitbucket links only to bitbucket.org. A repository on any other host has no link.
+- **Source links.** Links point at the commit that was indexed (`list_repositories` reports it as `commit_sha`), so their line numbers stay right after the branch moves on. A repository indexed before commits were recorded links to its branch until it is reprocessed. GitHub gets `#L<start>-L<end>`, GitLab `/-/blob/...#L<start>-<end>` and Bitbucket `/src/...#lines-<start>:<end>`. GitLab links go to gitlab.com and to any host whose name starts with `gitlab.`; Bitbucket links only to bitbucket.org. A repository on any other host has no link.
 - **Truncation.** Snippets are cut at 600 characters, and signatures and descriptions at 300.
 - **Errors.** A repository that is `failed`, `pending` or `processing` is refused, as for every tool. If Algolia isn't configured, the error says `ALGOLIA_APP_ID` and `ALGOLIA_ADMIN_API_KEY` are missing. Any other Algolia failure becomes the generic "Search is unavailable; try again later." The detail is logged on the backend only, because it can name the Algolia host or app ID.
 
@@ -288,7 +288,7 @@ curl -X POST http://127.0.0.1:8001/api/v1/ai/mcp/tools/call \
 | No answer in 30 s | `CodeSage backend did not answer within 30 s.` |
 | Other transport error | `CodeSage backend request failed: <type>: <message>` |
 | 401 with a Basic `WWW-Authenticate` | `The proxy in front of CodeSage rejected the login (401)...` |
-| 401, no key configured | `No API key is configured; set CODESAGE_API_KEY in the MCP server's env in the Claude Desktop config.` |
+| 401, no key configured | `No API key is configured; set CODESAGE_API_KEY in the MCP server's env in your MCP client's config (for Claude Desktop, run `make install-claude`).` For a local backend the launcher reads the key from `backend/.env` when the config leaves it empty, so this means that file has no key either |
 | 401, key sent | `CodeSage backend rejected the API key (401); check CODESAGE_API_KEY in the MCP server config` |
 | 403 | `CodeSage refused the request (403): <detail>. If the backend runs on another host, add that host to ALLOWED_HOSTS on the backend and check MCP_SERVER_URL.` |
 | 404 | `The backend returned 404 for <path>; check that MCP_SERVER_URL points at the backend root (no /api/v1).` Unknown tool names never get this far: the bridge answers `Unknown tool '<name>'. Available tools: ...` itself |

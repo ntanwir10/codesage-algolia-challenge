@@ -86,7 +86,7 @@ async def test_list_repositories(db_session, repo):
     result = await call_tool(db_session, "list_repositories", {})
     [row] = result["repositories"]
     assert row["id"] == repo.id and row["total_entities"] == 2 and row["total_files"] == 2
-    assert row["processed_at"].startswith("2026-01-02")
+    assert row["processed_at"].startswith("2026-01-02") and row["processed_at"].endswith("+00:00")
     assert row["error_message"] is None and row["branch"] == "main"
 
 
@@ -119,8 +119,25 @@ async def test_search_permalink_and_snippet(db_session, repo, algolia_index):
     [hit] = result["results"]
     assert hit["url"] == "https://github.com/pmndrs/zustand/blob/main/src/vanilla.ts#L5-L20"
     assert len(hit["snippet"]) == 600
-    assert seen[-1]["filters"] == f"repository_id={repo.id}"
+    assert seen[-1]["filters"] == f'repository_id={repo.id} AND NOT entity_type:"import"'
     assert seen[-1]["hitsPerPage"] == 10
+
+
+async def test_permalinks_use_the_indexed_commit(db_session, repo, algolia_index):
+    repo.commit_sha = "c0ffee"
+    db_session.commit()
+    algolia_index.search = lambda q, params: {"hits": [{**HIT, "repository_id": repo.id}], "nbHits": 1}
+
+    result = await call_tool(db_session, "search_code", {"query": "create", "repository": "pmndrs/zustand"})
+
+    assert result["results"][0]["url"] == "https://github.com/pmndrs/zustand/blob/c0ffee/src/vanilla.ts#L5-L20"
+
+
+async def test_search_query_is_capped_in_bytes(db_session, algolia_index):
+    # Algolia refuses a query over 512 bytes; a 4-byte emoji reaches that at 129 characters
+    with pytest.raises(ValidationError, match="512 bytes"):
+        await call_tool(db_session, "search_code", {"query": "🔍" * 129})
+    assert algolia_index.searches == []
 
 
 async def test_search_all_repos_looks_up_hit_repository(db_session, repo, algolia_index):

@@ -15,6 +15,9 @@ import type {
   SearchQuery,
   SearchResponse,
   SearchSuggestionsResponse,
+  DefinitionsResponse,
+  EntityType,
+  FileContent,
 } from "@/types/mcp";
 
 /**
@@ -211,6 +214,36 @@ export class CodeSageAPI {
     if (query.language) args.language = query.language;
     if (query.entity_type) args.entity_type = query.entity_type;
     return this.callTool<SearchResponse>("search_code", args);
+  }
+
+  /** A window of a file's lines (get_file returns at most 400 per call). */
+  async getFile(
+    repositoryId: number,
+    path: string,
+    startLine: number,
+    endLine: number
+  ): Promise<FileContent> {
+    return this.callTool<FileContent>("get_file", {
+      repository: String(repositoryId),
+      path,
+      start_line: startLine,
+      end_line: endLine,
+    });
+  }
+
+  async listDefinitions(
+    repositoryId: number,
+    filters: { name?: string; entity_type?: EntityType; path_prefix?: string; limit?: number } = {}
+  ): Promise<DefinitionsResponse> {
+    // Unknown or empty keys are left out: the server rejects unknown ones with 422
+    const args: Record<string, unknown> = {
+      repository: String(repositoryId),
+      limit: filters.limit ?? 100,
+    };
+    if (filters.name) args.name = filters.name;
+    if (filters.entity_type) args.entity_type = filters.entity_type;
+    if (filters.path_prefix) args.path_prefix = filters.path_prefix;
+    return this.callTool<DefinitionsResponse>("list_definitions", args);
   }
 
   async getSearchSuggestions(

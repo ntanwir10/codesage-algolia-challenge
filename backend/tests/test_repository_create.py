@@ -2,6 +2,7 @@
 
 import asyncio
 import time
+from datetime import datetime
 
 import pytest
 from aiohttp import web
@@ -307,6 +308,18 @@ def test_process_marks_the_repository_processing_before_returning(client, db_ses
     status = client.get(f"{API}/{repo.id}/status").json()
     assert status["status"] == "processing"
     assert status["error_message"] is None
+
+
+def test_timestamps_carry_their_utc_offset(client, db_session):
+    # SQLite hands back naive datetimes; without an offset a browser reads UTC as local time
+    repo = Repository(name="t", url=URL, status="completed", processed_at=datetime(2026, 1, 2, 3, 4, 5))
+    db_session.add(repo)
+    db_session.commit()
+
+    body = client.get(f"{API}/{repo.id}").json()
+
+    assert body["processed_at"] == "2026-01-02T03:04:05Z"
+    assert body["created_at"].endswith("Z")
 
 
 def test_status_reports_the_failure_reason(client, db_session):

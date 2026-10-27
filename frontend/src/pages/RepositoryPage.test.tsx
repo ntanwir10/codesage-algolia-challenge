@@ -45,13 +45,6 @@ function renderPage(
   const get = vi.spyOn(api, "getRepository");
   if (loadError) get.mockRejectedValue(loadError);
   else get.mockResolvedValue(repo);
-  vi.spyOn(api, "getRepositoryStatus").mockResolvedValue({
-    repository_id: repo.id,
-    status: repo.status,
-    processed_files: repo.processed_files,
-    total_files: repo.total_files,
-    progress: 100,
-  });
   vi.spyOn(api, "getRepositoryStats").mockReturnValue(new Promise(() => {}));
   client ??= new QueryClient({ defaultOptions: { queries: { retry: false } } });
   render(
@@ -87,6 +80,11 @@ describe("RepositoryPage completion card", () => {
   it("labels the source link by host", async () => {
     renderPage(repository);
     expect(await screen.findByRole("link", { name: "View on GitHub →" })).toBeInTheDocument();
+  });
+
+  it("shows progress from the repository the WebSocket keeps patched", async () => {
+    renderPage({ ...repository, status: "processing", processed_files: 200, total_files: 500 });
+    expect(await screen.findByText("200 / 500 files")).toBeInTheDocument();
   });
 
   it("says View source for a non-GitHub host", async () => {
@@ -132,18 +130,11 @@ describe("RepositoryPage error states", () => {
       renderPage({ ...repository, status: "processing" });
       expect(await screen.findByText("Processing Status")).toBeInTheDocument();
       vi.mocked(api.getRepository).mockRejectedValue(httpError(404, "gone"));
-      vi.mocked(api.getRepositoryStatus).mockRejectedValue(httpError(404, "gone"));
       await vi.advanceTimersByTimeAsync(3100);
       expect(await screen.findByText("Repository not found")).toBeInTheDocument();
-      const calls = [
-        vi.mocked(api.getRepository).mock.calls.length,
-        vi.mocked(api.getRepositoryStatus).mock.calls.length,
-      ];
+      const calls = vi.mocked(api.getRepository).mock.calls.length;
       await vi.advanceTimersByTimeAsync(10000);
-      expect([
-        vi.mocked(api.getRepository).mock.calls.length,
-        vi.mocked(api.getRepositoryStatus).mock.calls.length,
-      ]).toEqual(calls);
+      expect(vi.mocked(api.getRepository).mock.calls.length).toEqual(calls);
     } finally {
       vi.useRealTimers();
     }
