@@ -33,7 +33,7 @@ export function Layout({ children }: LayoutProps) {
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div className="flex flex-wrap items-center gap-x-8 gap-y-2">
               <Link to="/" className="flex items-center gap-2">
-                <span className="text-2xl">🧠</span>
+                <img src="/favicon.svg" alt="" className="h-8 w-8" />
                 <div>
                   <h1 className="text-2xl font-bold text-foreground">
                     CodeSage
