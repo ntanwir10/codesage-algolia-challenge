@@ -46,9 +46,8 @@ export function HomePage() {
             Discover Code with AI
           </h2>
           <p className="text-xl text-muted-foreground max-w-2xl mx-auto">
-            Add a GitHub repository and ask natural language questions
-            about your code. Powered by Algolia search and MCP server
-            integration.
+            Add a GitHub repository, search its code here, and let Claude
+            answer questions about it through MCP. Powered by Algolia search.
           </p>
         </div>
 
@@ -85,9 +84,9 @@ export function HomePage() {
               <div className="w-8 h-8 bg-primary text-primary-foreground rounded-full flex items-center justify-center mx-auto font-bold">
                 3
               </div>
-              <h4 className="font-medium">Ask Questions</h4>
+              <h4 className="font-medium">Search and Ask Claude</h4>
               <p className="text-sm text-muted-foreground">
-                Use natural language to explore and understand your codebase
+                Search definitions here, or ask Claude about the code
               </p>
             </div>
           </div>
@@ -98,8 +97,9 @@ export function HomePage() {
           <div className="bg-card border rounded-lg p-6">
             <h3 className="text-lg font-semibold mb-2">🔍 Smart Search</h3>
             <p className="text-muted-foreground">
-              Ask questions like "How does authentication work?" or "Find all
-              API endpoints" and get contextual answers from your codebase.
+              Search names like "authMiddleware" or "createStore", including
+              part of a camelCase name. Ask Claude "How does authentication
+              work?" and it searches the index for you.
             </p>
           </div>
           <div className="bg-card border rounded-lg p-6">

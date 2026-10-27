@@ -3,7 +3,6 @@ import { MCPToolError } from "@/lib/errors";
 import type {
   Repository,
   CreateRepositoryRequest,
-  RepositoryUpdate,
   ProcessingStatus,
   RepositoryStatsData,
   ReprocessResponse,
@@ -11,7 +10,6 @@ import type {
 import type {
   MCPToolCallRequest,
   MCPToolCallResponse,
-  MCPToolsResponse,
   SearchQuery,
   SearchResponse,
   SearchSuggestionsResponse,
@@ -129,17 +127,6 @@ export class CodeSageAPI {
     return response.data;
   }
 
-  async updateRepository(
-    id: number,
-    data: RepositoryUpdate
-  ): Promise<Repository> {
-    const response = await this.client.put<Repository>(
-      `/repositories/${id}`,
-      data
-    );
-    return response.data;
-  }
-
   async deleteRepository(id: number): Promise<void> {
     await this.client.delete(`/repositories/${id}`);
   }
@@ -169,11 +156,6 @@ export class CodeSageAPI {
   }
 
   // MCP over HTTP
-  async getMCPTools(): Promise<MCPToolsResponse> {
-    const response = await this.client.get<MCPToolsResponse>("/ai/mcp/tools");
-    return response.data;
-  }
-
   /** Returns the raw envelope; check `is_error` or use callTool(). */
   async callMCPTool<T = unknown>(
     toolName: string,

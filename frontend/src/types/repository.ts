@@ -35,14 +35,6 @@ export interface CreateRepositoryRequest {
 }
 
 /** `status` and `url` are no longer accepted by the server. */
-export interface RepositoryUpdate {
-  name?: string;
-  description?: string;
-  branch?: string;
-  language?: string;
-  framework?: string;
-}
-
 export interface ProcessingStatus {
   repository_id: number;
   status: RepositoryStatus;

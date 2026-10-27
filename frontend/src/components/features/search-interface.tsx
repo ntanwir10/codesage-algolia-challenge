@@ -417,7 +417,7 @@ export function SearchInterface({
 
                     {result.snippet && (
                       <div className="mt-2 p-2 bg-gray-50 rounded text-xs font-mono overflow-x-auto">
-                        <pre className="whitespace-pre-wrap">
+                        <pre className="whitespace-pre">
                           {result.snippet}
                         </pre>
                       </div>

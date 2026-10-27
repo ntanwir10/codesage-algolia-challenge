@@ -237,6 +237,13 @@ describe("WebSocketService", () => {
     last().open();
     last().drop(1008);
     expect(onAuthError).toHaveBeenCalledTimes(1);
+    // Tab focus or another page's subscription doesn't retry a key that can't work
+    const sockets = FakeWebSocket.instances.length;
+    document.dispatchEvent(new Event("visibilitychange"));
+    service.onRepositoryUpdate(5, () => {});
+    expect(FakeWebSocket.instances).toHaveLength(sockets);
+    service.reconnect(); // the manual Reconnect still tries
+    expect(FakeWebSocket.instances).toHaveLength(sockets + 1);
     off();
   });
 

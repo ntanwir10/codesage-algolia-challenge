@@ -19,10 +19,12 @@ import {
 function parseRepo(input: string): string | null {
   const path = input
     .trim()
+    .replace(/^git@github\.com:/i, "")
     .replace(/^(https?:\/\/)?(www\.)?(github\.com\/)?/i, "")
     .replace(/\/+$/, "")
     .replace(/\.git$/, "");
-  return /^[\w.-]+\/[\w.-]+$/.test(path) ? path : null;
+  // owner/repo, optionally with /tree/<branch>: the server reads the branch from the URL
+  return /^[\w.-]+\/[\w.-]+(\/tree\/[^\s]+)?$/.test(path) ? path : null;
 }
 
 // Validation schema: submits the normalised full URL.

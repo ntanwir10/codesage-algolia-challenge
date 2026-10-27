@@ -82,9 +82,12 @@ export function DashboardPage() {
       });
 
       addToast({ type: "success", title: "Repository deleted" });
-      queryClient.removeQueries({
-        queryKey: ["repository", deleteDialog.repository.id],
-      });
+      const deletedId = deleteDialog.repository.id;
+      queryClient.removeQueries({ queryKey: ["repository", deletedId] });
+      // Drop it now, so the card doesn't come back until the refetch lands
+      queryClient.setQueryData<Repository[]>(["repositories"], (old) =>
+        old?.filter((repo) => repo.id !== deletedId)
+      );
       refetch();
     } catch (error) {
       const { message, status } = describeError(error);
@@ -170,12 +173,12 @@ export function DashboardPage() {
               Manage and explore your code repositories with real-time updates
             </p>
           </div>
-          <Link to="/">
-            <Button className="gap-2 whitespace-nowrap">
+          <Button asChild className="gap-2 whitespace-nowrap">
+            <Link to="/">
               <span>+</span>
               Add Repository
-            </Button>
-          </Link>
+            </Link>
+          </Button>
         </div>
 
         {error && (
@@ -310,17 +313,17 @@ export function DashboardPage() {
                     <div className="flex flex-wrap items-center gap-3">
                       <StatusBadge status={repo.status} />
                       <div className="flex items-center gap-2">
-                        <Link to={`/repository/${repo.id}`}>
-                          <Button variant="outline" size="sm" className="whitespace-nowrap">
-                            View Details
-                          </Button>
-                        </Link>
+                        <Button asChild variant="outline" size="sm" className="whitespace-nowrap">
+                          <Link to={`/repository/${repo.id}`}>View Details</Link>
+                        </Button>
                         <Button
                           variant="outline"
                           size="sm"
                           onClick={() => handleDeleteClick(repo)}
+                          // The server refuses (409) while a run holds the repository
+                          disabled={isActiveStatus(repo.status)}
                           className="text-red-600 hover:text-red-700 hover:bg-red-50"
-                          title="Delete repository"
+                          title={isActiveStatus(repo.status) ? "Can't delete while processing" : "Delete repository"}
                           aria-label={`Delete ${repo.name}`}
                         >
                           <span className="text-sm">🗑️</span>

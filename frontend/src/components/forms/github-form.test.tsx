@@ -134,6 +134,16 @@ describe("GitHubForm", () => {
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 
+  it.each([
+    ["https://github.com/owner/repo/tree/feature/x", "https://github.com/owner/repo/tree/feature/x"],
+    ["git@github.com:owner/repo.git", "https://github.com/owner/repo"],
+  ])("accepts %s, which the server also understands", async (input, sent) => {
+    const onSubmit = vi.fn().mockResolvedValue(undefined);
+    renderForm(onSubmit);
+    await submitValid(input);
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ url: sent })));
+  });
+
   it("accepts a URL with trailing whitespace", async () => {
     const onSubmit = vi.fn().mockResolvedValue(undefined);
     renderForm(onSubmit);
