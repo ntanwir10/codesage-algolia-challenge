@@ -80,6 +80,28 @@ describe("GitHubForm", () => {
     expect(urlInput()).toHaveValue(SHORT);
   });
 
+  it("keeps a duplicate under the URL even when the repository is named 'branch'", async () => {
+    renderForm(
+      vi.fn().mockRejectedValue(
+        axiosErr(409, { detail: "owner/branch has already been added.", repository_id: 7 })
+      )
+    );
+    await submitValid("owner/branch");
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveAttribute("id", "url-server-error");
+    expect(screen.getByRole("link", { name: /open it/i })).toBeInTheDocument();
+  });
+
+  it("puts a 422 on the branch field under Branch", async () => {
+    renderForm(
+      vi.fn().mockRejectedValue(
+        axiosErr(422, { detail: [{ loc: ["body", "branch"], msg: "String should have at most 100 characters" }] })
+      )
+    );
+    await submitValid();
+    expect(await screen.findByRole("alert")).toHaveAttribute("id", "branch-error");
+  });
+
   it("shows a branch error under the Branch field, not the URL", async () => {
     const msg = "Branch 'dev' does not exist in owner/repo.";
     renderForm(vi.fn().mockRejectedValue(axiosErr(422, { detail: msg })));
@@ -137,6 +159,8 @@ describe("GitHubForm", () => {
   it.each([
     ["https://github.com/owner/repo/tree/feature/x", "https://github.com/owner/repo/tree/feature/x"],
     ["git@github.com:owner/repo.git", "https://github.com/owner/repo"],
+    // A branch may end in .git; only the repository's clone suffix goes
+    ["github.com/owner/repo.git/tree/release.git", "https://github.com/owner/repo/tree/release.git"],
   ])("accepts %s, which the server also understands", async (input, sent) => {
     const onSubmit = vi.fn().mockResolvedValue(undefined);
     renderForm(onSubmit);

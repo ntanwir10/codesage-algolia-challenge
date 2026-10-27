@@ -13,12 +13,14 @@ import { useQueryClient } from "@tanstack/react-query";
 import { useToast } from "@/components/ui/toast";
 import { useRealtimeStatus } from "@/hooks/useRealtimeStatus";
 import { describeError } from "@/lib/errors";
-import { isActiveStatus, pollWhileAnyActive, progressStage } from "@/lib/polling";
+import { isActiveStatus, POLL_INTERVAL_MS, pollWhileAnyActive, progressStage } from "@/lib/polling";
 import { isHttpUrl, sourceLabel } from "@/lib/utils";
 import type { Repository } from "@/types/repository";
 
 // The most the list endpoint returns in one request
 const MAX_LISTED = 500;
+// The most repositories one WebSocket may subscribe to (MAX_SUBSCRIPTIONS_PER_CONNECTION on the server)
+const MAX_SUBSCRIPTIONS = 100;
 
 export function DashboardPage() {
   const { addToast } = useToast();
@@ -43,7 +45,12 @@ export function DashboardPage() {
     // The server's largest page; a note below says when there may be more
     queryFn: () => api.getRepositories({ limit: MAX_LISTED }),
     // Poll every ~3s while any repository is pending/processing.
-    refetchInterval: (query) => pollWhileAnyActive(query.state.data),
+    refetchInterval: (query) => {
+      const data = query.state.data;
+      // Past the subscription cap some active repositories get no pushed updates: poll fast for them
+      const active = data?.filter((r) => isActiveStatus(r.status)).length ?? 0;
+      return active > MAX_SUBSCRIPTIONS ? POLL_INTERVAL_MS : pollWhileAnyActive(data);
+    },
     // Pick up repos added in another tab or via Claude (global default is 5 min).
     staleTime: 30_000,
   });
@@ -53,7 +60,11 @@ export function DashboardPage() {
   // Live updates for repositories still being processed.
   // Completion toasts are handled globally in Layout.
   const activeIds = useMemo(
-    () => repositories.filter((r) => isActiveStatus(r.status)).map((r) => r.id),
+    () =>
+      repositories
+        .filter((r) => isActiveStatus(r.status))
+        .map((r) => r.id)
+        .slice(0, MAX_SUBSCRIPTIONS),
     [repositories]
   );
   const { connectionStatus } = useRealtimeStatus({ repositoryIds: activeIds });

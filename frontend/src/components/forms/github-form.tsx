@@ -22,7 +22,8 @@ function parseRepo(input: string): string | null {
     .replace(/^git@github\.com:/i, "")
     .replace(/^(https?:\/\/)?(www\.)?(github\.com\/)?/i, "")
     .replace(/\/+$/, "")
-    .replace(/\.git$/, "");
+    // Only the repository's clone suffix: a branch in /tree/ may itself end in ".git"
+    .replace(/^([\w.-]+\/[\w.-]+?)\.git(?=\/tree\/|$)/, "$1");
   // owner/repo, optionally with /tree/<branch>: the server reads the branch from the URL
   return /^[\w.-]+\/[\w.-]+(\/tree\/[^\s]+)?$/.test(path) ? path : null;
 }
@@ -95,9 +96,16 @@ export function GitHubForm({ onSubmit, isLoading = false }: GitHubFormProps) {
         const id = error.response.data?.repository_id;
         if (typeof id === "number") setExistingId(id);
       }
-      const { message } = describeError(error);
-      // A missing or invalid branch belongs under the Branch field, not the URL
-      if (/\bbranch\b/i.test(message)) setError("branch", { type: "server", message });
+      const { message, status } = describeError(error);
+      // A missing or invalid branch belongs under the Branch field, not the URL: a 422 on the
+      // branch field, or the server's branch messages. Never a 409, whose text names the repository
+      const detail = isAxiosError(error) ? error.response?.data?.detail : undefined;
+      const branchField =
+        Array.isArray(detail) &&
+        detail.some((d: { loc?: unknown }) => Array.isArray(d?.loc) && d.loc.includes("branch"));
+      const branchError =
+        status !== 409 && (branchField || /^Branch '|invalid branch|branch name/i.test(message));
+      if (branchError) setError("branch", { type: "server", message });
       else setError("root.server", { message });
     }
   };
