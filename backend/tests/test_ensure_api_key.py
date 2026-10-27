@@ -49,6 +49,33 @@ def test_generates_when_missing_or_empty(envs, line, capsys):
     assert "make install-claude" in out
 
 
+@pytest.mark.parametrize(
+    "line",
+    [
+        "CODESAGE_API_KEY=your-api-key-here",
+        'CODESAGE_API_KEY="your-codesage-key-here"',
+        "export CODESAGE_API_KEY=your-key-here  # from the old example",
+    ],
+)
+def test_placeholder_is_replaced(envs, line, capsys):
+    b, f = envs
+    b.write_text(f"A=1\n{line}\nB=2\n")
+    assert run(envs) == 0
+    key = key_of(b)
+    assert key and len(key) >= 32
+    assert b.read_text().count("CODESAGE_API_KEY") == 1
+    assert "A=1" in b.read_text() and "B=2" in b.read_text()
+    assert key_of(f, "VITE_CODESAGE_API_KEY") == key
+    assert "Generated a CodeSage API key in backend/.env" in capsys.readouterr().out
+
+
+def test_key_that_only_mentions_placeholder_words_is_kept(envs):
+    b, _ = envs
+    b.write_text("CODESAGE_API_KEY=your-real-key-here-not\n")
+    run(envs)
+    assert key_of(b) == "your-real-key-here-not"
+
+
 def test_existing_key_kept_and_rerun_is_silent(envs, capsys):
     b, f = envs
     b.write_text("CODESAGE_API_KEY=keep-me\n")

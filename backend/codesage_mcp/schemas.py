@@ -98,8 +98,9 @@ TOOLS: dict[str, ToolSpec] = {
         ToolSpec(
             name="search_code",
             description=(
-                "Full-text search over indexed functions, classes, imports and doc sections. "
-                "Returns ranked hits with file locations, snippets and GitHub links."
+                "Full-text search over indexed functions, classes, imports, doc sections and "
+                "Terraform blocks. Returns ranked hits with file locations, snippets and links to "
+                "the source on GitHub, GitLab or Bitbucket."
             ),
             args_model=SearchCodeArgs,
         ),
@@ -110,7 +111,10 @@ TOOLS: dict[str, ToolSpec] = {
         ),
         ToolSpec(
             name="list_definitions",
-            description="List functions, classes, imports and doc sections defined in a repository, ordered by file and line.",
+            description=(
+                "List functions, classes, imports, doc sections and Terraform blocks defined in a "
+                "repository, ordered by file and line."
+            ),
             args_model=ListDefinitionsArgs,
         ),
         ToolSpec(

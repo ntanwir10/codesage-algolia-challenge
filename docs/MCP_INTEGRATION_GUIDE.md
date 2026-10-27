@@ -1,6 +1,6 @@
 # MCP integration guide
 
-How to connect Claude Desktop (or any MCP client) to CodeSage: the installer, the stdio bridge's settings, the seven tools and two resources it serves, the backend endpoints behind them, and what to do when a call fails. For the end-to-end picture, including the tool-call sequence diagram, see the [root README](../README.md#using-it-from-claude-desktop).
+How to connect Claude Desktop (or any MCP client) to CodeSage: the installer, the stdio bridge's settings, the seven tools and the resources it serves, the backend endpoints behind them, and what to do when a call fails. For the end-to-end picture, including the tool-call sequence diagram, see the [root README](../README.md#using-it-from-claude-desktop).
 
 ## Contents
 
@@ -28,14 +28,14 @@ Claude Desktop starts `mcp_launcher.sh`. The launcher runs `python -m codesage_m
 ## Prerequisites
 
 - **Virtualenv.** `.venv` exists at the repo root (`make setup`).
-- **Backend config.** `backend/.env` has your Algolia credentials, and `CODESAGE_API_KEY`, which `make setup`, `make start` and `make install-claude` generate if it is missing (and copy to `frontend/.env`). To rotate it, delete the line, run `make setup` and `make install-claude`, then restart Claude Desktop. Empty values and leftover `your-...-here` placeholders count as unset, and search then fails with a clear message.
+- **Backend config.** `backend/.env` has your Algolia credentials, and `CODESAGE_API_KEY`, which `make setup`, `make start` and `make install-claude` generate if it is missing (and copy to `frontend/.env`). To rotate it, delete the line, run `make setup` and `make install-claude`, then restart Claude Desktop. Those targets also replace a leftover `your-...-here` key, but the backend itself uses such a key as is. For `ALGOLIA_APP_ID`, `ALGOLIA_ADMIN_API_KEY` and `GITHUB_TOKEN`, an empty value or a `your-...-here` placeholder counts as unset; without Algolia, search fails with a clear message.
 - **Backend running.** `make start-backend`, with at least one repository in status `completed`. Every tool refuses a repository that is `failed`, `pending` or `processing`.
 
 ## Install into Claude Desktop
 
 ```bash
 make install-claude                 # merge CodeSage into the Claude Desktop config
-make install-claude ARGS=--dry-run  # print the merged config with the key masked; write nothing
+make install-claude ARGS=--dry-run  # print the merged config with the key masked; the Claude config is not written
 ```
 
 `make install-claude` runs `.venv/bin/python scripts/install_claude_desktop.py $(ARGS)`. It uses only the standard library.
@@ -49,7 +49,7 @@ make install-claude ARGS=--dry-run  # print the merged config with the key maske
 | `--server-url URL` | `MCP_SERVER_URL` from your shell, else `http://127.0.0.1:8001` | Backend base URL. Must be an `http(s)` URL with a host. A URL containing a password is refused |
 | `--api-key KEY` | `CODESAGE_API_KEY` from `backend/.env` | Written into the config's `env` block |
 | `--basic-auth USER` | unset | For the prod stack behind nginx. Prompts for the password and stores it in the macOS Keychain (service `codesage-mcp`). No API key is written |
-| `--dry-run` | off | Print the merged config (`CODESAGE_API_KEY` shown as `********`) and write nothing |
+| `--dry-run` | off | Print the merged config (`CODESAGE_API_KEY` shown as `********`) and don't write the Claude Desktop config. `make install-claude` still runs `scripts/ensure_api_key.py` first, so a missing key is generated in `backend/.env` and copied to `frontend/.env` even on a dry run |
 
 ```bash
 make install-claude ARGS="--server-url https://your-host --basic-auth alice"  # prod behind nginx
@@ -151,7 +151,7 @@ Full-text search over functions, classes, imports, doc sections and Terraform bl
 | `page` | integer >= 0 | 0 | Zero-based |
 
 - **Plain-words queries.** If no result matches every word, Algolia drops the words that miss, ignores stop words and plurals, and returns the best partial matches. A question works as a query.
-- **Source links.** GitHub gets `#L<start>-L<end>`, GitLab `/-/blob/...#L<start>-<end>` and Bitbucket `/src/...#lines-<start>:<end>`. A repository on any other host has no link.
+- **Source links.** GitHub gets `#L<start>-L<end>`, GitLab `/-/blob/...#L<start>-<end>` and Bitbucket `/src/...#lines-<start>:<end>`. GitLab links go to gitlab.com and to any host whose name starts with `gitlab.`; Bitbucket links only to bitbucket.org. A repository on any other host has no link.
 - **Truncation.** Snippets are cut at 600 characters, and signatures and descriptions at 300.
 - **Errors.** A repository that is `failed`, `pending` or `processing` is refused, as for every tool. If Algolia isn't configured, the error says `ALGOLIA_APP_ID` and `ALGOLIA_ADMIN_API_KEY` are missing. Any other Algolia failure becomes the generic "Search is unavailable; try again later." The detail is logged on the backend only, because it can name the Algolia host or app ID.
 
@@ -222,7 +222,7 @@ Adds a repository and starts indexing it. It returns `repository_id`, `name`, `s
 
 - **Same checks as the dashboard.** A duplicate URL (case-insensitive), a missing Algolia setup, and a missing repository or branch are refused before anything is created.
 - **Needs the API key,** like every tool call, and counts toward the 30 per minute limit.
-- **Errors.** A bad URL gives a message that starts with `url:` and says why (only https, no credentials or port, no `localhost` or private IP address). A duplicate gives "<name> is already added as repository <id>." Other refusals use the messages below.
+- **Errors.** A bad URL gives a message that starts with `url:` and says why (a scheme other than https, credentials or a port, `localhost` or a private IP address). `http://` and `git@host:path` URLs are rewritten to `https://` first, so they are accepted. A duplicate gives "<name> is already added as repository <id>." Other refusals use the messages below.
 
 | Message | Cause |
 | --- | --- |
@@ -237,7 +237,7 @@ Adds a repository and starts indexing it. It returns `repository_id`, `name`, `s
 
 Ask Claude: *"Add https://gitlab.com/group/project to CodeSage"*, then *"Search it for where requests are retried"*.
 
-- **Hosts.** GitHub, GitLab (nested groups too), Bitbucket and self-hosted servers, over https. Branch URLs such as `.../-/tree/dev` or Bitbucket's `/src/<branch>` work.
+- **Hosts.** GitHub, GitLab (nested groups too), Bitbucket and self-hosted servers, over https. `http://` and `git@host:path` URLs are rewritten to `https://`. Branch URLs such as `.../-/tree/dev` or Bitbucket's `/src/<branch>` work.
 - **Public only.** Private repositories are refused on every host but github.com, where the backend's `GITHUB_TOKEN` can read them.
 - **How it reads.** For a host other than github.com the backend runs `git ls-remote` (10 s) to check and a shallow `git clone` (120 s) to read. Git runs without a shell, a credential helper or prompts, over https only, and skips symlinks. github.com keeps the REST API path.
 - **Names.** Repositories on other hosts are named `<host>/<path>`, which you can pass as `repository` to the other tools.
@@ -252,7 +252,9 @@ The bridge also answers `resources/list` and `resources/read`. Reading needs the
 | `codesage://repositories` | The same data as `list_repositories` |
 | `codesage://repositories/{id}/files` | `repository`, `total_files`, `truncated`, and `files` with path, language and line count. At most the first 5000 files; `truncated` is true when there are more |
 
-`{id}` is the numeric ID only. An unknown URI or ID is a "Resource not found" error.
+`resources/list` advertises only `codesage://repositories`. The files resource is readable but not listed, so build its URI from an ID that `list_repositories` returns.
+
+`{id}` is the numeric ID only. An unknown URI fails with `Unknown resource '<uri>'` and an unknown ID with `Repository <id> not found`. The bridge prefixes both with `Resource or repository not found: `.
 
 ## HTTP endpoints
 

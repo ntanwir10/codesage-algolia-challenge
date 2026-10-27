@@ -57,6 +57,24 @@ describe("DashboardPage", () => {
     expect(await screen.findByText("Repository not found")).toBeInTheDocument();
   });
 
+  it("labels the source link by host", async () => {
+    vi.spyOn(api, "getRepositories").mockResolvedValue([
+      repository,
+      {
+        ...repository,
+        id: 2,
+        name: "gitlab.com/gitlab-org/gitlab-test",
+        url: "https://gitlab.com/gitlab-org/gitlab-test",
+      },
+    ]);
+    renderPage();
+    const github = await screen.findByRole("link", { name: "View on GitHub →" });
+    expect(github).toHaveAttribute("href", "https://github.com/octo/demo");
+    const other = screen.getByRole("link", { name: "View source →" });
+    expect(other).toHaveAttribute("href", "https://gitlab.com/gitlab-org/gitlab-test");
+    expect(screen.getAllByRole("link", { name: /View on GitHub/ })).toHaveLength(1);
+  });
+
   it("uses the described message when the load fails", async () => {
     vi.spyOn(api, "getRepositories").mockRejectedValue(httpError(400, "Backend exploded"));
     renderPage();

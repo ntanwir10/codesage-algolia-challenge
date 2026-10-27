@@ -14,7 +14,7 @@ import { useToast } from "@/components/ui/toast";
 import { useRealtimeStatus } from "@/hooks/useRealtimeStatus";
 import { describeError } from "@/lib/errors";
 import { isActiveStatus, pollWhileAnyActive } from "@/lib/polling";
-import { isHttpUrl } from "@/lib/utils";
+import { isHttpUrl, sourceLabel } from "@/lib/utils";
 import type { Repository } from "@/types/repository";
 
 export function DashboardPage() {
@@ -398,7 +398,7 @@ export function DashboardPage() {
                         rel="noopener noreferrer"
                         className="text-sm text-blue-600 hover:underline"
                       >
-                        View on GitHub →
+                        {sourceLabel(repo.url)} →
                       </a>
                     </div>
                   )}
