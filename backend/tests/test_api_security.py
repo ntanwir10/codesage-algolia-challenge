@@ -381,6 +381,24 @@ class TestUrlValidation:
         created = client.post(REPOS, json={"url": URL}).json()
         assert client.put(f"{REPOS}{created['id']}", json=body).status_code == 422
 
+    def test_changing_an_indexed_repositorys_branch_rebuilds_its_index(self, client, db_session, monkeypatch):
+        from app.api.v1.endpoints import repositories
+
+        started = []
+        monkeypatch.setattr(repositories, "start_processing", lambda *a, **k: started.append((a, k)))
+        repo = Repository(name="r", url=URL, status="completed", branch="main")
+        db_session.add(repo)
+        db_session.commit()
+
+        response = client.put(f"{REPOS}{repo.id}", json={"branch": "dev"})
+
+        assert response.status_code == 200
+        assert (response.json()["branch"], response.json()["status"]) == ("dev", "processing")
+        assert started == [((repo.id,), {"force_reprocess": True})]
+        # Renaming alone, or the same branch again, leaves the index alone
+        assert client.put(f"{REPOS}{repo.id}", json={"name": "x", "branch": "dev"}).status_code == 200
+        assert len(started) == 1
+
     def test_put_accepts_a_branch_or_the_default(self, client):
         created = client.post(REPOS, json={"url": URL}).json()
         # Empty is stored as null, which the UI shows as "default" (it showed "" as a blank)

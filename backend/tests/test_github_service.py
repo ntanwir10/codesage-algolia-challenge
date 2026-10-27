@@ -284,6 +284,20 @@ def test_is_test_path(path, is_test):
     assert gh.is_test_path(path) is is_test
 
 
+@pytest.mark.parametrize(
+    ("branch", "valid"),
+    [
+        ("main", True), ("feature/x+y", True), ("release-1.2", True), ("ünïcode", True),
+        ("bad..branch", False), ("a~b", False), ("a^b", False), ("a:b", False), ("a b", False),
+        ("a@{1}", False), ("a//b", False), (".hidden", False), ("a/.b", False), ("x.lock", False),
+        ("/a", False), ("a/", False), ("a.", False), ("@", False), ("-x", False), ("a\x00b", False),
+    ],
+)
+def test_branch_names_follow_gits_rules(branch, valid):
+    # A name git would never accept gets "invalid" up front, not "does not exist" from GitHub
+    assert gh.is_valid_branch(branch) is valid
+
+
 async def test_truncated_tree_falls_back_to_contents_walk_on_the_branch(github_api):
     github_api["trees"]["dev"] = {"tree": [], "truncated": True}
     github_api["listings"] = {
@@ -545,8 +559,8 @@ async def test_invalid_url_raises_value_error():
         ("https://github.com/octo/demo/tree/dev", ("octo", "demo", "dev")),
         ("https://github.com/octo/demo/tree/dev/", ("octo", "demo", "dev")),
         (
-            "https://github.com/octo/demo/tree/feature/x%20y",
-            ("octo", "demo", "feature/x y"),
+            "https://github.com/octo/demo/tree/feature/x%2By",
+            ("octo", "demo", "feature/x+y"),
         ),
         ("git@github.com:octo/demo.git", ("octo", "demo", None)),
         ("git@github.com:octo/demo", ("octo", "demo", None)),
@@ -577,6 +591,7 @@ def test_parse_github_url_accepts(url, expected):
         "https://github.com/octo/demo/issues/1",
         "https://github.com/octo/demo/tree",
         "https://github.com/octo/demo/tree/../x",
+        "https://github.com/octo/demo/tree/feature/x%20y",  # git refuses spaces in branch names
         "https://github.com/octo/.git",
         "https://github.com/octo/..",
         "not a url",

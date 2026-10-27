@@ -19,9 +19,9 @@ class ParsedCodeEntity:
     description: str
     line_start: int
     line_end: int
-    parameters: list[str] = None
-    return_type: str = None
-    content: str = None  # signature or definition line
+    parameters: list[str] | None = None
+    return_type: str | None = None
+    content: str | None = None  # signature or definition line
     body: str | None = None  # source text, capped at BODY_MAX_LINES / BODY_MAX_CHARS
 
 

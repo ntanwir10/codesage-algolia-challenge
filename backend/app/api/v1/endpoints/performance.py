@@ -59,7 +59,7 @@ async def get_operation_performance(operation_name: str):
     Get performance metrics for a specific operation type.
 
     Args:
-        operation_name: Name of the operation (e.g., 'repository_processing', 'github_api_call')
+        operation_name: Name of the operation; 'repository_processing' is the one recorded
     """
     try:
         summary = performance_monitor.get_operation_summary(operation_name)

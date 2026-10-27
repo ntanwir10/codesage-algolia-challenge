@@ -133,6 +133,20 @@ async def test_permalinks_use_the_indexed_commit(db_session, repo, algolia_index
     assert result["results"][0]["url"] == "https://github.com/pmndrs/zustand/blob/c0ffee/src/vanilla.ts#L5-L20"
 
 
+@pytest.mark.parametrize("query", ['"', "%%%", "🔍", "<>"])
+async def test_a_query_with_nothing_searchable_finds_nothing(db_session, algolia_index, query):
+    # Algolia drops punctuation and would match every record
+    result = await call_tool(db_session, "search_code", {"query": query})
+    assert (result["total_hits"], result["results"]) == (0, [])
+    assert algolia_index.searches == []
+
+
+async def test_pages_past_algolias_first_1000_hits_are_explained(db_session, algolia_index):
+    with pytest.raises(ToolError, match="first 1000 hits"):
+        await call_tool(db_session, "search_code", {"query": "x", "limit": 10, "page": 100})
+    assert algolia_index.searches == []
+
+
 async def test_search_query_is_capped_in_bytes(db_session, algolia_index):
     # Algolia refuses a query over 512 bytes; a 4-byte emoji reaches that at 129 characters
     with pytest.raises(ValidationError, match="512 bytes"):

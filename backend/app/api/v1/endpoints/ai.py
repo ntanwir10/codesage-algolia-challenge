@@ -39,7 +39,8 @@ async def get_search_suggestions(
     repository_id: int | None = Query(None, description="Optional repository ID filter"),
 ):
     """Distinct entity names matching the query, for auto-complete"""
-    if len(query.strip()) < 2:
+    # Punctuation alone would match every record once Algolia drops it
+    if len(query.strip()) < 2 or not any(c.isalnum() for c in query):
         return {"suggestions": []}
     try:
         response = await algolia_service.AlgoliaService().search_code(
