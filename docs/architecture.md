@@ -270,4 +270,4 @@ The bridge sends the key itself when it talks to the backend directly. Through n
 - **Partial results.** A repository over 1000 files or 100 MB, or too large for the trees API, is indexed in part. Source files are kept first, then tests, docs and data files.
 - **No automatic retry.** An interrupted or failed run waits for a manual reprocess.
 - **Search scope.** Searching all repositories includes ones being reprocessed.
-- **Tests and CI.** Frontend tests are unit tests only. CI builds the Docker images but never runs them; the prod stack, with nginx, basic auth and the browser checks, was last run by hand.
+- **Tests and CI.** Frontend tests are unit tests only. CI starts the dev Docker stack with fake Algolia keys and checks the backend's `/health`, the nginx front at `/`, and `/health` and one API call through nginx. It never indexes a repository there. The prod stack, with TLS, basic auth and the browser checks, is only config-checked and built; it was last run by hand.

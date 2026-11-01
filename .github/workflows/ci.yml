@@ -47,8 +47,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      # Compose reads backend/.env via env_file, so the file must exist
-      - run: cp .env.example backend/.env
+      # Compose reads backend/.env via env_file. Throwaway values: the backend binds 0.0.0.0 in
+      # the container, so it needs a key, and the Algolia keys are fake (health reports "degraded")
+      - run: >-
+          printf '%s\n' CODESAGE_API_KEY=ci-smoke-key ALGOLIA_APP_ID=CISMOKE000
+          ALGOLIA_ADMIN_API_KEY=ci-dummy-key > backend/.env
       - run: docker compose -f deployment/docker-compose.yml config -q
       - run: docker compose -f deployment/docker-compose.prod.yml config -q
       - run: docker build -f backend/Dockerfile.prod backend
@@ -68,4 +71,24 @@ jobs:
             -v "$PWD/deployment/nginx.prod.conf.template:/etc/nginx/templates/default.conf.template:ro" \
             -v "$RUNNER_TEMP/htpasswd:/etc/nginx/htpasswd:ro" -v "$RUNNER_TEMP/ssl:/etc/nginx/ssl:ro" \
             nginx:alpine sh -c '/docker-entrypoint.d/20-envsubst-on-templates.sh && nginx -t'
-      - run: docker build frontend
+      # Smoke test: run the dev stack (this also builds the frontend image) and check both containers answer
+      - name: Start the dev stack
+        env:
+          CODESAGE_API_KEY: ci-smoke-key # baked into the frontend bundle, as on a laptop
+        run: docker compose -f deployment/docker-compose.yml up -d --build
+      - name: Wait for the backend
+        run: |
+          for _ in $(seq 60); do
+            curl -fsS localhost:8001/health && exit 0
+            sleep 2
+          done
+          exit 1
+      - name: Check nginx serves the app and proxies the API
+        run: |
+          curl -fsS localhost/ | grep -q '<div id="root">'
+          curl -fsS localhost/health | jq -e '.components.database.status == "healthy"'
+          curl -fsS -H 'X-API-Key: ci-smoke-key' localhost/api/v1/repositories/ | jq -e 'length == 0'
+      - if: failure()
+        run: docker compose -f deployment/docker-compose.yml logs
+      - if: always()
+        run: docker compose -f deployment/docker-compose.yml down -v
