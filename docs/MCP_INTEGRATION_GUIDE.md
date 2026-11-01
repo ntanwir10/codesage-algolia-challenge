@@ -241,7 +241,7 @@ Ask Claude: *"Add https://gitlab.com/group/project to CodeSage"*, then *"Search 
 - **Public only.** Private repositories are refused on every host but github.com, where the backend's `GITHUB_TOKEN` can read them.
 - **How it reads.** For a host other than github.com the backend runs `git ls-remote` (10 s) to check and a shallow `git clone` (120 s) to read. Git runs without a shell, a credential helper or prompts, over https only, and skips symlinks. github.com keeps the REST API path.
 - **Names.** Repositories on other hosts are named `<host>/<path>`, which you can pass as `repository` to the other tools.
-- **Only here.** The web dashboard and `POST /api/v1/repositories/` take github.com only.
+- **Also in the dashboard.** The Home page form and `POST /api/v1/repositories/` take the same URLs.
 
 ## Resources
 
@@ -346,6 +346,6 @@ Set `MCP_SERVER_URL` and `CODESAGE_API_KEY` in the Inspector's environment field
 - **Backend must be running.** The bridge does not start it.
 - **Single process.** The backend keeps job state in memory, so run one worker.
 - **Rate limits are per address.** The 30 per minute on tool calls and resource reads is shared by everything behind one IP, such as nginx in the prod stack.
-- **Other hosts are public only.** `add_repository` can't read private repositories except on github.com, and the dashboard can't add other hosts at all.
+- **Other hosts are public only.** `add_repository` and the dashboard can't read private repositories except on github.com.
 - **Cross-repository search.** `search_code` without `repository` includes repositories that are being reprocessed.
 - **No prompts.** The server offers tools and resources only.

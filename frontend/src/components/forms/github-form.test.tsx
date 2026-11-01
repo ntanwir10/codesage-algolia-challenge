@@ -25,7 +25,7 @@ const submitValid = async (url = SHORT) => {
 };
 
 const submitBtn = () => screen.getByRole("button", { name: /add repository/i });
-const urlInput = () => screen.getByLabelText(/github repository/i);
+const urlInput = () => screen.getByLabelText(/^repository/i);
 
 describe("GitHubForm", () => {
   it("disables submit when empty", () => {
@@ -33,7 +33,14 @@ describe("GitHubForm", () => {
     expect(submitBtn()).toBeDisabled();
   });
 
-  it.each(["owner", "owner/repo/extra", "https://gitlab.com/a/b"])(
+  it.each([
+    "owner",
+    "owner/repo/extra",
+    "https://gitlab.com/group",
+    "ftp://gitlab.com/a/b",
+    // Never sent: the password would reach the server
+    "https://user:pw@gitlab.com/a/b",
+  ])(
     "rejects %s with a hint",
     async (junk) => {
       const onSubmit = vi.fn();
@@ -102,10 +109,13 @@ describe("GitHubForm", () => {
     expect(await screen.findByRole("alert")).toHaveAttribute("id", "branch-error");
   });
 
-  it("shows a branch error under the Branch field, not the URL", async () => {
-    const msg = "Branch 'dev' does not exist in owner/repo.";
+  it.each([
+    [SHORT, "owner/repo"],
+    ["https://gitlab.com/group/project", "gitlab.com/group/project"],
+  ])("shows a branch error for %s under the Branch field, not the URL", async (url, name) => {
+    const msg = `Branch 'dev' does not exist in ${name}.`;
     renderForm(vi.fn().mockRejectedValue(axiosErr(422, { detail: msg })));
-    await submitValid();
+    await submitValid(url);
     const alert = await screen.findByRole("alert");
     expect(alert).toHaveTextContent(msg);
     expect(alert).toHaveAttribute("id", "branch-error");
@@ -161,11 +171,26 @@ describe("GitHubForm", () => {
     ["git@github.com:owner/repo.git", "https://github.com/owner/repo"],
     // A branch may end in .git; only the repository's clone suffix goes
     ["github.com/owner/repo.git/tree/release.git", "https://github.com/owner/repo/tree/release.git"],
+    // Other hosts go as https URLs; the server parses their paths and branches
+    ["https://gitlab.com/group/sub/project", "https://gitlab.com/group/sub/project"],
+    ["gitlab.com/group/project/-/tree/dev", "https://gitlab.com/group/project/-/tree/dev"],
+    ["git@gitlab.com:group/project.git", "https://gitlab.com/group/project.git"],
+    ["http://bitbucket.org/team/repo/src/main/", "https://bitbucket.org/team/repo/src/main"],
+    ["https://git.example.org/team/repo", "https://git.example.org/team/repo"],
   ])("accepts %s, which the server also understands", async (input, sent) => {
     const onSubmit = vi.fn().mockResolvedValue(undefined);
     renderForm(onSubmit);
     await submitValid(input);
     await waitFor(() => expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ url: sent })));
+  });
+
+  it.each([
+    [SHORT, "owner/repo"],
+    ["https://gitlab.com/group/project", "gitlab.com/group/project"],
+  ])("previews %s as %s, the name the server gives it", async (input, name) => {
+    renderForm();
+    await userEvent.type(urlInput(), input);
+    expect(await screen.findByText(name)).toBeInTheDocument();
   });
 
   it("accepts a URL with trailing whitespace", async () => {

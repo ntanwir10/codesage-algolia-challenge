@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/ntanwir10/codesage-algolia-challenge/actions/workflows/ci.yml/badge.svg)](https://github.com/ntanwir10/codesage-algolia-challenge/actions/workflows/ci.yml)
 
-**Search and read codebases from Claude.** CodeSage indexes a repository's functions, classes, imports, documentation and Terraform blocks into Algolia, then serves them to Claude Desktop (or any MCP client) as seven tools. A web dashboard adds GitHub repositories, shows indexing progress live and searches the index. Claude can also add public repositories from other git hosts.
+**Search and read codebases from Claude.** CodeSage indexes a repository's functions, classes, imports, documentation and Terraform blocks into Algolia, then serves them to Claude Desktop (or any MCP client) as seven tools. A web dashboard adds repositories from GitHub, GitLab, Bitbucket or any https git host, shows indexing progress live and searches the index. Claude can add them too.
 
 Built for the [Algolia MCP Server Challenge](https://dev.to/challenges/algolia-2025-07-09).
 
@@ -39,7 +39,7 @@ In development there is no nginx: the dashboard and the bridge call the backend 
 
 There are two ways in, and both end at the same FastAPI backend:
 
-- **Web dashboard** (React + Vite). Add a GitHub repository, watch it index, and search it.
+- **Web dashboard** (React + Vite). Add a repository from GitHub or another git host, watch it index, and search it.
 - **Claude Desktop.** Claude Desktop starts `mcp_launcher.sh`, which runs a small stdio MCP bridge (`backend/codesage_mcp`). The bridge turns Claude's tool calls into HTTP calls to the backend. Claude can search, read and also add repositories, including public ones on GitLab, Bitbucket and other git hosts.
 
 Indexing runs as a background job inside the backend. Search goes to Algolia; reading files and listing definitions go to SQLite.
@@ -67,11 +67,11 @@ flowchart TB
 
 ```mermaid
 flowchart TD
-    add["POST /api/v1/repositories/"] --> valid{"Valid GitHub URL<br/>and branch?"}
+    add["POST /api/v1/repositories/"] --> valid{"Valid repository URL<br/>and branch?"}
     valid -- "no" --> bad["422"]
     valid -- "yes" --> known{"Already added?"}
     known -- "yes" --> dup["409"]
-    known -- "no" --> ready{"Algolia set up and<br/>repo and branch on GitHub?"}
+    known -- "no" --> ready{"Algolia set up and<br/>repo and branch readable?"}
     ready -- "no" --> refused["422, 502, 503 or 504<br/>nothing created"]
     ready -- "yes" --> create["Create the row<br/>status pending"]
     create --> created["201 with the repository"]
@@ -84,7 +84,7 @@ flowchart TD
     slot --> run["Indexing run"]
 ```
 
-The dashboard shows every refusal under the repository field and stays on the Home page. Nothing is created on any of them. The REST endpoint and the dashboard take github.com only. The `add_repository` tool runs the same checks for other hosts, with the messages in [Other git hosts](#other-git-hosts).
+The dashboard shows every refusal under the repository field and stays on the Home page. Nothing is created on any of them. The table lists GitHub's messages; other hosts get the ones in [Other git hosts](#other-git-hosts).
 
 | You see | Status | Cause |
 | --- | --- | --- |
@@ -147,7 +147,7 @@ A repository can't be deleted while its job is running. Delete returns as soon a
 
 ```mermaid
 flowchart TB
-    home["Home<br/>enter owner/repo"] --> page["Repository page<br/>live progress"]
+    home["Home<br/>enter owner/repo or a URL"] --> page["Repository page<br/>live progress"]
     dashboard["Dashboard<br/>all repositories"] --> page
     dashboard --> delete["Delete"]
     page --> outcome{"Run ends"}
@@ -243,7 +243,7 @@ make start   # backend on http://127.0.0.1:8001, dashboard on http://localhost:5
 
 `make start` waits up to 15 seconds for the backend to answer `/health`, and exits with an error if it doesn't. The dashboard needs port 5173; if it's taken, Vite exits instead of picking another port. `make start-backend` and `make start-frontend` run them separately, `make stop` stops both, and `make health` reports whether the backend answers. `make health` needs `jq`; without it, it prints "Backend not responding" even when the backend is up. API docs are at http://127.0.0.1:8001/docs.
 
-**4. Index a repository.** Open http://localhost:5173 and enter `owner/repo` (a pasted GitHub URL works too). The repository page shows progress live and turns searchable when it's done. If GitHub or Algolia refuses the repository, the form says why; see [Adding a repository](#adding-a-repository).
+**4. Index a repository.** Open http://localhost:5173 and enter `owner/repo` (a pasted GitHub URL works too, and so does an https URL on GitLab, Bitbucket or another git host). The repository page shows progress live and turns searchable when it's done. If GitHub or Algolia refuses the repository, the form says why; see [Adding a repository](#adding-a-repository).
 
 **5. Connect Claude Desktop.**
 
@@ -260,7 +260,7 @@ Restart Claude Desktop and keep the backend running. Then ask Claude something l
 
 | Page | What you can do |
 | --- | --- |
-| Home (`/`) | Add a GitHub repository. The field has a `github.com/` prefix: type `owner/repo` or paste a GitHub URL, and it is trimmed to `owner/repo`. The branch and a description have their own optional fields; the description shows on the repository page. |
+| Home (`/`) | Add a repository. Type `owner/repo` or paste a GitHub URL, and it is trimmed to `owner/repo`. Any other URL whose first part is a host name, such as `gitlab.com/group/project` or `git@gitlab.com:group/project.git`, is sent as an https URL and checked by the server. The branch and a description have their own optional fields; the description shows on the repository page. |
 | Repository (`/repository/:id`) | Watch indexing progress. Afterwards, search with suggestions (arrow keys and Enter work), filter by language and kind, and browse every definition by name and kind. A result opens in the file viewer; "source ↗" opens it on the host at the indexed commit. The header shows that commit ("Indexed at abc1234"). Reprocess or delete the repository. |
 | File viewer (`/repository/:id/file?path=…&line=…&end=…`) | Read an indexed file 400 lines at a time, with the target lines highlighted and the file's definitions listed beside it. |
 | Search (`/search?q=…`) | Search every indexed repository at once. Each hit names its repository and opens in that repository's file viewer. As on the repository page, the query's words are highlighted in the results and the query stays in the URL. |
@@ -288,13 +288,12 @@ For the HTTPS prod stack, use `make install-claude ARGS="--server-url https://yo
 
 ### Other git hosts
 
-Ask Claude: *"Add https://gitlab.com/group/project to CodeSage"*. Claude calls `add_repository` and you follow progress with `list_repositories`.
+Paste `https://gitlab.com/group/project` into the Home page form, or ask Claude: *"Add https://gitlab.com/group/project to CodeSage"*. The form, `POST /api/v1/repositories/` and Claude's `add_repository` tool take the same URLs and run the same checks. In the form, `owner/repo` without a host still means GitHub.
 
 - **Hosts.** GitHub, GitLab (nested groups too), Bitbucket and self-hosted servers. `http://` and `git@host:path` URLs are rewritten to `https://`, and git always fetches over https. Branch URLs such as `.../-/tree/dev` work.
 - **Public only.** Private repositories are refused on every host but github.com, where the server's `GITHUB_TOKEN` can read them. The message is "... was not found or is private; only public repositories are supported on <host>."
 - **Rejected URLs.** Ports, credentials, `localhost`, private IP addresses, and host names that resolve to one. git then connects to the address that was checked.
 - **Names and links.** Repositories on other hosts are named `<host>/<path>`. Search results link to the exact line on GitLab (gitlab.com, and any host whose name starts with `gitlab.`) and on bitbucket.org. Other hosts, including self-hosted Bitbucket, get no link.
-- **Not in the dashboard.** The web form and `POST /api/v1/repositories/` take github.com only.
 - **Needs git.** The backend runs `git ls-remote` to check (10 s) and a shallow `git clone` to read (120 s). The prod Docker image includes git.
 
 ### REST API
@@ -388,3 +387,4 @@ mcp_launcher.sh         what Claude Desktop launches
 - **Synchronous Algolia client.** Its calls run in worker threads.
 - **Tests and CI.** Frontend tests are unit tests only. CI builds the Docker images but never runs them; the prod stack was last run by hand.
 - **Search scope.** Searching across all repositories includes ones that are being reprocessed.
+- **Git redirects.** For hosts other than github.com, git follows the host's first HTTP redirect without re-checking where it points. A hostile public host could send it to an internal address. If that matters, route the backend's traffic through an egress proxy that refuses private addresses.

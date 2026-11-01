@@ -24,7 +24,7 @@ from sqlalchemy.orm import Session
 from app.models.code_entity import CodeEntity
 from app.models.code_file import CodeFile
 from app.models.repository import Repository
-from app.schemas.repository import AnyHostRepositoryCreate
+from app.schemas.repository import RepositoryCreate
 from app.services import algolia_service
 from app.services.github_service import quote_path
 from app.services.repository_service import RepositoryAddError, RepositoryService
@@ -451,7 +451,7 @@ async def find_patterns(db: Session, args: schemas.FindPatternsArgs) -> dict:
 
 async def add_repository(db: Session, args: schemas.AddRepositoryArgs) -> dict:
     try:
-        data = AnyHostRepositoryCreate(url=args.url, branch=args.branch, description=args.description)
+        data = RepositoryCreate(url=args.url, branch=args.branch, description=args.description)
     except ValidationError as exc:
         raise ToolError(
             "; ".join(f"{'.'.join(map(str, e['loc']))}: {e['msg']}" for e in exc.errors(include_url=False))

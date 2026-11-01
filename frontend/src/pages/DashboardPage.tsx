@@ -283,7 +283,7 @@ export function DashboardPage() {
               <EmptyState
                 icon="📁"
                 title="No repositories yet"
-                description="Get started by adding your first GitHub repository to analyze with AI-powered search"
+                description="Get started by adding your first repository to analyze with AI-powered search"
                 action={{
                   label: "Add Your First Repository",
                   href: "/",

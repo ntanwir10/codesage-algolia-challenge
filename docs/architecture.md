@@ -109,7 +109,7 @@ A run turns a git repository into stored files, entities and Algolia records. Th
 - **No shell, no config.** Git runs through `create_subprocess_exec` with an empty `HOME`, no user or system config, no credential helper, `GIT_TERMINAL_PROMPT=0`, and only https allowed. It is killed on timeout.
 - **Symlinks skipped.** The clone keeps symlinks as real links, and the tree walk (`_read_tree`) neither follows nor lists them.
 - **URL limits.** `RepositoryCreate` first rewrites `http://` and `git@host:path` URLs to `https://`. `parse_repository_url` then accepts https only and rejects credentials, ports, `localhost`, private IP literals, and branch names that start with `-`.
-- **Names and entry points.** Other hosts are named `<host>/<path>`. REST create takes github.com only; the `add_repository` MCP tool takes any host through the same service function.
+- **Names and entry points.** Other hosts are named `<host>/<path>`. REST create (behind the Home page form) and the `add_repository` MCP tool both take any host, through the same `RepositoryCreate` schema and service function.
 - **Image.** The prod image installs `git`.
 
 ### Failure handling
