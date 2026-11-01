@@ -19,7 +19,7 @@ os.environ["MCP_SERVER_HOST"] = "127.0.0.1"
 os.environ["CORS_ORIGINS"] = "http://localhost:3000,http://localhost:5173"
 
 import pytest
-from algoliasearch.exceptions import AlgoliaException
+from algoliasearch.http.exceptions import AlgoliaException
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
@@ -122,7 +122,7 @@ class _CompletedTask:
 
 
 class FakeAlgoliaIndex:
-    """In-memory stand-in for an algoliasearch v3 SearchIndex"""
+    """In-memory stand-in for the index AlgoliaService wraps (v3 SearchIndex methods)"""
 
     def __init__(self):
         self.records = {}

@@ -4,7 +4,7 @@ CodeSage - MCP-First Code Discovery: Algolia Service
 Indexes code entities in Algolia and searches them for the MCP tools that
 Claude Desktop and other MCP clients call.
 
-The v3 Algolia client is synchronous, so every call runs in a worker thread
+The service uses the synchronous Algolia client, so every call runs in a worker thread
 to keep the event loop (API, WebSocket, MCP) responsive.
 """
 
@@ -15,8 +15,8 @@ import time
 from typing import Any
 
 import structlog
-from algoliasearch.exceptions import RequestException
-from algoliasearch.search_client import SearchClient
+from algoliasearch.http.exceptions import RequestException
+from algoliasearch.search.client import SearchClientSync
 
 from app.core.config import get_settings
 from app.services.code_parser import ParsedCodeEntity
@@ -28,7 +28,7 @@ settings = get_settings()
 # Records per save_objects request (Algolia's recommended batch size)
 INDEX_BATCH_SIZE = 1000
 
-# Longest waits for Algolia to publish a task; Algolia's v3 wait() has no limit
+# Longest waits for Algolia to publish a task
 INDEX_WAIT_SECONDS = 300
 DELETE_WAIT_SECONDS = 120
 
@@ -86,13 +86,52 @@ _configured_indexes: set[str] = set()
 
 # One client per credentials: each holds its own HTTP connection pool, and a service is
 # built per request, so a fresh client each time meant no connection reuse
-_clients: dict[tuple[str, str], SearchClient] = {}
+_clients: dict[tuple[str, str], SearchClientSync] = {}
 
 
-def _client_for(app_id: str, api_key: str) -> SearchClient:
+def _client_for(app_id: str, api_key: str) -> SearchClientSync:
     if (app_id, api_key) not in _clients:
-        _clients[(app_id, api_key)] = SearchClient.create(app_id=app_id, api_key=api_key)
+        _clients[(app_id, api_key)] = SearchClientSync(app_id, api_key)
     return _clients[(app_id, api_key)]
+
+
+class _Task:
+    """A v4 response's task ids, in the v3 shape _wait_for_task reads (raw_responses)"""
+
+    def __init__(self, task_ids: list[int]):
+        self.raw_responses = [{"taskID": task_id} for task_id in task_ids]
+
+    def wait(self) -> None:
+        """Only called when there are no task ids, so there is nothing to wait for"""
+
+
+class _Index:
+    """The v3 SearchIndex methods this service uses, on the v4 client and one index name.
+
+    Keeping that shape keeps the service logic, and the tests' fake index, as they were.
+    """
+
+    def __init__(self, client: SearchClientSync, name: str):
+        self._client = client
+        self.name = name
+
+    def get_settings(self) -> dict:
+        return self._client.get_settings(self.name).to_dict()
+
+    def set_settings(self, settings: dict) -> _Task:
+        return _Task([self._client.set_settings(self.name, settings).task_id])
+
+    def save_objects(self, objects: list[dict]) -> _Task:
+        return _Task([response.task_id for response in self._client.save_objects(self.name, objects)])
+
+    def delete_by(self, params: dict) -> _Task:
+        return _Task([self._client.delete_by(self.name, params).task_id])
+
+    def search(self, query: str, params: dict) -> dict:
+        return self._client.search_single_index(self.name, {**params, "query": query}).to_dict()
+
+    def get_task(self, task_id: int) -> dict:
+        return {"status": self._client.get_task(self.name, task_id).status}
 
 
 class AlgoliaService:
@@ -109,7 +148,7 @@ class AlgoliaService:
 
             self.client = _client_for(settings.algolia_app_id, settings.algolia_admin_api_key)
             self.index_name = settings.algolia_index_name
-            self.index = self.client.init_index(self.index_name)
+            self.index = _Index(self.client, self.index_name)
         except Exception as e:
             logger.error("Failed to initialize Algolia client", error=str(e))
             self.client = None
@@ -131,9 +170,8 @@ class AlgoliaService:
     def _wait_for_task(self, response, timeout: float):
         """Block until an indexing response's tasks are published, or raise TimeoutError.
 
-        The v3 client's response.wait() polls forever, and Algolia can leave a
-        task unpublished indefinitely (an unchanged set_settings does), so poll
-        get_task ourselves with a deadline.
+        Algolia can leave a task unpublished indefinitely (an unchanged set_settings
+        does), so poll get_task ourselves with a deadline.
         """
         task_ids = [raw["taskID"] for raw in getattr(response, "raw_responses", []) if "taskID" in raw]
         if not task_ids:

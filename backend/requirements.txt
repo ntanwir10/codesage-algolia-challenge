@@ -9,8 +9,8 @@ uvicorn[standard]==0.54.0
 sqlalchemy==2.1.6
 alembic==1.20.1
 
-# Algolia search (v3 client; calls run in a thread pool)
-algoliasearch==3.0.0
+# Algolia search (v4, the synchronous client; calls run in a thread pool)
+algoliasearch==4.48.0
 
 # GitHub API client
 aiohttp==3.14.5
