@@ -282,6 +282,8 @@ An unknown path shows "Page not found". A repository that doesn't exist says so;
 | `find_patterns` | Literal or regex line matches. Regex search stops after 10 s per call |
 | `add_repository` | Adds a repository by https URL and starts indexing. Public repositories on any git host; needs the API key |
 
+The bridge also offers two prompts: ready-made requests that an MCP client can list for you to pick. **Explain this repository** (`explain_repository`, takes `repository`) walks Claude through `analyze_repository`, `list_definitions` and `get_file`. **Where is this implemented?** (`find_implementation`, takes `feature` and an optional `repository`) goes through `search_code`, `list_definitions` and `get_file`, and answers with file paths and line ranges. A resource template, `codesage://repositories/{id}/files`, lists one repository's indexed files; see [Resources](docs/MCP_INTEGRATION_GUIDE.md#resources).
+
 The installer merges CodeSage into your Claude Desktop config without touching other servers. It writes a backup first, and both files are mode 600 because they hold the key.
 
 For the HTTPS prod stack, use `make install-claude ARGS="--server-url https://your-host --basic-auth <user>"`. The password goes to the macOS Keychain, and nginx supplies the API key. See [docs/MCP_INTEGRATION_GUIDE.md](docs/MCP_INTEGRATION_GUIDE.md) for manual setup and troubleshooting.
