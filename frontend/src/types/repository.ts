@@ -26,6 +26,16 @@ export interface Repository {
   processed_at?: string | null;
 }
 
+/** Whether the index is behind its branch; the server caches the answer for 10 minutes. */
+export interface RepositoryFreshness {
+  /** The set branch, else the repository's default one. */
+  branch: string | null;
+  /** Commits on the branch since the indexed one; GitHub only, null elsewhere. */
+  commits_behind: number | null;
+  changed: boolean;
+  checked_at: string;
+}
+
 export interface CreateRepositoryRequest {
   name?: string;
   url: string;

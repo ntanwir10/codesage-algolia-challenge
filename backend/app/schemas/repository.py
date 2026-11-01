@@ -93,6 +93,17 @@ class RepositoryUpdate(BaseModel):
         return branch or None  # empty means the default branch, the same as null
 
 
+class RepositoryFreshness(BaseModel):
+    """Whether the index is behind the repository's branch"""
+
+    branch: str | None = Field(None, description="The branch compared: the set one, else the default")
+    commits_behind: int | None = Field(
+        None, description="Commits on the branch since the indexed one; GitHub only, null elsewhere"
+    )
+    changed: bool = Field(..., description="The branch has moved since the index was built")
+    checked_at: datetime = Field(..., description="When the host was asked; answers are cached")
+
+
 class RepositoryResponse(RepositoryBase):
     """Schema for repository responses"""
 

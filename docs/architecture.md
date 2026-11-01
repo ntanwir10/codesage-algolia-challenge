@@ -111,6 +111,7 @@ A run turns a git repository into stored files, entities and Algolia records. Th
 - **URL limits.** `RepositoryCreate` first rewrites `http://` and `git@host:path` URLs to `https://`. `parse_repository_url` then accepts https only and rejects credentials, ports, `localhost`, private IP literals, and branch names that start with `-`.
 - **Names and entry points.** Other hosts are named `<host>/<path>`. REST create (behind the Home page form) and the `add_repository` MCP tool both take any host, through the same `RepositoryCreate` schema and service function.
 - **Image.** The prod image installs `git`.
+- **Freshness.** `GET /repositories/{id}/freshness` (`index_freshness` in `repository_service.py`) compares `commit_sha` with the branch on the host. github.com makes one `compare/{sha}...{branch}` call (`ahead_by` is the count; any status but `identical` is a change), plus `GET /repos/{o}/{r}` first when no branch is set. Other hosts run `git ls-remote --symref` for `HEAD` or `refs/heads/<branch>` through the same pinned address as the check, and report only whether the commit differs. Both use the check's error mapping and never retry or sleep. Answers are cached in process for 10 minutes, keyed by id, URL, branch and commit, so a reprocess or a branch change misses the cache.
 
 ### Failure handling
 

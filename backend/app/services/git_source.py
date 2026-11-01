@@ -125,6 +125,25 @@ def _looks_missing(stderr: str) -> bool:
     return any(marker in text for marker in _NOT_FOUND_MARKERS)
 
 
+async def remote_head(url: str, branch: str | None = None) -> tuple[str | None, str]:
+    """(branch, commit) the remote has now for `branch`, or for its default branch when None.
+
+    Raises RepositoryCheckError, like check_remote.
+    """
+    host, path, _ = parse_repository_url(url)
+    want = f"refs/heads/{branch}" if branch else "HEAD"
+    stdout = await _ls_remote(url, ["--symref"], [want])
+    for line in stdout.splitlines():
+        first, _, ref = line.partition("\t")
+        if first.startswith("ref: ") and ref == "HEAD":
+            branch = first.removeprefix("ref: ").removeprefix("refs/heads/")
+        elif ref == want:  # ls-remote patterns match by suffix; only the exact ref counts
+            return branch, first
+    if branch:
+        raise RepositoryCheckError(422, f"Branch '{branch}' does not exist in {host}/{path}.")
+    raise RepositoryCheckError(422, f"{host}/{path} is empty; there is nothing to index.")
+
+
 async def check_remote(url: str, branch: str | None = None) -> None:
     """Fail fast, before a row exists, if the repository or branch can't be read.
 
@@ -133,13 +152,27 @@ async def check_remote(url: str, branch: str | None = None) -> None:
     host, path, url_branch = parse_repository_url(url)
     branch = branch or url_branch
     name = f"{host}/{path}"
+    stdout = await _ls_remote(url, ["--heads", "--symref"], [f"refs/heads/{branch}"] if branch else [])
+    refs = [line.split("\t")[-1] for line in stdout.splitlines() if not line.startswith("ref:")]
+    if branch:
+        if f"refs/heads/{branch}" not in refs:
+            raise RepositoryCheckError(422, f"Branch '{branch}' does not exist in {name}.")
+    elif not refs:
+        raise RepositoryCheckError(422, f"{name} is empty; there is nothing to index.")
+
+
+async def _ls_remote(url: str, options: list[str], patterns: list[str]) -> str:
+    """stdout of `git ls-remote <options> -- <url> <patterns>` at a checked public address.
+
+    Raises RepositoryCheckError carrying the HTTP status and message to return.
+    """
+    host, path, _ = parse_repository_url(url)
+    name = f"{host}/{path}"
     try:
         pin = await _pin_public_address(host)
     except ValueError as e:
         raise RepositoryCheckError(422, f"Can't index {name}: {e}.") from e
-    args = [*pin, "ls-remote", "--heads", "--symref", "--", url]
-    if branch:
-        args.append(f"refs/heads/{branch}")
+    args = [*pin, "ls-remote", *options, "--", url, *patterns]
     try:
         code, stdout, stderr = await _git(args, CHECK_TIMEOUT)
     except TimeoutError as e:
@@ -157,13 +190,7 @@ async def check_remote(url: str, branch: str | None = None) -> None:
                 f"{name} was not found or is private; only public repositories are supported on {host}.",
             )
         raise RepositoryCheckError(502, f"Could not reach {host}; try again.")
-
-    refs = [line.split("\t")[-1] for line in stdout.splitlines() if not line.startswith("ref:")]
-    if branch:
-        if f"refs/heads/{branch}" not in refs:
-            raise RepositoryCheckError(422, f"Branch '{branch}' does not exist in {name}.")
-    elif not refs:
-        raise RepositoryCheckError(422, f"{name} is empty; there is nothing to index.")
+    return stdout
 
 
 class GitSource(FileSelector):

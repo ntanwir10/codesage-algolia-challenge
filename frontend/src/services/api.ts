@@ -4,6 +4,7 @@ import type {
   Repository,
   CreateRepositoryRequest,
   ProcessingStatus,
+  RepositoryFreshness,
   RepositoryStatsData,
   ReprocessResponse,
 } from "@/types/repository";
@@ -144,6 +145,13 @@ export class CodeSageAPI {
   async getRepositoryStatus(id: number): Promise<ProcessingStatus> {
     const response = await this.client.get<ProcessingStatus>(
       `/repositories/${id}/status`
+    );
+    return response.data;
+  }
+
+  async getRepositoryFreshness(id: number): Promise<RepositoryFreshness> {
+    const response = await this.client.get<RepositoryFreshness>(
+      `/repositories/${id}/freshness`
     );
     return response.data;
   }

@@ -35,10 +35,12 @@ LOCAL = ("127.0.0.1", 50000)  # TestClient's default peer, "testclient", is not 
 
 @pytest.fixture(autouse=True)
 def reset_rate_limits():
-    """Rate-limit counters are process-wide; start every test from zero"""
+    """Rate-limit counters and the freshness cache are process-wide; start every test from zero"""
     from app.core.security import limiter
+    from app.services import repository_service
 
     limiter.reset()
+    repository_service._freshness.clear()
     yield
 
 

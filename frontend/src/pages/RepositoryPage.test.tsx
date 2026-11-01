@@ -6,7 +6,7 @@ import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ToastProvider } from "@/components/ui/toast";
 import { api } from "@/services/api";
-import type { Repository } from "@/types/repository";
+import type { Repository, RepositoryFreshness } from "@/types/repository";
 import { RepositoryPage } from "./RepositoryPage";
 
 vi.mock("@/hooks/useRealtimeStatus", () => ({
@@ -91,6 +91,61 @@ describe("RepositoryPage completion card", () => {
     renderPage({ ...repository, url: "https://gitlab.com/octo/demo" });
     expect(await screen.findByRole("link", { name: "View source →" })).toBeInTheDocument();
     expect(screen.queryByText("View on GitHub →")).not.toBeInTheDocument();
+  });
+});
+
+describe("RepositoryPage index freshness", () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  const indexed = { ...repository, commit_sha: "a".repeat(40) };
+  const freshness = (over: Partial<RepositoryFreshness>): RepositoryFreshness => ({
+    branch: "main",
+    commits_behind: 0,
+    changed: false,
+    checked_at: "2026-11-01T00:00:00Z",
+    ...over,
+  });
+
+  it.each([
+    [{ commits_behind: 3, changed: true }, "3 commits behind main"],
+    [{ commits_behind: 1, changed: true }, "1 commit behind main"],
+    // Other hosts can't count, and a force-pushed branch may be 0 ahead
+    [{ commits_behind: null, changed: true }, "main has changed since"],
+    [{ commits_behind: 0, changed: true }, "main has changed since"],
+    [{ branch: null, commits_behind: 2, changed: true }, "2 commits behind the default branch"],
+  ])("shows %o as '%s' with a Reprocess hint", async (over, text) => {
+    vi.spyOn(api, "getRepositoryFreshness").mockResolvedValue(freshness(over));
+    renderPage(indexed);
+    expect(await screen.findByText(text, { exact: false })).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Reprocess to update" }));
+    expect(await screen.findByText("Reprocess Repository")).toBeInTheDocument();
+  });
+
+  it("says up to date, with no hint", async () => {
+    vi.spyOn(api, "getRepositoryFreshness").mockResolvedValue(freshness({}));
+    renderPage(indexed);
+    expect(await screen.findByText("Up to date with main")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Reprocess to update" })).not.toBeInTheDocument();
+  });
+
+  it.each([
+    ["is processing", { ...indexed, status: "processing" as const }],
+    ["has no indexed commit", repository],
+  ])("asks nothing while the repository %s", async (_name, repo) => {
+    const ask = vi.spyOn(api, "getRepositoryFreshness");
+    renderPage(repo);
+    expect(await screen.findByRole("heading", { name: "octo/demo" })).toBeInTheDocument();
+    expect(ask).not.toHaveBeenCalled();
+  });
+
+  it("shows nothing when the host can't be asked", async () => {
+    const ask = vi
+      .spyOn(api, "getRepositoryFreshness")
+      .mockRejectedValue(httpError(503, "GitHub's API rate limit was reached."));
+    renderPage(indexed);
+    expect(await screen.findByText("Repository analysis complete!")).toBeInTheDocument();
+    await waitFor(() => expect(ask).toHaveBeenCalledTimes(1));
+    expect(screen.queryByText(/behind|up to date|has changed/i)).not.toBeInTheDocument();
   });
 });
 
