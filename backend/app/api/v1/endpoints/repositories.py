@@ -22,12 +22,14 @@ from app.schemas.repository import (
     RepositoryUpdate,
 )
 from app.services import algolia_service
+from app.services.github_service import RepositoryCheckError
 from app.services.repository_service import (
     ALGOLIA_MISSING,
     RepositoryAddError,
     RepositoryBusyError,
     RepositoryService,
     add_repository,
+    check_source,
     is_processing,
     start_processing,
 )
@@ -171,6 +173,11 @@ async def update_repository(
     )
     if reindex:
         require_algolia()
+        # A missing branch is refused now, not left as a failed reindex under the new name
+        try:
+            await check_source(repository.url, update_data["branch"])
+        except RepositoryCheckError as e:
+            raise HTTPException(status_code=e.status_code, detail=e.detail, headers=e.headers) from e
 
     # Update repository fields
     for key, value in update_data.items():

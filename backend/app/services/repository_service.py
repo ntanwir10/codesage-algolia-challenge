@@ -10,6 +10,7 @@ repository, and always ends in `completed` or `failed` with a reason.
 import asyncio
 import contextlib
 import json
+import uuid
 import weakref
 from collections import Counter
 from datetime import UTC, datetime
@@ -34,8 +35,12 @@ logger = structlog.get_logger()
 # Files written to the database per commit
 DB_BATCH_SIZE = 200
 
-# Appended to a failure recorded after a reprocess already cleared the old index
-INDEX_REMOVED_NOTE = " The previous index was removed; reprocess to rebuild it."
+# Appended when a reprocess fails but the previous run's index is untouched and stays searchable
+PREVIOUS_INDEX_NOTE = " Search still uses the previous index."
+
+# What a failed reprocess puts back, so the repository shows the run that is still searchable
+_RUN_FIELDS = ("total_files", "processed_files", "total_lines", "language", "framework",
+               "commit_sha", "processed_at")
 
 # Languages whose files are documentation or data rather than program source
 NON_PROGRAMMING_LANGUAGES = {"text", "markdown", "json", "yaml", "xml", "css", "scss", "html"}
@@ -178,7 +183,9 @@ class RepositoryService:
 
     def __init__(self, db: Session):
         self.db = db
-        self._index_cleared = False  # set once a run has removed the previous index
+        self._run_id = ""  # tags this run's Algolia records
+        self._cut = 0  # this repository's rows up to this id are from before this run
+        self._indexed = False  # set once this run has sent records to Algolia
 
     async def create_repository(self, repository_data: RepositoryCreate) -> Repository:
         """Create a repository and schedule its processing"""
@@ -213,12 +220,14 @@ class RepositoryService:
             logger.info("Repository already completed", repository_id=repository.id)
             return repository
 
+        had_index = repository.status == "completed"
+        previous = {field: getattr(repository, field) for field in _RUN_FIELDS}
         repository.status = "processing"
         repository.processed_files = 0  # the previous run's count would show as progress
         repository.error_message = None
         self.db.commit()
         await self._broadcast_repository_status(repository)
-        self._index_cleared = False
+        self._start_run(repository.id)
 
         try:
             # A run already shows "processing" while it waits here for a free slot
@@ -228,23 +237,32 @@ class RepositoryService:
         except Exception as e:
             # Discard any half-written work so recording the failure can't fail too
             self.db.rollback()
-            repository.status = "failed"
-            repository.error_message = failure_message(e)
-            if self._index_cleared:
-                # The old records are gone, so a failure here leaves nothing to search
-                repository.error_message = (
-                    repository.error_message[: 500 - len(INDEX_REMOVED_NOTE)] + INDEX_REMOVED_NOTE
-                )
+            await self._discard_run(repository.id)
+            reason = failure_message(e)
+            if had_index:
+                # The previous run's rows and records were never touched, so it stays searchable
+                for field, value in previous.items():
+                    setattr(repository, field, value)
+                repository.status = "completed"
+                failure = f"Reprocessing failed: {reason.rstrip('.')}."
+                repository.error_message = failure[: 500 - len(PREVIOUS_INDEX_NOTE)] + PREVIOUS_INDEX_NOTE
+            else:
+                repository.status = "failed"
+                repository.error_message = reason
             self.db.commit()
             logger.error(
                 "Repository processing failed",
                 repository_id=repository.id,
                 error=repository.error_message,
                 error_type=type(e).__name__,
+                kept_previous_index=had_index,
             )
-            await self._broadcast_repository_status(
-                repository, error=repository.error_message, message="Processing failed"
-            )
+            if had_index:
+                await self._broadcast_repository_status(repository, message=repository.error_message)
+            else:
+                await self._broadcast_repository_status(
+                    repository, error=repository.error_message, message="Processing failed"
+                )
             return repository
 
         repository.status = "completed"
@@ -288,10 +306,7 @@ class RepositoryService:
             raise IngestionError("No supported code files found in repository")
 
         await algolia_service.setup_index_settings()
-
-        # Replace the previous run's data. This happens only after a successful
-        # fetch, so a transient GitHub error doesn't wipe a working index.
-        await self._clear_repository_data(repository.id, algolia_service)
+        # The previous run's rows and records stay until this run is complete (step 4)
 
         # 2. Parse files and store them with their entities, a batch per commit
         code_parser = CodeParser()
@@ -343,7 +358,7 @@ class RepositoryService:
                 self.db.add(code_file)
                 batch_documents.extend(
                     algolia_service.build_documents(
-                        entities, repository.id, file.path, file.language
+                        entities, repository.id, file.path, file.language, self._run_id
                     )
                 )
 
@@ -381,8 +396,16 @@ class RepositoryService:
             )
 
         # 3. Algolia: index everything in chunked batch requests
+        self._indexed = True
         if not await algolia_service.index_documents(documents):
             raise IngestionError("Algolia rejected the indexing request")
+
+        # 4. This run is complete: drop the previous run's rows and records. Not waited on:
+        # Algolia applies an index's tasks in order, and a timeout must not discard a good run
+        await self._delete_rows(repository.id, previous=True)
+        stale_records = not await algolia_service.delete_repository_index(
+            repository.id, run_filter=f'NOT run_id:"{self._run_id}"'
+        )
 
         programming = [f.language for f in files if f.language not in NON_PROGRAMMING_LANGUAGES]
         if programming:
@@ -404,6 +427,8 @@ class RepositoryService:
             problems.append(
                 "the repository is too large to list in full, so some directories were not indexed"
             )
+        if stale_records:
+            problems.append("search still holds the previous run's records until the next run")
         if problems:
             repository.error_message = "Partially indexed: " + "; ".join(problems)
 
@@ -512,7 +537,6 @@ class RepositoryService:
         """
         if not await algolia_service.delete_repository_index(repository_id, wait=wait):
             raise IngestionError("Could not remove previously indexed records from Algolia")
-        self._index_cleared = True
 
         def clear_rows():
             # Entities reference files, so delete them first
@@ -526,6 +550,49 @@ class RepositoryService:
 
         # Large repositories have thousands of rows to delete; keep it off the event loop
         await _to_thread_to_completion(clear_rows)
+
+    def _start_run(self, repository_id: int) -> None:
+        self._run_id = uuid.uuid4().hex[:12]
+        # Row ids only grow, so this repository's rows up to here are the previous run's
+        self._cut = (
+            self.db.query(func.max(CodeFile.id))
+            .filter(CodeFile.repository_id == repository_id)
+            .scalar()
+        ) or 0
+        self._indexed = False
+
+    async def _delete_rows(self, repository_id: int, *, previous: bool) -> None:
+        """Delete the previous run's rows (previous=True) or this run's"""
+        cut = self._cut
+
+        def delete():
+            # Entities reference files, so delete them first
+            entity_run = CodeEntity.file_id <= cut if previous else CodeEntity.file_id > cut
+            file_run = CodeFile.id <= cut if previous else CodeFile.id > cut
+            self.db.query(CodeEntity).filter(CodeEntity.repository_id == repository_id, entity_run).delete(
+                synchronize_session=False
+            )
+            self.db.query(CodeFile).filter(CodeFile.repository_id == repository_id, file_run).delete(
+                synchronize_session=False
+            )
+            self.db.commit()
+
+        await _to_thread_to_completion(delete)
+
+    async def _discard_run(self, repository_id: int) -> None:
+        """Remove what a failed run wrote; the previous run's rows and records stay as they were"""
+        from app.services.algolia_service import AlgoliaService
+
+        try:
+            await self._delete_rows(repository_id, previous=False)
+            if self._indexed and not await AlgoliaService().delete_repository_index(
+                repository_id, run_filter=f'run_id:"{self._run_id}"'
+            ):
+                # The next successful run removes them along with every other old run's
+                logger.warning("Could not remove a failed run's records", repository_id=repository_id)
+        except Exception as e:
+            self.db.rollback()
+            logger.error("Could not discard a failed run", repository_id=repository_id, error=failure_message(e))
 
     async def delete_repository(self, repository: Repository) -> bool:
         """Delete a repository and its Algolia records.
@@ -557,6 +624,14 @@ class RepositoryService:
             del _jobs[repository.id]
 
 
+async def check_source(url: str, branch: str | None) -> None:
+    """Pre-flight: can the repository (and branch) be read? Raises RepositoryCheckError"""
+    if parse_repository_url(url)[0] == "github.com":
+        await GitHubService().check_repository(url, branch)
+    else:
+        await git_source.check_remote(url, branch)
+
+
 async def add_repository(db: Session, repository: RepositoryCreate) -> Repository:
     """Check and create a repository, and schedule its processing.
 
@@ -575,10 +650,7 @@ async def add_repository(db: Session, repository: RepositoryCreate) -> Repositor
     if not algolia_service.AlgoliaService().is_available():
         raise RepositoryAddError(503, ALGOLIA_MISSING)
     try:
-        if parse_repository_url(repository.url)[0] == "github.com":
-            await GitHubService().check_repository(repository.url, repository.branch)
-        else:
-            await git_source.check_remote(repository.url, repository.branch)
+        await check_source(repository.url, repository.branch)
     except RepositoryCheckError as e:
         raise RepositoryAddError(e.status_code, e.detail, e.headers) from e
 

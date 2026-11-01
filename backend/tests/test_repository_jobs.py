@@ -168,10 +168,10 @@ async def test_database_errors_do_not_leak_sql_or_file_contents(
 ):
     from sqlalchemy.exc import OperationalError
 
-    async def broken_clear(self, repository_id, algolia_service):
+    async def broken_delete(self, repository_id, *, previous):
         raise OperationalError("INSERT INTO code_files VALUES (?)", ("SECRET FILE BODY",), Exception())
 
-    monkeypatch.setattr(RepositoryService, "_clear_repository_data", broken_clear)
+    monkeypatch.setattr(RepositoryService, "_delete_rows", broken_delete)
     repo = make_repository(db_session, status="pending")
     github.files = [github_file("a.py", MODULE)]
 

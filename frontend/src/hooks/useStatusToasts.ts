@@ -19,10 +19,16 @@ export function useGlobalToasts(): void {
         if (previous === update.status) return; // de-duplicate repeats
         const name = update.name || `Repository ${update.repository_id}`;
         // The backend sends error_message as the message of a run that left files out
-        if (update.status === "completed" && update.message?.startsWith("Partially indexed")) {
+        // A completed run with a note: it left files out, or a reprocess failed and the
+        // previous index is still the one searched
+        const reprocessFailed = update.message?.startsWith("Reprocessing failed");
+        if (
+          update.status === "completed" &&
+          (reprocessFailed || update.message?.startsWith("Partially indexed"))
+        ) {
           addToast({
             type: "warning",
-            title: "Repository partially indexed",
+            title: reprocessFailed ? "Reprocessing failed" : "Repository partially indexed",
             description: `${name}: ${update.message}`,
             duration: 8000,
           });

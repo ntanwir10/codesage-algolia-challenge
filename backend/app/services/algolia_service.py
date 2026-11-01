@@ -66,6 +66,7 @@ INDEX_SETTINGS = {
     ],
     "attributesForFaceting": [
         "filterOnly(repository_id)",
+        "filterOnly(run_id)",  # a reprocess adds its run, then drops the previous one
         "entity_type",
         "language",
         "file_path",
@@ -181,10 +182,11 @@ class AlgoliaService:
         repository_id: int,
         file_path: str,
         language: str,
+        run_id: str = "",
     ) -> list[dict[str, Any]]:
-        """Algolia records for one file's entities"""
+        """Algolia records for one file's entities, tagged with the indexing run that made them"""
         return [
-            self._create_algolia_document(entity, repository_id, file_path, language)
+            self._create_algolia_document(entity, repository_id, file_path, language, run_id)
             for entity in entities
         ]
 
@@ -228,10 +230,12 @@ class AlgoliaService:
         repository_id: int,
         file_path: str,
         language: str,
+        run_id: str = "",
     ) -> dict[str, Any]:
         """Algolia record for one code entity"""
-        # Stable ID: re-indexing the same entity overwrites its record instead of duplicating it
-        entity_key = f"{file_path}:{entity.entity_type}:{entity.name}:{entity.line_start}"
+        # One ID per entity per run: a new run never overwrites the previous run's records, so
+        # those stay searchable until the new run is complete (then they are deleted)
+        entity_key = f"{run_id}:{file_path}:{entity.entity_type}:{entity.name}:{entity.line_start}"
         signature = (entity.content or "")[:MAX_FIELD_CHARS]
         body = (entity.body or "")[:MAX_BODY_CHARS]
         # Parsers may strip the signature line while the body keeps its indentation
@@ -240,6 +244,7 @@ class AlgoliaService:
         return _fit_record({
             "objectID": f"{repository_id}_{hashlib.sha1(entity_key.encode()).hexdigest()}",
             "repository_id": repository_id,
+            "run_id": run_id,
             "file_path": file_path,
             "entity_type": entity.entity_type,
             "entity_name": entity.name[:MAX_FIELD_CHARS],
@@ -311,16 +316,23 @@ class AlgoliaService:
         """Quote-safe facet value, so input can't add filter clauses"""
         return value.replace("\\", "\\\\").replace('"', '\\"')
 
-    async def delete_repository_index(self, repository_id: int, wait: bool = False) -> bool:
-        """Delete all indexed entities for a repository.
+    async def delete_repository_index(
+        self, repository_id: int, wait: bool = False, run_filter: str | None = None
+    ) -> bool:
+        """Delete all indexed entities for a repository, or only those `run_filter` matches
+        (e.g. `NOT run_id:"abc"` for every run but one).
 
         Pass wait=True before re-indexing so the delete can't land after the new records.
         """
         if not self.is_available():
             return True
 
+        filters = self._repository_filter(repository_id)
+        if run_filter:
+            filters += f" AND {run_filter}"
+
         def delete():
-            response = self.index.delete_by({"filters": self._repository_filter(repository_id)})
+            response = self.index.delete_by({"filters": filters})
             if wait:
                 # A timeout here fails the caller rather than risking stale records
                 self._wait_for_task(response, DELETE_WAIT_SECONDS)

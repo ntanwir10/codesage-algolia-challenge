@@ -105,3 +105,5 @@ temp/
 
 # Claude desktop app (preview config, session worktrees)
 .claude/
+# Codex's local config, which can hold a GitHub token
+.codex/
