@@ -164,14 +164,27 @@ class FakeAlgoliaIndex:
             self.records[record["objectID"]] = record
         return _CompletedTask()
 
+    def _matches(self, filters: str, record: dict) -> bool:
+        """`repository_id=N`, optionally AND-ed with `run_id:"r"` or `NOT run_id:"r"`.
+        Like Algolia, a NOT clause also matches records without the attribute"""
+        repository_clause, *run_clauses = filters.split(" AND ")
+        if record["repository_id"] != self._repository_id(repository_clause):
+            return False
+        for clause in run_clauses:
+            negated = clause.startswith("NOT ")
+            field, _, value = clause.removeprefix("NOT ").partition(":")
+            assert field == "run_id", f"unsupported filter {clause!r}"
+            if (record.get("run_id", "") == value.strip('"')) == negated:
+                return False
+        return True
+
     def delete_by(self, params):
         if self.fail_deletes:
             raise AlgoliaException("delete_by failed")
-        repository_id = self._repository_id(params["filters"])
         self.records = {
             object_id: record
             for object_id, record in self.records.items()
-            if record["repository_id"] != repository_id
+            if not self._matches(params["filters"], record)
         }
         index = self
 

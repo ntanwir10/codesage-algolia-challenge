@@ -372,7 +372,9 @@ export function RepositoryPage() {
                         : "font-medium text-green-700"
                     }
                   >
-                    {repository.error_message
+                    {repository.error_message?.startsWith("Reprocessing failed")
+                      ? "Reprocessing failed; the previous index is still searchable"
+                      : repository.error_message
                       ? "Repository partially indexed"
                       : "Repository analysis complete!"}
                   </p>

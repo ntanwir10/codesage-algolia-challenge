@@ -6,6 +6,7 @@ from fastapi.testclient import TestClient
 from app.core.config import Settings, get_settings, validate_runtime_settings
 from app.core.security import limiter
 from app.models.repository import Repository
+from app.services.github_service import RepositoryCheckError
 
 LOCAL = ("127.0.0.1", 50000)  # TestClient's default peer, "testclient", is not a loopback address
 
@@ -384,8 +385,15 @@ class TestUrlValidation:
     def test_changing_an_indexed_repositorys_branch_rebuilds_its_index(self, client, db_session, monkeypatch):
         from app.api.v1.endpoints import repositories
 
-        started = []
+        started, checked = [], []
         monkeypatch.setattr(repositories, "start_processing", lambda *a, **k: started.append((a, k)))
+
+        async def check(url, branch):
+            checked.append(branch)
+            if branch == "missing":
+                raise RepositoryCheckError(422, "Branch 'missing' does not exist in octo/demo.")
+
+        monkeypatch.setattr(repositories, "check_source", check)
         repo = Repository(name="r", url=URL, status="completed", branch="main")
         db_session.add(repo)
         db_session.commit()
@@ -397,7 +405,16 @@ class TestUrlValidation:
         assert started == [((repo.id,), {"force_reprocess": True})]
         # Renaming alone, or the same branch again, leaves the index alone
         assert client.put(f"{REPOS}{repo.id}", json={"name": "x", "branch": "dev"}).status_code == 200
-        assert len(started) == 1
+        assert len(started) == 1 and checked == ["dev"]
+
+        # A branch that doesn't exist is refused before anything changes
+        db_session.refresh(repo)
+        repo.status = "completed"
+        db_session.commit()
+        response = client.put(f"{REPOS}{repo.id}", json={"branch": "missing"})
+        assert response.status_code == 422 and "does not exist" in response.json()["detail"]
+        db_session.refresh(repo)
+        assert (repo.branch, len(started)) == ("dev", 1)
 
     def test_put_accepts_a_branch_or_the_default(self, client):
         created = client.post(REPOS, json={"url": URL}).json()

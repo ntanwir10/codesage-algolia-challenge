@@ -6,7 +6,7 @@ from app.models.code_entity import CodeEntity
 from app.models.code_file import CodeFile
 from app.models.repository import Repository
 from app.services.github_service import GitHubAPIError, GitHubFile
-from app.services.repository_service import INDEX_REMOVED_NOTE, RepositoryService
+from app.services.repository_service import PREVIOUS_INDEX_NOTE, RepositoryService
 
 MODULE_A = (
     "import os\n"
@@ -143,9 +143,10 @@ async def test_reprocessing_replaces_rows_and_records_instead_of_duplicating(
 
     assert repository.status == "completed"
     assert stored_counts(db_session, repository.id) == (2, 5)
-    assert set(algolia_index.records) == first_ids
-    # Each run waited for the delete before indexing again
-    assert algolia_index.waited_deletes == 2
+    # The new run's records replaced the old run's: none left over, none duplicated
+    assert len(algolia_index.records) == 5
+    assert set(algolia_index.records).isdisjoint(first_ids)
+    assert len({r["run_id"] for r in algolia_index.records.values()}) == 1
 
 
 async def test_reprocessing_drops_entities_removed_upstream(
@@ -170,12 +171,17 @@ async def test_failed_fetch_during_reprocess_keeps_the_existing_index(
     github.error = GitHubAPIError(404, "GitHub repository or path not found (404)")
     await process(db_session, repository, force=True)
 
-    assert repository.status == "failed"
+    # Still completed and searchable on the previous run, with the failure noted
+    assert repository.status == "completed"
+    assert repository.error_message == (
+        "Reprocessing failed: GitHub repository or path not found (404)." + PREVIOUS_INDEX_NOTE
+    )
+    assert (repository.total_files, repository.processed_files) == (2, 2)
     assert stored_counts(db_session, repository.id) == (2, 5)
     assert len(algolia_index.records) == 5
 
 
-async def test_reprocess_stops_if_old_records_cannot_be_removed(
+async def test_a_run_whose_old_records_cannot_be_removed_still_completes(
     db_session, repository, github, algolia_index
 ):
     github.files = [FILE_A, FILE_B]
@@ -184,40 +190,58 @@ async def test_reprocess_stops_if_old_records_cannot_be_removed(
     algolia_index.fail_deletes = True
     await process(db_session, repository, force=True)
 
-    assert repository.status == "failed"
-    assert "Could not remove previously indexed records" in repository.error_message
+    # The new run is complete, so it is kept; the old records go on the next run
+    assert repository.status == "completed"
+    assert "previous run's records" in repository.error_message
     assert stored_counts(db_session, repository.id) == (2, 5)
+    assert len(algolia_index.records) == 10
+
+    algolia_index.fail_deletes = False
+    await process(db_session, repository, force=True)
     assert len(algolia_index.records) == 5
 
 
-async def test_failure_after_the_old_index_was_cleared_says_so(
+async def test_a_failed_index_keeps_the_previous_one_searchable(
     db_session, repository, github, algolia_index, monkeypatch
 ):
     github.files = [FILE_A, FILE_B]
     await process(db_session, repository)
+    first = dict(algolia_index.records)
+
+    def save_then_reject(self, documents):
+        # Some of the new run's records land before Algolia refuses the rest
+        algolia_index.save_objects(documents[:2])
+        return False
+
+    async def reject(self, documents):
+        return save_then_reject(self, documents)
+
+    monkeypatch.setattr("app.services.algolia_service.AlgoliaService.index_documents", reject)
+    await process(db_session, repository, force=True)
+
+    assert repository.status == "completed"
+    assert repository.error_message.startswith("Reprocessing failed: Algolia rejected the indexing request")
+    assert repository.error_message.endswith(PREVIOUS_INDEX_NOTE)
+    assert len(repository.error_message) <= 500
+    # The failed run's rows and records are gone; the previous run's are untouched
+    assert stored_counts(db_session, repository.id) == (2, 5)
+    assert algolia_index.records == first
+
+
+async def test_a_failed_first_run_leaves_nothing_behind(
+    db_session, repository, github, algolia_index, monkeypatch
+):
+    github.files = [FILE_A, FILE_B]
 
     async def reject(self, documents):
         return False
 
     monkeypatch.setattr("app.services.algolia_service.AlgoliaService.index_documents", reject)
-    await process(db_session, repository, force=True)
-
-    assert repository.status == "failed"
-    assert repository.error_message.startswith("Algolia rejected the indexing request")
-    assert repository.error_message.endswith(INDEX_REMOVED_NOTE)
-    assert len(repository.error_message) <= 500
-
-
-async def test_failure_before_the_clear_does_not_claim_the_index_was_removed(
-    db_session, repository, github, algolia_index
-):
-    github.files = [FILE_A, FILE_B]
     await process(db_session, repository)
 
-    github.error = GitHubAPIError(404, "GitHub repository or path not found (404)")
-    await process(db_session, repository, force=True)
-
-    assert "previous index was removed" not in repository.error_message
+    assert repository.status == "failed"
+    assert repository.error_message == "Algolia rejected the indexing request"
+    assert stored_counts(db_session, repository.id) == (0, 0)
 
 
 async def test_entities_from_other_repositories_are_untouched(
