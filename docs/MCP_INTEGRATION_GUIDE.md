@@ -222,7 +222,7 @@ Finds where a function, class or other name is defined and used. Ask *"Where is 
 | `path_glob` | string | | As in `find_patterns` |
 | `max_results` | integer 1-500 | 100 | `truncated: true` when more uses exist |
 
-- **Definitions.** Functions and classes with exactly that name: `entity_type`, `file_path`, `line_start`, `line_end` and `signature`. Their first lines are not counted as uses.
+- **Definitions.** Functions and classes with exactly that name, in the files `path_glob` matches: `entity_type`, `file_path`, `line_start`, `line_end` and `signature`. Their first lines are not counted as uses.
 - **Uses.** Each one is `file_path`, `line`, `text`, `kind` (`import` when the line is inside an indexed import, else `reference`) and `in`, the innermost function or class containing it (`null` at the top level or in docs). `total_references` and `files` count them.
 - **Matching.** Case-sensitive and whole-word, where `$` counts as part of a name, so `store` doesn't match `$store` or `storeKey`. It is a text match, so comments, strings and Markdown count too.
 - **Order.** Source files first, then tests, then Markdown and other files, each in path order. That's the indexer's order, so with `max_results` the code comes first.

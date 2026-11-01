@@ -474,6 +474,8 @@ async def find_references(db: Session, args: schemas.FindReferencesArgs) -> dict
             )
             .all()
         )
+        if args.path_glob:
+            entities = [row for row in entities if fnmatch.fnmatchcase(row[1], args.path_glob)]
         definitions = [
             (entity, path)
             for entity, path in entities

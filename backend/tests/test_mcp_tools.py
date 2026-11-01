@@ -402,6 +402,19 @@ async def test_find_references_caps_results_without_counting_definitions(
     assert r["truncated"] is truncated
 
 
+async def test_find_references_path_glob_scopes_definitions_too(db_session, repo, reference_files):
+    other = add_file(db_session, repo, "tests/store.test.ts", "function createStore() {}\n")
+    add_entity(db_session, other, "createStore", "function", 1, 1)
+
+    scoped = await call_tool(db_session, "find_references", {
+        "repository": "zustand", "name": "createStore", "path_glob": "src/*",
+    })
+    everywhere = await call_tool(db_session, "find_references", {"repository": "zustand", "name": "createStore"})
+
+    assert [d["file_path"] for d in scoped["definitions"]] == ["src/store.ts"]
+    assert [d["file_path"] for d in everywhere["definitions"]] == ["src/store.ts", "tests/store.test.ts"]
+
+
 async def test_find_references_keeps_dollar_names_apart(db_session, repo):
     add_file(db_session, repo, "a.js", "let $store = store\n", language="javascript")
     r = await call_tool(db_session, "find_references", {"repository": "zustand", "name": "store"})
