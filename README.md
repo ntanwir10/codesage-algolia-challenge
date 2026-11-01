@@ -322,7 +322,7 @@ curl -X POST http://127.0.0.1:8001/api/v1/repositories/ \
 
 - **API key.** When `CODESAGE_API_KEY` is set, it's required for:
   - every write: create, update, delete and process;
-  - `/api/v1/performance/*`, search suggestions, the MCP tool call and resource reads;
+  - search suggestions, the MCP tool call and resource reads;
   - the `/ws` WebSocket.
 
   Send it as an `X-API-Key` header. Browsers send it on the WebSocket as a `codesage.key.<hex>` subprotocol, so it never appears in a URL or an access log. Other reads (repositories, status, stats, tool listings, `/health`) are public.
