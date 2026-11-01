@@ -10,9 +10,9 @@ def call(client, tool, **arguments):
 def test_tools_list_has_input_schemas(client):
     body = client.get(f"{BASE}/mcp/tools").json()
     names = [t["name"] for t in body["tools"]]
-    assert body["count"] == len(names) == 7
+    assert body["count"] == len(names) == 8
     assert set(names) == {"list_repositories", "search_code", "get_file", "list_definitions",
-                          "analyze_repository", "find_patterns", "add_repository"}
+                          "analyze_repository", "find_patterns", "find_references", "add_repository"}
     search = next(t for t in body["tools"] if t["name"] == "search_code")
     assert search["description"] and search["inputSchema"]["properties"]["limit"]["maximum"] == 50
 

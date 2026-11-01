@@ -26,7 +26,7 @@ from app.models.code_file import CodeFile
 from app.models.repository import Repository
 from app.schemas.repository import RepositoryCreate
 from app.services import algolia_service
-from app.services.github_service import quote_path
+from app.services.github_service import FileSelector, quote_path
 from app.services.repository_service import RepositoryAddError, RepositoryService
 from app.services.repository_service import add_repository as create_repository
 from codesage_mcp import schemas
@@ -446,6 +446,98 @@ async def find_patterns(db: Session, args: schemas.FindPatternsArgs) -> dict:
     return result
 
 
+async def find_references(db: Session, args: schemas.FindReferencesArgs) -> dict:
+    repository = resolve_repository(db, args.repository)
+    _require_ready(repository)
+    # shortcut: a whole-word text match, so comments and strings count too; tree-sitter
+    # reference queries would tell a call from a mention if that ever matters
+    pattern = rf"(?<![\w$]){regex.escape(args.name)}(?![\w$])"
+
+    def load_and_scan():
+        files = (
+            db.query(CodeFile.file_path, CodeFile.content)
+            .filter(CodeFile.repository_id == repository.id)
+            .order_by(CodeFile.file_path)
+            .all()
+        )
+        if args.path_glob:
+            files = [row for row in files if fnmatch.fnmatchcase(row[0], args.path_glob)]
+        # The indexer's order: source, then tests, then Markdown, so max_results keeps the code
+        rank = FileSelector()._priority
+        files = sorted(files, key=lambda row: (rank(row[0]), row[0]))
+        entities = (
+            db.query(CodeEntity, CodeFile.file_path)
+            .join(CodeFile, CodeEntity.file_id == CodeFile.id)
+            .filter(
+                CodeEntity.repository_id == repository.id,
+                CodeEntity.entity_type.in_(("function", "class", "import")),
+            )
+            .all()
+        )
+        definitions = [
+            (entity, path)
+            for entity, path in entities
+            if entity.entity_name == args.name and entity.entity_type != "import"
+        ]
+        definition_lines = {(path, entity.start_line) for entity, path in definitions}
+        # Definition lines are scanned too, so ask for that many more to still fill max_results
+        found, truncated, skipped = _scan(
+            [tuple(row) for row in files], pattern, True, args.max_results + len(definition_lines)
+        )
+        found = [m for m in found if (m["file_path"], m["line"]) not in definition_lines]
+        return entities, definitions, found, truncated, skipped
+
+    entities, definitions, found, truncated, skipped = await asyncio.to_thread(load_and_scan)
+    truncated = truncated or len(found) > args.max_results
+    found = found[: args.max_results]
+
+    by_file: dict[str, list[CodeEntity]] = {}
+    for entity, path in entities:
+        by_file.setdefault(path, []).append(entity)
+
+    references = []
+    for match in found:
+        around = [
+            e for e in by_file.get(match["file_path"], [])
+            if e.start_line and e.end_line and e.start_line <= match["line"] <= e.end_line
+        ]
+        enclosing = min(
+            (e for e in around if e.entity_type != "import"),
+            key=lambda e: e.end_line - e.start_line,
+            default=None,
+        )
+        references.append(
+            {
+                **match,
+                "kind": "import" if any(e.entity_type == "import" for e in around) else "reference",
+                "in": enclosing.entity_name if enclosing else None,
+            }
+        )
+
+    result = {
+        "repository": repository.name,
+        "name": args.name,
+        "definitions": [
+            {
+                "entity_type": entity.entity_type,
+                "file_path": path,
+                "line_start": entity.start_line,
+                "line_end": entity.end_line,
+                "signature": (entity.signature or "")[:SIGNATURE_CHARS] or None,
+            }
+            for entity, path in sorted(definitions, key=lambda d: (d[1], d[0].start_line or 0))
+        ],
+        "total_references": len(references),
+        "files": len({r["file_path"] for r in references}),
+        "truncated": truncated,
+        "references": references,
+    }
+    if skipped:
+        result["skipped_files"] = skipped[:MAX_SKIPPED_LISTED]
+        result["skipped_count"] = len(skipped)
+    return result
+
+
 # --- add repository --------------------------------------------------------
 
 
@@ -481,6 +573,7 @@ HANDLERS: dict[str, Handler] = {
     "list_definitions": list_definitions,
     "analyze_repository": analyze_repository,
     "find_patterns": find_patterns,
+    "find_references": find_references,
     "add_repository": add_repository,
 }
 

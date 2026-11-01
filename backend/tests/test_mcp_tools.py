@@ -196,6 +196,7 @@ TOOL_ARGS = {
     "list_definitions": {},
     "analyze_repository": {},
     "find_patterns": {"pattern": "x"},
+    "find_references": {"name": "x"},
 }
 
 
@@ -350,6 +351,68 @@ async def test_find_patterns_lists_at_most_50_skipped_files(db_session, repo):
         add_file(db_session, repo, f"big{i:02}.txt", "a" * 1_000_001)
     r = await call_tool(db_session, "find_patterns", {"repository": "zustand", "pattern": "b", "regex": True})
     assert len(r["skipped_files"]) == 50 and r["skipped_count"] == 60
+
+
+@pytest.fixture
+def reference_files(db_session, repo):
+    store = add_file(db_session, repo, "src/store.ts", (
+        "import { createStore } from './vanilla'\n"
+        "\n"
+        "export function createStore(init) {\n"
+        "  return init\n"
+        "}\n"
+        "\n"
+        "export function useStore() {\n"
+        "  const s = createStore(1)\n"
+        "  return createStoreX + $createStore\n"
+        "}\n"
+    ))
+    add_entity(db_session, store, "./vanilla", "import", 1, 1)
+    add_entity(db_session, store, "createStore", "function", 3, 5)
+    add_entity(db_session, store, "useStore", "function", 7, 10)
+    add_file(db_session, repo, "docs/README.md", "Call createStore() to start.\n", language="markdown")
+
+
+async def test_find_references_lists_definitions_imports_and_callers(db_session, repo, reference_files):
+    r = await call_tool(db_session, "find_references", {"repository": "zustand", "name": "createStore"})
+
+    assert r["definitions"] == [{
+        "entity_type": "function", "file_path": "src/store.ts", "line_start": 3, "line_end": 5,
+        "signature": "createStore()",
+    }]
+    # Source before docs; the definition's own line is left out; createStoreX and $createStore
+    # are other names
+    assert [(m["file_path"], m["line"], m["kind"], m["in"]) for m in r["references"]] == [
+        ("src/store.ts", 1, "import", None),
+        ("src/store.ts", 8, "reference", "useStore"),
+        ("docs/README.md", 1, "reference", None),
+    ]
+    assert (r["total_references"], r["files"], r["truncated"]) == (3, 2, False)
+    assert r["references"][1]["text"] == "const s = createStore(1)"
+
+
+@pytest.mark.parametrize(("max_results", "lines", "truncated"), [(1, [1], True), (2, [1, 8], False)])
+async def test_find_references_caps_results_without_counting_definitions(
+    db_session, repo, reference_files, max_results, lines, truncated
+):
+    r = await call_tool(db_session, "find_references", {
+        "repository": "zustand", "name": "createStore", "path_glob": "src/*", "max_results": max_results,
+    })
+    assert [m["line"] for m in r["references"]] == lines
+    assert r["truncated"] is truncated
+
+
+async def test_find_references_keeps_dollar_names_apart(db_session, repo):
+    add_file(db_session, repo, "a.js", "let $store = store\n", language="javascript")
+    r = await call_tool(db_session, "find_references", {"repository": "zustand", "name": "store"})
+    assert [(m["line"], m["text"]) for m in r["references"]] == [(1, "let $store = store")]
+    assert r["definitions"] == [] and r["total_references"] == 1
+
+
+@pytest.mark.parametrize("name", ["a.b", "1abc", "", "a b", "x" * 201])
+async def test_find_references_takes_one_identifier(db_session, repo, name):
+    with pytest.raises(ValidationError):
+        await call_tool(db_session, "find_references", {"repository": "zustand", "name": name})
 
 
 def test_out_of_range_ids_are_not_found(db_session, repo):
