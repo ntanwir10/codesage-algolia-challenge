@@ -24,7 +24,7 @@ from app.core.migrations import upgrade_database
 from app.core.security import BrowserRequestGuard, limiter
 from app.models import code_entity, code_file, repository  # noqa: F401  registers tables
 from app.services.algolia_service import AlgoliaService
-from app.services.repository_service import recover_interrupted_jobs
+from app.services.repository_service import recover_interrupted_jobs, refresh_loop
 
 # Get application settings
 settings = get_settings()
@@ -84,8 +84,15 @@ async def lifespan(app: FastAPI):
     # Log WebSocket configuration
     logger.info("WebSocket endpoint configured at /ws for real-time updates")
 
+    refresh = None
+    if settings.refresh_interval_minutes > 0:
+        refresh = asyncio.create_task(refresh_loop(settings.refresh_interval_minutes))
+        logger.info("Scheduled refresh on", interval_minutes=settings.refresh_interval_minutes)
+
     yield
 
+    if refresh is not None:
+        refresh.cancel()
     logger.info("Shutting down CodeSage MCP Server")
 
 

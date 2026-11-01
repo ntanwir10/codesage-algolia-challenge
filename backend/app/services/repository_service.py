@@ -19,7 +19,7 @@ from datetime import UTC, datetime
 import structlog
 from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
 from app.core.database import SessionLocal
 from app.core.security import failure_message
@@ -44,6 +44,14 @@ _RUN_FIELDS = ("total_files", "processed_files", "total_lines", "language", "fra
 
 # Languages whose files are documentation or data rather than program source
 NON_PROGRAMMING_LANGUAGES = {"text", "markdown", "json", "yaml", "xml", "css", "scss", "html"}
+
+# An incremental run deletes changed files' old Algolia records this many paths per request
+PATHS_PER_DELETE = 50
+
+# What an incremental run copies from an unchanged file's previous entities
+_ENTITY_COPY = [
+    c.name for c in CodeEntity.__table__.columns if c.name not in ("id", "file_id", "created_at", "updated_at")
+]
 
 # Background jobs keyed by repository id. Module level, so a job outlives the
 # request that started it and a repository is never processed twice at once.
@@ -99,12 +107,14 @@ def is_processing(repository_id: int) -> bool:
     return task is not None and not task.done()
 
 
-def start_processing(repository_id: int, force_reprocess: bool = False) -> asyncio.Task:
+def start_processing(
+    repository_id: int, force_reprocess: bool = False, incremental: bool = False
+) -> asyncio.Task:
     """Schedule a background processing job for one repository"""
     if is_processing(repository_id):
         raise RepositoryBusyError(f"Repository {repository_id} is already being processed")
 
-    task = asyncio.create_task(_run_job(repository_id, force_reprocess))
+    task = asyncio.create_task(_run_job(repository_id, force_reprocess, incremental))
     _jobs[repository_id] = task
 
     def _forget(finished: asyncio.Task):
@@ -115,7 +125,7 @@ def start_processing(repository_id: int, force_reprocess: bool = False) -> async
     return task
 
 
-async def _run_job(repository_id: int, force_reprocess: bool):
+async def _run_job(repository_id: int, force_reprocess: bool, incremental: bool = False):
     """Process one repository with its own database session"""
     try:
         with SessionLocal() as db:
@@ -123,7 +133,7 @@ async def _run_job(repository_id: int, force_reprocess: bool):
             if repository is None:
                 logger.error("Repository not found for processing", repository_id=repository_id)
                 return
-            await RepositoryService(db).process_repository(repository, force_reprocess)
+            await RepositoryService(db).process_repository(repository, force_reprocess, incremental)
     except Exception as e:
         # process_repository records its own failures; this is a last resort
         logger.error(
@@ -213,7 +223,7 @@ class RepositoryService:
         return db_repo
 
     async def process_repository(
-        self, repository: Repository, force_reprocess: bool = False
+        self, repository: Repository, force_reprocess: bool = False, incremental: bool = False
     ) -> Repository:
         """Process a repository, recording `completed` or `failed` with a reason"""
         if repository.status == "completed" and not force_reprocess:
@@ -233,7 +243,7 @@ class RepositoryService:
             # A run already shows "processing" while it waits here for a free slot
             async with _run_slot():
                 started = time.monotonic()  # after the wait for a slot, so it times the run itself
-                await self.process_repository_files(repository)
+                await self.process_repository_files(repository, incremental)
         except Exception as e:
             # Discard any half-written work so recording the failure can't fail too
             self.db.rollback()
@@ -280,8 +290,12 @@ class RepositoryService:
         )
         return repository
 
-    async def process_repository_files(self, repository: Repository):
-        """GitHub fetch → parse → store → Algolia index. Raises on any failure."""
+    async def process_repository_files(self, repository: Repository, incremental: bool = False):
+        """GitHub fetch → parse → store → Algolia index. Raises on any failure.
+
+        Incremental: a file whose content and language match the previous run's row is reused.
+        Its rows are copied without parsing and its Algolia records are left in place.
+        """
         from app.services.algolia_service import AlgoliaService
         from app.services.code_parser import CodeParser
         from app.services.git_source import GitSource
@@ -315,24 +329,37 @@ class RepositoryService:
         processed_files = 0
         failed_files = 0
         unparsed_files = 0
+        previous: dict[str, CodeFile] = {}
+        if incremental:
+            previous = {
+                row.file_path: row
+                for row in self.db.query(CodeFile)
+                .options(selectinload(CodeFile.entities))
+                .filter(CodeFile.repository_id == repository.id, CodeFile.id <= self._cut)
+            }
+        kept: set[str] = set()  # reused paths whose rows committed; their old records stay
 
         for start in range(0, len(files), DB_BATCH_SIZE):
             batch = files[start : start + DB_BATCH_SIZE]
             batch_documents = []
+            batch_reused = []
             for file in batch:
-                try:
-                    entities = await code_parser.extract_entities(
-                        file.path, file.content, file.language
-                    )
-                except Exception as e:
-                    # Still stored, just without entities; the run reports it
-                    entities = []
-                    unparsed_files += 1
-                    logger.error(
-                        "Failed to parse code file",
-                        file_path=file.path,
-                        error=failure_message(e),
-                    )
+                old = previous.get(file.path)
+                reuse = old is not None and old.content == file.content and old.language == file.language
+                entities = []
+                if not reuse:
+                    try:
+                        entities = await code_parser.extract_entities(
+                            file.path, file.content, file.language
+                        )
+                    except Exception as e:
+                        # Still stored, just without entities; the run reports it
+                        unparsed_files += 1
+                        logger.error(
+                            "Failed to parse code file",
+                            file_path=file.path,
+                            error=failure_message(e),
+                        )
                 code_file = CodeFile(
                     repository_id=repository.id,
                     file_path=file.path,
@@ -340,28 +367,35 @@ class RepositoryService:
                     language=file.language,
                     line_count=len(file.content.splitlines()),
                 )
-                code_file.entities = [
-                    CodeEntity(
-                        repository_id=repository.id,
-                        entity_type=entity.entity_type,
-                        entity_name=entity.name[:255],
-                        start_line=entity.line_start,
-                        end_line=entity.line_end,
-                        signature=entity.content,
-                        docstring=entity.description,
-                        entity_metadata={
-                            "parameters": entity.parameters,
-                            "return_type": entity.return_type,
-                        },
+                if reuse:
+                    code_file.entities = [
+                        CodeEntity(**{name: getattr(entity, name) for name in _ENTITY_COPY})
+                        for entity in old.entities
+                    ]
+                    batch_reused.append(file.path)
+                else:
+                    code_file.entities = [
+                        CodeEntity(
+                            repository_id=repository.id,
+                            entity_type=entity.entity_type,
+                            entity_name=entity.name[:255],
+                            start_line=entity.line_start,
+                            end_line=entity.line_end,
+                            signature=entity.content,
+                            docstring=entity.description,
+                            entity_metadata={
+                                "parameters": entity.parameters,
+                                "return_type": entity.return_type,
+                            },
+                        )
+                        for entity in entities
+                    ]
+                    batch_documents.extend(
+                        algolia_service.build_documents(
+                            entities, repository.id, file.path, file.language, self._run_id
+                        )
                     )
-                    for entity in entities
-                ]
                 self.db.add(code_file)
-                batch_documents.extend(
-                    algolia_service.build_documents(
-                        entities, repository.id, file.path, file.language, self._run_id
-                    )
-                )
 
             try:
                 # Flushing a batch can write thousands of rows; keep it off the event loop.
@@ -380,6 +414,7 @@ class RepositoryService:
                 continue
 
             documents.extend(batch_documents)
+            kept.update(batch_reused)
             processed_files += len(batch)
             repository.processed_files = processed_files
             repository.total_files = len(files)
@@ -390,23 +425,31 @@ class RepositoryService:
         repository.processed_files = processed_files
         repository.total_lines = sum(len(f.content.splitlines()) for f in files)
 
-        if not documents:
+        # An incremental run where no indexed file changed has nothing new, and that's fine
+        if not documents and not kept:
             raise IngestionError(
                 f"No code entities were indexed from {len(files)} files "
                 f"({failed_files} failed to process)"
             )
 
         # 3. Algolia: index everything in chunked batch requests
-        self._indexed = True
-        if not await algolia_service.index_documents(documents):
-            raise IngestionError("Algolia rejected the indexing request")
+        if documents:
+            self._indexed = True
+            if not await algolia_service.index_documents(documents):
+                raise IngestionError("Algolia rejected the indexing request")
 
         # 4. This run is complete: drop the previous run's rows and records. Not waited on:
         # Algolia applies an index's tasks in order, and a timeout must not discard a good run
         await self._delete_rows(repository.id, previous=True)
-        stale_records = not await algolia_service.delete_repository_index(
-            repository.id, run_filter=f'NOT run_id:"{self._run_id}"'
-        )
+        if kept:
+            # Earlier records stay for the reused files; every other previous path goes
+            stale_records = not await self._delete_old_records(
+                algolia_service, repository.id, sorted(set(previous) - kept)
+            )
+        else:
+            stale_records = not await algolia_service.delete_repository_index(
+                repository.id, run_filter=f'NOT run_id:"{self._run_id}"'
+            )
 
         programming = [f.language for f in files if f.language not in NON_PROGRAMMING_LANGUAGES]
         if programming:
@@ -428,7 +471,12 @@ class RepositoryService:
             problems.append(
                 "the repository is too large to list in full, so some directories were not indexed"
             )
-        if stale_records:
+        if stale_records and kept:
+            problems.append(
+                "search still holds old records for some changed or removed files "
+                "until they change again or a full reprocess"
+            )
+        elif stale_records:
             problems.append("search still holds the previous run's records until the next run")
         if problems:
             repository.error_message = "Partially indexed: " + "; ".join(problems)
@@ -439,6 +487,7 @@ class RepositoryService:
             total_files=len(files),
             processed_files=processed_files,
             failed_files=failed_files,
+            reused_files=len(kept),
             indexed_entities=len(documents),
             language=repository.language,
         )
@@ -580,6 +629,19 @@ class RepositoryService:
 
         await _to_thread_to_completion(delete)
 
+    async def _delete_old_records(self, algolia_service, repository_id: int, paths: list[str]) -> bool:
+        """Delete earlier runs' records for these paths; False if any request failed"""
+        deleted = True
+        for start in range(0, len(paths), PATHS_PER_DELETE):
+            any_path = " OR ".join(
+                f'file_path:"{algolia_service._escape_filter_value(path)}"'
+                for path in paths[start : start + PATHS_PER_DELETE]
+            )
+            deleted &= await algolia_service.delete_repository_index(
+                repository_id, run_filter=f'NOT run_id:"{self._run_id}" AND ({any_path})'
+            )
+        return deleted
+
     async def _discard_run(self, repository_id: int) -> None:
         """Remove what a failed run wrote; the previous run's rows and records stay as they were"""
         from app.services.algolia_service import AlgoliaService
@@ -657,6 +719,56 @@ async def index_freshness(repository: Repository) -> dict:
     result = {"branch": branch, "commits_behind": behind, "changed": changed, "checked_at": datetime.now(UTC)}
     _freshness[key] = (time.monotonic(), result)
     return result
+
+
+async def refresh_once() -> int:
+    """Start an incremental run for each completed repository whose branch has moved.
+
+    Returns how many runs it started. One repository's problem never stops the others.
+    """
+    with SessionLocal() as db:
+        repositories = (
+            db.query(Repository)
+            .filter(Repository.status == "completed", Repository.commit_sha.isnot(None))
+            .order_by(Repository.id)
+            .all()
+        )
+    started = 0
+    for repository in repositories:
+        if is_processing(repository.id):
+            continue
+        try:
+            try:
+                changed = (await index_freshness(repository))["changed"]
+            except RepositoryCheckError as e:
+                # A force-push makes GitHub's compare 404 (422 here). The run checks again,
+                # and if the branch is really gone it fails and keeps the previous index
+                if e.status_code != 422:
+                    raise
+                changed = True
+            if changed:
+                start_processing(repository.id, force_reprocess=True, incremental=True)
+                started += 1
+        except Exception as e:
+            logger.warning(
+                "Scheduled refresh skipped a repository",
+                repository_id=repository.id,
+                error=failure_message(e),
+            )
+    return started
+
+
+async def refresh_loop(interval_minutes: float) -> None:
+    """Run refresh_once every interval, waiting one interval first. Cancel it to stop."""
+    while True:
+        await asyncio.sleep(interval_minutes * 60)
+        try:
+            started = await refresh_once()
+        except Exception as e:
+            logger.error("Scheduled refresh failed", error=failure_message(e))
+        else:
+            if started:
+                logger.info("Scheduled refresh started runs", count=started)
 
 
 async def add_repository(db: Session, repository: RepositoryCreate) -> Repository:

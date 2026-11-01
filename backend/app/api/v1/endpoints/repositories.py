@@ -303,6 +303,9 @@ async def process_repository(
     request: Request,
     repository_id: RepositoryId,
     force_reprocess: bool = False,
+    incremental: bool = Query(
+        False, description="Re-index only files that changed since the last run; implies force_reprocess"
+    ),
     db: Session = Depends(get_db),
 ):
     """Schedule a repository processing job"""
@@ -311,7 +314,7 @@ async def process_repository(
         raise HTTPException(
             status_code=404, detail=f"Repository {repository_id} not found"
         )
-    if repository.status == "completed" and not force_reprocess:
+    if repository.status == "completed" and not (force_reprocess or incremental):
         raise HTTPException(
             status_code=409,
             detail="Repository is already processed; pass force_reprocess=true to reprocess it",
@@ -319,7 +322,7 @@ async def process_repository(
 
     require_algolia()
     try:
-        start_processing(repository_id, force_reprocess=force_reprocess)
+        start_processing(repository_id, force_reprocess=force_reprocess or incremental, incremental=incremental)
     except RepositoryBusyError as e:
         raise HTTPException(status_code=409, detail=str(e)) from e
     # The job starts at the next await, so clients polling /status never read the old "failed"
