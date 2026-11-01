@@ -119,6 +119,8 @@ describe("RepositoryPage index freshness", () => {
     expect(await screen.findByText(text, { exact: false })).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "Reprocess to update" }));
     expect(await screen.findByText("Reprocess Repository")).toBeInTheDocument();
+    // A reprocess keeps the current index searchable until the new run completes
+    expect(screen.getByText(/search keeps using the current index/i)).toBeInTheDocument();
   });
 
   it("says up to date, with no hint", async () => {

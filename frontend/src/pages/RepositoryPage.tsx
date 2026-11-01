@@ -522,7 +522,7 @@ export function RepositoryPage() {
           void handleReprocess();
         }}
         title="Reprocess Repository"
-        description="This removes the current index and builds it again. Search is unavailable until the run finishes."
+        description="This builds the index again from the branch's latest commit. Search keeps using the current index until the new run completes, and keeps it if the run fails."
         confirmText="Reprocess"
         variant="warning"
       />
