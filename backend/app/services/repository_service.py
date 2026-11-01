@@ -29,7 +29,6 @@ from app.models.repository import Repository
 from app.schemas.repository import RepositoryCreate
 from app.services import git_source
 from app.services.github_service import GitHubService, RepositoryCheckError, parse_repository_url
-from app.services.performance_monitor import monitor_repository_processing
 
 logger = structlog.get_logger()
 
@@ -232,9 +231,9 @@ class RepositoryService:
 
         try:
             # A run already shows "processing" while it waits here for a free slot
-            async with _run_slot(), monitor_repository_processing(repository.name) as metrics:
+            async with _run_slot():
+                started = time.monotonic()  # after the wait for a slot, so it times the run itself
                 await self.process_repository_files(repository)
-                metrics.items_processed = repository.processed_files  # files per second, not 0
         except Exception as e:
             # Discard any half-written work so recording the failure can't fail too
             self.db.rollback()
@@ -274,6 +273,7 @@ class RepositoryService:
             repository_id=repository.id,
             total_files=repository.total_files,
             processed_files=repository.processed_files,
+            duration_s=round(time.monotonic() - started, 1),
         )
         await self._broadcast_repository_status(
             repository, message=repository.error_message or "Processing completed successfully"

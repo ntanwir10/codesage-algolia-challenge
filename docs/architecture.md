@@ -19,10 +19,10 @@ Everything runs in one backend process; the other parts are clients or proxies.
 | Component | Path | Role |
 | --- | --- | --- |
 | App entry | `backend/app/main.py` | Builds the FastAPI app, validates settings, runs migrations and crash recovery at startup, and serves `/health` and `/ws`. Adds the request guard, CORS and an `X-Request-ID` header. |
-| REST API | `backend/app/api/v1/endpoints/` | `repositories.py` (create, update, delete, status, stats, process), `ai.py` (MCP tool calls, resources, search suggestions) and `performance.py` (metrics). Mounted under `/api/v1`. |
+| REST API | `backend/app/api/v1/endpoints/` | `repositories.py` (create, update, delete, status, stats, freshness, process) and `ai.py` (MCP tool calls, resources, search suggestions). Mounted under `/api/v1`. |
 | Core | `backend/app/core/` | `config.py` (settings and startup validation), `security.py` (API key, request guard, rate limiter, failure messages), `database.py` (engine, session) and `migrations.py` (Alembic at startup). |
 | Models | `backend/app/models/` | SQLAlchemy tables: `Repository`, `CodeFile`, `CodeEntity`. |
-| Services | `backend/app/services/` | `repository_service.py` (job lifecycle), `github_service.py` (listing and download), `git_source.py` (public repositories on other hosts, read with git), `code_parser.py` (entities), `algolia_service.py` (index and search), `mcp_tools.py` (the seven tools), `websocket_service.py` (live status) and `performance_monitor.py` (metrics). |
+| Services | `backend/app/services/` | `repository_service.py` (job lifecycle), `github_service.py` (listing and download), `git_source.py` (public repositories on other hosts, read with git), `code_parser.py` (entities), `algolia_service.py` (index and search), `mcp_tools.py` (the seven tools) and `websocket_service.py` (live status). |
 | MCP bridge | `backend/codesage_mcp/` | Stdio MCP server that Claude Desktop runs. It holds no data and turns `tools/call`, `resources/list` and `resources/read` into HTTP calls to `/api/v1/ai`. It answers `tools/list`, `resources/templates/list` and the two prompts (`prompts.py`) itself. Tool names and argument models live in `schemas.py`, which the backend imports too, so `tools/list` works with the backend down. Requests time out after 30 s, and a connection after 5 s. |
 | Dashboard | `frontend/` | React + Vite. `services/api.ts` and `services/websocket.ts` are the REST and WebSocket clients. In the dev stack nginx serves the built bundle. |
 | nginx | `deployment/nginx.conf`, `deployment/nginx.prod.conf.template` | Dev: HTTP proxy that drops requests for any `Host` except `localhost` and `127.0.0.1`. Prod: see [The prod nginx role](#the-prod-nginx-role). |
@@ -203,7 +203,6 @@ The defaults protect a local, single-user setup; a key and the host checks prote
 When `CODESAGE_API_KEY` is set, requests must carry it as `X-API-Key`, compared in constant time. It guards:
 
 - repository create, update, delete and process, and the `add_repository` tool call;
-- everything under `/api/v1/performance`;
 - `GET /api/v1/ai/search/suggestions`, `POST /api/v1/ai/mcp/tools/call` and `GET /api/v1/ai/mcp/resources/read`;
 - the `/ws` WebSocket.
 
@@ -245,7 +244,7 @@ Limits come from slowapi, per client address, and can be turned off with `ENABLE
 
 - **Logs and responses.** An unhandled exception returns `500` with `{detail, request_id}` and an `X-Request-ID` header; the details go to the log under that ID. The response carries CORS headers for an allowed origin, because the handler sits outside the CORS middleware, so a browser can read it.
 - **Shapes.** Errors are `{detail}` with a string. Validation errors (`422`) carry a list whose `loc` names the field, such as `["body","url"]`. A rate limit is `429` with `{detail}` and a `Retry-After` header. An id or `skip` too large for the database is `422`, not a `500`.
-- **Recorded failures.** `failure_message` is used for `error_message`, WebSocket frames, metrics and parse logs. It replaces SQLAlchemy errors with a fixed message and truncates other errors to 500 characters.
+- **Recorded failures.** `failure_message` is used for `error_message`, WebSocket frames and parse logs. It replaces SQLAlchemy errors with a fixed message and truncates other errors to 500 characters.
 - **Tool errors.** A failed Algolia query reaches Claude as "Search is unavailable", and the health check says only that Algolia is unreachable, because client errors can name the Algolia host or app id.
 - **Key transport.** Browsers send the key to `/ws` in a subprotocol, so it never appears in a URL or an access log.
 - **Key in the bundle.** `VITE_CODESAGE_API_KEY` is built into the dashboard JavaScript. Outside the prod stack, anyone who can load the dashboard can read it, so use it locally for one user.

@@ -59,11 +59,6 @@ class TestApiKey:
         assert client.get(REPOS).status_code == 200
         assert client.get("/health").status_code == 200
 
-    def test_performance_router_needs_the_key(self, client, api_key):
-        assert client.get("/api/v1/performance/metrics").status_code == 401
-        response = client.get("/api/v1/performance/metrics", headers={"X-API-Key": api_key})
-        assert response.status_code != 401
-
     def test_no_key_configured_allows_writes(self, client):
         assert client.post(REPOS, json={"url": URL}).status_code == 201
 
@@ -81,7 +76,6 @@ class TestBrowserRequests:
         process = client.post(f"{REPOS}{repo.id}/process?force_reprocess=true", headers=forged)
         assert process.status_code == 403
         assert process.json()["detail"] == "Cross-origin request refused"
-        assert client.post("/api/v1/performance/reset", headers=forged).status_code == 403
 
     @pytest.mark.parametrize("origin", ["http://localhost:5173", "http://localhost"])
     def test_listed_and_same_origin_writes_pass(self, client, origin):
