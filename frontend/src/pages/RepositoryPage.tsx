@@ -2,7 +2,7 @@ import { useParams, Link, useNavigate } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useState } from "react";
 import { api } from "@/services/api";
-import type { Repository } from "@/types/repository";
+import type { Repository, RepositoryFreshness } from "@/types/repository";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { LoadingSpinner } from "@/components/ui/loading-spinner";
@@ -27,6 +27,13 @@ const pollUnlessGone = (query: {
   query.state.error && describeError(query.state.error).status === 404
     ? false
     : pollWhileActive(query.state.data);
+
+// GitHub counts the new commits; other hosts only say whether the branch moved.
+function describeFreshness({ branch, commits_behind, changed }: RepositoryFreshness) {
+  const name = branch ?? "the default branch";
+  if (commits_behind) return `${commits_behind} commit${commits_behind === 1 ? "" : "s"} behind ${name}`;
+  return changed ? `${name} has changed since` : `Up to date with ${name}`;
+}
 
 export function RepositoryPage() {
   const { id } = useParams<{ id: string }>();
@@ -71,6 +78,15 @@ export function RepositoryPage() {
     queryKey: ["repository-stats", repositoryId],
     queryFn: () => api.getRepositoryStats(repositoryId),
     enabled: !!repositoryId,
+  });
+  // Once per indexed commit and page visit, never on the status poll; the server caches it too
+  const { data: freshness } = useQuery({
+    queryKey: ["repository-freshness", repositoryId, repository?.commit_sha],
+    queryFn: () => api.getRepositoryFreshness(repositoryId),
+    enabled: repository?.status === "completed" && !!repository.commit_sha,
+    staleTime: 10 * 60_000,
+    refetchOnWindowFocus: false,
+    retry: false,
   });
   const languages = useMemo(
     () => Object.keys(stats?.entities_by_language ?? {}).sort(),
@@ -272,6 +288,24 @@ export function RepositoryPage() {
                 {repository.commit_sha && (
                   <span className="text-sm text-muted-foreground" title={repository.commit_sha}>
                     Indexed at <code>{repository.commit_sha.slice(0, 7)}</code>
+                  </span>
+                )}
+                {freshness && repository.status === "completed" && (
+                  <span className="text-sm text-muted-foreground">
+                    {describeFreshness(freshness)}
+                    {freshness.changed && (
+                      <>
+                        {" · "}
+                        <button
+                          type="button"
+                          onClick={() => setConfirmReprocess(true)}
+                          disabled={isReprocessing}
+                          className="text-blue-600 hover:underline font-medium"
+                        >
+                          Reprocess to update
+                        </button>
+                      </>
+                    )}
                   </span>
                 )}
               </div>

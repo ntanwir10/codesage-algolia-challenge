@@ -18,6 +18,7 @@ from app.core.security import limiter, require_api_key
 from app.models.repository import Repository
 from app.schemas.repository import (
     RepositoryCreate,
+    RepositoryFreshness,
     RepositoryResponse,
     RepositoryUpdate,
 )
@@ -30,6 +31,7 @@ from app.services.repository_service import (
     RepositoryService,
     add_repository,
     check_source,
+    index_freshness,
     is_processing,
     start_processing,
 )
@@ -108,6 +110,28 @@ async def create_repository(
                 status_code=e.status_code,
                 content={"detail": e.detail, "repository_id": e.repository_id},
             )
+        raise HTTPException(status_code=e.status_code, detail=e.detail, headers=e.headers) from e
+
+
+@router.get(
+    "/{repository_id}/freshness",
+    response_model=RepositoryFreshness,
+    summary="Index Freshness",
+    description="Whether the indexed commit is behind the repository's branch; cached for 10 minutes",
+)
+@limiter.limit(lambda: settings.rate_limit_default)
+async def get_repository_freshness(
+    request: Request, repository_id: RepositoryId, db: Session = Depends(get_db)
+):
+    """Compare the indexed commit with the branch on its host"""
+    repository = db.query(Repository).filter(Repository.id == repository_id).first()
+    if not repository:
+        raise HTTPException(status_code=404, detail=f"Repository {repository_id} not found")
+    if not repository.commit_sha:
+        raise HTTPException(status_code=409, detail="The repository has no indexed commit yet")
+    try:
+        return await index_freshness(repository)
+    except RepositoryCheckError as e:
         raise HTTPException(status_code=e.status_code, detail=e.detail, headers=e.headers) from e
 
 

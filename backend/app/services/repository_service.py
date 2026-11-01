@@ -10,6 +10,7 @@ repository, and always ends in `completed` or `failed` with a reason.
 import asyncio
 import contextlib
 import json
+import time
 import uuid
 import weakref
 from collections import Counter
@@ -630,6 +631,32 @@ async def check_source(url: str, branch: str | None) -> None:
         await GitHubService().check_repository(url, branch)
     else:
         await git_source.check_remote(url, branch)
+
+
+FRESHNESS_TTL = 600  # seconds; a page polling every few seconds still asks the host once per 10 minutes
+_freshness: dict[tuple, tuple[float, dict]] = {}
+
+
+async def index_freshness(repository: Repository) -> dict:
+    """Whether the indexed commit is behind the repository's branch now, cached for FRESHNESS_TTL.
+
+    GitHub counts the commits; other hosts only say whether the branch moved. A new commit_sha,
+    branch or URL is a new cache key. Raises RepositoryCheckError when the host can't be asked.
+    """
+    key = (repository.id, repository.url, repository.branch, repository.commit_sha)
+    cached = _freshness.get(key)
+    if cached and time.monotonic() - cached[0] < FRESHNESS_TTL:
+        return cached[1]
+    if parse_repository_url(repository.url)[0] == "github.com":
+        branch, behind, changed = await GitHubService().commits_behind(
+            repository.url, repository.commit_sha, repository.branch
+        )
+    else:
+        branch, head = await git_source.remote_head(repository.url, repository.branch)
+        behind, changed = None, head != repository.commit_sha
+    result = {"branch": branch, "commits_behind": behind, "changed": changed, "checked_at": datetime.now(UTC)}
+    _freshness[key] = (time.monotonic(), result)
+    return result
 
 
 async def add_repository(db: Session, repository: RepositoryCreate) -> Repository:

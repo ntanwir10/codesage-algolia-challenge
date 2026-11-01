@@ -483,6 +483,36 @@ class GitHubService(FileSelector):
         finally:
             await session.close()
 
+    async def commits_behind(self, url: str, sha: str, branch: str | None = None) -> tuple[str, int, bool]:
+        """(branch, commits on it the index lacks, whether it moved at all since `sha`).
+
+        No branch means the default one, read from the repository first. Like check_repository:
+        no retries or rate-limit sleeps, and failures raise RepositoryCheckError.
+        """
+        owner, repo, _ = parse_github_url(url)
+        name = f"{owner}/{repo}"
+        session = self._new_session(total_timeout=10)
+        try:
+            if not branch:
+                status, info = await self._check_get(session, f"{self.base_url}/repos/{owner}/{repo}")
+                branch = info.get("default_branch") if status == 200 and isinstance(info, dict) else None
+                if not branch:
+                    raise RepositoryCheckError(422, f"GitHub repository {name} was not found.")
+            status, compare = await self._check_get(
+                session, f"{self.base_url}/repos/{owner}/{repo}/compare/{sha}...{quote_path(branch)}"
+            )
+            if status == 403:
+                raise RepositoryCheckError(422, f"GitHub denied access to {name}.")
+            if status != 200 or not isinstance(compare, dict):
+                raise RepositoryCheckError(
+                    422, f"Branch '{branch}' or the indexed commit no longer exists in {name}."
+                )
+            # base...head: ahead_by counts the branch's commits since the indexed one. A reset or
+            # force-pushed branch is "behind" or "diverged", which is a change even at 0
+            return branch, int(compare.get("ahead_by") or 0), compare.get("status") != "identical"
+        finally:
+            await session.close()
+
     async def _check_get(self, session: aiohttp.ClientSession, url: str) -> tuple[int, Any]:
         """One GET for check_repository: (status, JSON) for 200, 403 and 404, else raises"""
         try:
