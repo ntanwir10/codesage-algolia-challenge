@@ -68,7 +68,7 @@ async def test_tools_list_matches_schemas_without_backend():
     async with make_client(backend) as client:
         result = await client.list_tools()
     assert [t.name for t in result.tools] == list(TOOLS)
-    assert len(result.tools) == 7
+    assert len(result.tools) == 8
     for tool in result.tools:
         assert tool.input_schema == input_schema(tool.name)
     assert backend.requests == []
@@ -364,12 +364,12 @@ async def test_stdio_subprocess_smoke():
     )
     async with Client(stdio_client(params), mode="legacy") as client:
         tools = await client.list_tools()
-        assert len(tools.tools) == 7
+        assert len(tools.tools) == 8
         result = await client.call_tool("list_repositories", {})
         assert result.is_error
         assert "not reachable" in result.content[0].text
         # Still answering after the failed call
-        assert len((await client.list_tools()).tools) == 7
+        assert len((await client.list_tools()).tools) == 8
         # Prompts are built locally, so they work with the backend down
         assert [p.name for p in (await client.list_prompts()).prompts] == list(PROMPTS)
 

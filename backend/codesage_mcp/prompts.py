@@ -63,7 +63,8 @@ PROMPTS: dict[str, PromptSpec] = {
             "Find where {feature} is implemented{scope}.\n\n"
             "1. Call search_code with a short query that names it{search_scope}. If the first "
             "results miss, try another wording or an entity_type filter.\n"
-            "2. Call list_definitions with name or path_prefix to see what surrounds the best hits.\n"
+            "2. Call list_definitions with name or path_prefix to see what surrounds the best hits, "
+            "and find_references on a key function or class to see where it is used.\n"
             "3. Open the most likely candidates with get_file at the reported lines to confirm.\n\n"
             "Answer with the files and line ranges that implement it, how they connect, and the "
             "source links from the search results. If nothing matches, say so instead of guessing.",

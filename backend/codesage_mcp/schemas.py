@@ -79,6 +79,18 @@ class FindPatternsArgs(_Args):
     max_results: int = Field(default=100, ge=1, le=500, description="Maximum matches to return")
 
 
+class FindReferencesArgs(_Args):
+    repository: str = Field(description=REPOSITORY_DESCRIPTION)
+    name: str = Field(
+        min_length=1,
+        max_length=200,
+        pattern=r"^[A-Za-z_$][\w$]*$",
+        description="Function, class or variable name, without dots. For a method, pass the method's name.",
+    )
+    path_glob: str | None = Field(default=None, description="Only search files matching this glob, e.g. 'src/*.py'")
+    max_results: int = Field(default=100, ge=1, le=500, description="Maximum references to return")
+
+
 class AddRepositoryArgs(_Args):
     url: str = Field(
         description=(
@@ -142,6 +154,15 @@ TOOLS: dict[str, ToolSpec] = {
             name="find_patterns",
             description="Find lines in a repository's files that match a literal string or a regular expression.",
             args_model=FindPatternsArgs,
+        ),
+        ToolSpec(
+            name="find_references",
+            description=(
+                "Find where a function, class or other name is defined and used in a repository. "
+                "Returns its definitions, then every line that uses the name as a whole word, "
+                "marking imports and naming the function or class each use sits in."
+            ),
+            args_model=FindReferencesArgs,
         ),
         ToolSpec(
             name="add_repository",

@@ -1,6 +1,6 @@
 # MCP integration guide
 
-How to connect Claude Desktop (or any MCP client) to CodeSage: the installer, the stdio bridge's settings, the seven tools and the resources it serves, the backend endpoints behind them, and what to do when a call fails. For the end-to-end picture, including the tool-call sequence diagram, see the [root README](../README.md#using-it-from-claude-desktop).
+How to connect Claude Desktop (or any MCP client) to CodeSage: the installer, the stdio bridge's settings, the eight tools and the resources it serves, the backend endpoints behind them, and what to do when a call fails. For the end-to-end picture, including the tool-call sequence diagram, see the [root README](../README.md#using-it-from-claude-desktop).
 
 ## Contents
 
@@ -211,6 +211,23 @@ Finds lines that match a literal string or a regular expression, in file path or
 - **Skipped files.** They appear as `skipped_files` (the first 50) with `skipped_count` for the total. Both are absent when nothing was skipped.
 - **Literal search** has no time limits.
 
+### `find_references`
+
+Finds where a function, class or other name is defined and used. Ask *"Where is `createStore` used in zustand?"*.
+
+| Argument | Type | Default | Notes |
+| --- | --- | --- | --- |
+| `repository` | string, required | | |
+| `name` | string, required | | One identifier: letters, digits, `_` and `$`, not starting with a digit, at most 200 characters. No dots; for a method, pass the method's name |
+| `path_glob` | string | | As in `find_patterns` |
+| `max_results` | integer 1-500 | 100 | `truncated: true` when more uses exist |
+
+- **Definitions.** Functions and classes with exactly that name, in the files `path_glob` matches: `entity_type`, `file_path`, `line_start`, `line_end` and `signature`. Their first lines are not counted as uses.
+- **Uses.** Each one is `file_path`, `line`, `text`, `kind` (`import` when the line is inside an indexed import, else `reference`) and `in`, the innermost function or class containing it (`null` at the top level or in docs). `total_references` and `files` count them.
+- **Matching.** Case-sensitive and whole-word, where `$` counts as part of a name, so `store` doesn't match `$store` or `storeKey`. It is a text match, so comments, strings and Markdown count too.
+- **Order.** Source files first, then tests, then Markdown and other files, each in path order. That's the indexer's order, so with `max_results` the code comes first.
+- **Limits.** The same time limits and skipped-file reporting as a regex `find_patterns`.
+
 ### `add_repository`
 
 Adds a repository and starts indexing it. It returns `repository_id`, `name`, `status` and a message; indexing runs in the background, so follow it with `list_repositories` and search once the status is `completed`.
@@ -264,7 +281,7 @@ The bridge also answers `resources/list` and `resources/read`. Reading needs the
 | Prompt | Arguments | Steers Claude to |
 | --- | --- | --- |
 | `explain_repository` ("Explain this repository") | `repository` (required) | `analyze_repository`, then `list_definitions` (with `path_prefix`, and `entity_type: "doc_section"` for docs), then `get_file` on the README and central files. The answer covers what the repository does, its layout and main parts, and where to start, citing paths and lines |
-| `find_implementation` ("Where is this implemented?") | `feature` (required), `repository` (optional; empty searches every repository) | `search_code`, then `list_definitions` around the best hits, then `get_file` to confirm. The answer gives files, line ranges and source links, or says nothing matched |
+| `find_implementation` ("Where is this implemented?") | `feature` (required), `repository` (optional; empty searches every repository) | `search_code`, then `list_definitions` around the best hits and `find_references` on a key function or class, then `get_file` to confirm. The answer gives files, line ranges and source links, or says nothing matched |
 
 A missing required argument fails with `Prompt '<name>' needs the '<argument>' argument`, and an unknown name with `Unknown prompt '<name>'`.
 
@@ -351,7 +368,7 @@ Read the bridge's stderr in Claude Desktop's MCP log for the `codesage` server. 
 npx @modelcontextprotocol/inspector ./mcp_launcher.sh  # run from the repo root
 ```
 
-Set `MCP_SERVER_URL` and `CODESAGE_API_KEY` in the Inspector's environment fields, or export them first. You should see seven tools under Tools. With the backend running, calling one returns JSON.
+Set `MCP_SERVER_URL` and `CODESAGE_API_KEY` in the Inspector's environment fields, or export them first. You should see eight tools under Tools. With the backend running, calling one returns JSON.
 
 ## Known limitations
 

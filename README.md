@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/ntanwir10/codesage-algolia-challenge/actions/workflows/ci.yml/badge.svg)](https://github.com/ntanwir10/codesage-algolia-challenge/actions/workflows/ci.yml)
 
-**Search and read codebases from Claude.** CodeSage indexes a repository's functions, classes, imports, documentation and Terraform blocks into Algolia, then serves them to Claude Desktop (or any MCP client) as seven tools. A web dashboard adds repositories from GitHub, GitLab, Bitbucket or any https git host, shows indexing progress live and searches the index. Claude can add them too.
+**Search and read codebases from Claude.** CodeSage indexes a repository's functions, classes, imports, documentation and Terraform blocks into Algolia, then serves them to Claude Desktop (or any MCP client) as eight tools. A web dashboard adds repositories from GitHub, GitLab, Bitbucket or any https git host, shows indexing progress live and searches the index. Claude can add them too.
 
 Built for the [Algolia MCP Server Challenge](https://dev.to/challenges/algolia-2025-07-09).
 
@@ -280,9 +280,10 @@ An unknown path shows "Page not found". A repository that doesn't exist says so;
 | `list_definitions` | Definitions in a repository, by file and line |
 | `analyze_repository` | File, line and entity counts, languages, top directories, largest files |
 | `find_patterns` | Literal or regex line matches. Regex search stops after 10 s per call |
+| `find_references` | Where a function, class or other name is defined and used: its definitions, then each whole-word use with the function or class it sits in, imports marked. Source comes before tests and docs. A text match, so comments and strings count too |
 | `add_repository` | Adds a repository by https URL and starts indexing. Public repositories on any git host; needs the API key |
 
-The bridge also offers two prompts: ready-made requests that an MCP client can list for you to pick. **Explain this repository** (`explain_repository`, takes `repository`) walks Claude through `analyze_repository`, `list_definitions` and `get_file`. **Where is this implemented?** (`find_implementation`, takes `feature` and an optional `repository`) goes through `search_code`, `list_definitions` and `get_file`, and answers with file paths and line ranges. A resource template, `codesage://repositories/{id}/files`, lists one repository's indexed files; see [Resources](docs/MCP_INTEGRATION_GUIDE.md#resources).
+The bridge also offers two prompts: ready-made requests that an MCP client can list for you to pick. **Explain this repository** (`explain_repository`, takes `repository`) walks Claude through `analyze_repository`, `list_definitions` and `get_file`. **Where is this implemented?** (`find_implementation`, takes `feature` and an optional `repository`) goes through `search_code`, `list_definitions`, `find_references` and `get_file`, and answers with file paths and line ranges. A resource template, `codesage://repositories/{id}/files`, lists one repository's indexed files; see [Resources](docs/MCP_INTEGRATION_GUIDE.md#resources).
 
 The installer merges CodeSage into your Claude Desktop config without touching other servers. It writes a backup first, and both files are mode 600 because they hold the key.
 
