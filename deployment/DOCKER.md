@@ -1,6 +1,6 @@
 # Docker deployment
 
-CodeSage ships two Compose stacks: a **dev** stack for one user on localhost, and a **prod** stack with HTTPS, basic auth and an nginx-held API key. This page covers setup, configuration, day-to-day commands and troubleshooting for both. CI validates both Compose files and nginx configs but never starts the containers, so expect to fix small problems at runtime.
+CodeSage ships two Compose stacks: a **dev** stack for one user on localhost, and a **prod** stack with HTTPS, basic auth and an nginx-held API key. This page covers setup, configuration, day-to-day commands and troubleshooting for both. CI validates both Compose files and nginx configs and starts the dev stack for a smoke test. The prod stack is never started in CI, so expect to fix small problems there at runtime.
 
 ## Contents
 
@@ -196,9 +196,16 @@ The `docker` job runs on every push to `master` and every pull request:
 
 - `docker compose config -q` on both Compose files.
 - `nginx -t` on `nginx.conf`, and on the rendered prod template (with a throwaway certificate, htpasswd and key).
-- `docker build` of `backend/Dockerfile.prod` and of `frontend/`.
+- `docker build` of `backend/Dockerfile.prod`.
+- A smoke test of the dev stack. `backend/.env` holds a throwaway `CODESAGE_API_KEY` and fake Algolia keys, so `/health` reports `degraded`. `docker compose -f deployment/docker-compose.yml up -d --build` builds both dev images, then the job checks four things:
+  - `curl -f localhost:8001/health` answers within 2 minutes.
+  - nginx serves the app's `index.html` at `/`.
+  - nginx proxies `/health`, which reports a healthy database.
+  - `GET /api/v1/repositories/` through nginx returns an empty list.
 
-It does not build the dev backend image (`backend/Dockerfile`) and never starts a container. The full prod stack was last run by hand with a self-signed certificate.
+  On a failure the job prints `docker compose logs`, and it always ends with `docker compose down -v`.
+
+The smoke test never adds a repository, so indexing in Docker (Algolia and `git` in the image) is not covered. The prod stack is never started; it was last run by hand with a self-signed certificate.
 
 ## Troubleshooting
 
