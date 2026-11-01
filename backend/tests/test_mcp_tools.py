@@ -118,6 +118,7 @@ async def test_search_permalink_and_snippet(db_session, repo, algolia_index):
     assert result["total_hits"] == 1 and result["pages"] == 1 and result["repository"] == "zustand"
     [hit] = result["results"]
     assert hit["url"] == "https://github.com/pmndrs/zustand/blob/main/src/vanilla.ts#L5-L20"
+    assert (hit["repository_id"], hit["repository"]) == (repo.id, "zustand")
     assert len(hit["snippet"]) == 600
     assert seen[-1]["filters"] == f'repository_id={repo.id} AND NOT entity_type:"import"'
     assert seen[-1]["hitsPerPage"] == 10

@@ -23,6 +23,7 @@ export function Layout({ children }: LayoutProps) {
       href: "/dashboard",
       current: location.pathname === "/dashboard",
     },
+    { name: "Search", href: "/search", current: location.pathname === "/search" },
   ];
 
   return (

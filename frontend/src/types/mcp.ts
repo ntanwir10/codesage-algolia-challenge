@@ -60,6 +60,9 @@ export interface SearchQuery {
 }
 
 export interface SearchHit {
+  /** The hit's repository; a search across all of them mixes several */
+  repository_id?: number | null;
+  repository?: string | null;
   entity_name: string;
   entity_type: string;
   file_path: string;

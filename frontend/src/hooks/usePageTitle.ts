@@ -10,6 +10,8 @@ const getPageTitle = (pathname: string): string | null => {
       return `${baseTitle} - AI-Powered Code Discovery`;
     case "/dashboard":
       return `${baseTitle} - Dashboard`;
+    case "/search":
+      return `${baseTitle} - Search`;
     default:
       if (pathname.startsWith("/repository/")) {
         const [, , id, page] = pathname.split("/");

@@ -230,6 +230,9 @@ async def search_code(db: Session, args: schemas.SearchCodeArgs) -> dict:
 
     results = [
         {
+            # Which repository the hit is in: a search across all of them mixes several
+            "repository_id": hit.get("repository_id"),
+            "repository": known[hit["repository_id"]].name if hit.get("repository_id") in known else None,
             "entity_name": hit.get("entity_name"),
             "entity_type": hit.get("entity_type"),
             "file_path": hit.get("file_path"),

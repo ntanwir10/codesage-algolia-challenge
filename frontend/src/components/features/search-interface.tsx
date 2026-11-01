@@ -8,11 +8,13 @@ import { LoadingSpinner } from "@/components/ui/loading-spinner";
 import { describeError, type DescribedError } from "@/lib/errors";
 import { ENTITY_TYPES, fileViewerPath, isHttpUrl } from "@/lib/utils";
 import { Link, useSearchParams } from "react-router-dom";
+import { Highlight } from "@/components/ui/highlight";
 import type { EntityType, SearchHit } from "@/types/mcp";
 import type { RepositoryStatus } from "@/types/repository";
 
 interface SearchInterfaceProps {
-  repositoryId: number;
+  /** Omit to search every indexed repository */
+  repositoryId?: number;
   canSearch: boolean;
   status?: RepositoryStatus;
   /** Languages with indexed entities, offered as a filter */
@@ -106,7 +108,7 @@ export function SearchInterface({
     try {
       const response = await api.searchCode({
         query: trimmed,
-        repository: String(repositoryId),
+        repository: repositoryId ? String(repositoryId) : undefined,
         language: language || undefined,
         entity_type: entityType || undefined,
         limit: PAGE_SIZE,
@@ -203,7 +205,9 @@ export function SearchInterface({
         </CardTitle>
         <p className="text-sm text-muted-foreground">
           {canSearch
-            ? "Search functions, classes, imports and docs in this repository"
+            ? repositoryId
+              ? "Search functions, classes, imports and docs in this repository"
+              : "Search every indexed repository at once"
             : status === "failed"
             ? "Indexing failed, so search isn't available. Reprocess the repository to try again."
             : "Search will be available once processing is complete"}
@@ -382,18 +386,27 @@ export function SearchInterface({
 
             {searchResults.map((result) => (
               <Card
-                key={`${result.file_path}:${result.line_start}:${result.entity_name}`}
+                key={`${result.repository_id}:${result.file_path}:${result.line_start}:${result.entity_name}`}
                 className="hover:shadow-md transition-shadow"
               >
                 <CardContent className="p-4">
                   <div className="flex items-start justify-between mb-2 gap-2">
                     <h4 className="font-medium text-lg break-all">
-                      <Link
-                        to={fileViewerPath(repositoryId, result.file_path, result.line_start, result.line_end)}
-                        className="text-blue-600 hover:underline"
-                      >
-                        {result.entity_name}
-                      </Link>
+                      {(repositoryId ?? result.repository_id) ? (
+                        <Link
+                          to={fileViewerPath(
+                            (repositoryId ?? result.repository_id) as number,
+                            result.file_path,
+                            result.line_start,
+                            result.line_end
+                          )}
+                          className="text-blue-600 hover:underline"
+                        >
+                          <Highlight text={result.entity_name} query={activeQuery} />
+                        </Link>
+                      ) : (
+                        <Highlight text={result.entity_name} query={activeQuery} />
+                      )}
                       {isHttpUrl(result.url) && (
                         <a
                           href={result.url}
@@ -415,11 +428,12 @@ export function SearchInterface({
                   <div className="space-y-2">
                     {result.description && (
                       <p className="text-sm text-muted-foreground">
-                        {result.description}
+                        <Highlight text={result.description} query={activeQuery} />
                       </p>
                     )}
 
                     <div className="flex flex-wrap items-center gap-4 text-xs text-muted-foreground">
+                      {!repositoryId && result.repository && <span>📦 {result.repository}</span>}
                       <span>📁 {result.file_path}</span>
                       {result.language && <span>🔤 {result.language}</span>}
                       <span>
@@ -438,7 +452,7 @@ export function SearchInterface({
                     {result.snippet && (
                       <div className="mt-2 p-2 bg-gray-50 rounded text-xs font-mono overflow-x-auto">
                         <pre className="whitespace-pre">
-                          {result.snippet}
+                          <Highlight text={result.snippet} query={activeQuery} />
                         </pre>
                       </div>
                     )}
