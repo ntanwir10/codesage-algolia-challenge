@@ -11,6 +11,7 @@ How to connect Claude Desktop (or any MCP client) to CodeSage: the installer, th
 - [Bridge settings](#bridge-settings)
 - [Tools](#tools)
 - [Resources](#resources)
+- [Prompts](#prompts)
 - [HTTP endpoints](#http-endpoints)
 - [How failures reach Claude](#how-failures-reach-claude)
 - [Troubleshooting](#troubleshooting)
@@ -252,9 +253,20 @@ The bridge also answers `resources/list` and `resources/read`. Reading needs the
 | `codesage://repositories` | The same data as `list_repositories` |
 | `codesage://repositories/{id}/files` | `repository`, `total_files`, `truncated`, and `files` with path, language and line count. At most the first 5000 files; `truncated` is true when there are more |
 
-`resources/list` advertises only `codesage://repositories`. The files resource is readable but not listed, so build its URI from an ID that `list_repositories` returns.
+`resources/list` advertises `codesage://repositories`. `resources/templates/list` advertises `codesage://repositories/{id}/files` as a template, so a client can fill in an ID that `list_repositories` returns. The bridge builds both lists itself; reading goes through the backend.
 
 `{id}` is the numeric ID only. An unknown URI fails with `Unknown resource '<uri>'` and an unknown ID with `Repository <id> not found`. The bridge prefixes both with `Resource or repository not found: `.
+
+## Prompts
+
+`prompts/list` and `prompts/get` are answered by the bridge alone (`codesage_mcp/prompts.py`), so they work with the backend down and need no key. Each prompt returns one user message that tells Claude which tools to call, in what order, and what to answer with.
+
+| Prompt | Arguments | Steers Claude to |
+| --- | --- | --- |
+| `explain_repository` ("Explain this repository") | `repository` (required) | `analyze_repository`, then `list_definitions` (with `path_prefix`, and `entity_type: "doc_section"` for docs), then `get_file` on the README and central files. The answer covers what the repository does, its layout and main parts, and where to start, citing paths and lines |
+| `find_implementation` ("Where is this implemented?") | `feature` (required), `repository` (optional; empty searches every repository) | `search_code`, then `list_definitions` around the best hits, then `get_file` to confirm. The answer gives files, line ranges and source links, or says nothing matched |
+
+A missing required argument fails with `Prompt '<name>' needs the '<argument>' argument`, and an unknown name with `Unknown prompt '<name>'`.
 
 ## HTTP endpoints
 
@@ -348,4 +360,3 @@ Set `MCP_SERVER_URL` and `CODESAGE_API_KEY` in the Inspector's environment field
 - **Rate limits are per address.** The 30 per minute on tool calls and resource reads is shared by everything behind one IP, such as nginx in the prod stack.
 - **Other hosts are public only.** `add_repository` and the dashboard can't read private repositories except on github.com.
 - **Cross-repository search.** `search_code` without `repository` includes repositories that are being reprocessed.
-- **No prompts.** The server offers tools and resources only.

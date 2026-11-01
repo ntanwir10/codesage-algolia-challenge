@@ -10,6 +10,7 @@ from mcp.client import Client
 from mcp.client.stdio import StdioServerParameters, stdio_client
 from mcp.shared.exceptions import MCPError
 
+from codesage_mcp.prompts import PROMPTS
 from codesage_mcp.schemas import TOOLS, input_schema
 from codesage_mcp.server import Config, build_server
 
@@ -267,6 +268,93 @@ async def test_resources_list_and_read():
     assert "not found" in err.value.message.lower()
 
 
+def down(request):
+    raise httpx.ConnectError("down")
+
+
+async def test_capabilities_advertise_prompts_and_resources():
+    async with make_client(Backend()) as client:
+        capabilities = client.server_capabilities
+    assert capabilities.prompts is not None
+    assert capabilities.resources is not None
+
+
+async def test_the_files_template_is_listed_and_read_through_the_backend():
+    backend = Backend(lambda request: httpx.Response(200, json={"uri": "u", "content": {"files": []}}))
+    async with make_client(backend) as client:
+        [template] = (await client.list_resource_templates()).resource_templates
+        assert (template.uri_template, template.mime_type) == (
+            "codesage://repositories/{id}/files",
+            "application/json",
+        )
+        assert backend.requests == []  # listing the template needs no backend
+
+        await client.read_resource(template.uri_template.replace("{id}", "7"))
+    assert backend.requests[0].url.path == "/api/v1/ai/mcp/resources/read"
+    assert backend.requests[0].url.params["uri"] == "codesage://repositories/7/files"
+
+
+async def test_prompts_are_listed_without_the_backend():
+    backend = Backend(down)
+    async with make_client(backend) as client:
+        prompts = {p.name: p for p in (await client.list_prompts()).prompts}
+    assert list(prompts) == ["explain_repository", "find_implementation"]
+    assert [(a.name, a.required) for a in prompts["explain_repository"].arguments] == [("repository", True)]
+    assert [(a.name, a.required) for a in prompts["find_implementation"].arguments] == [
+        ("feature", True),
+        ("repository", False),
+    ]
+    assert backend.requests == []
+
+
+async def prompt_text(name: str, arguments: dict[str, str]) -> str:
+    backend = Backend(down)
+    async with make_client(backend) as client:
+        result = await client.get_prompt(name, arguments)
+    assert backend.requests == []
+    [message] = result.messages
+    assert message.role == "user"
+    return message.content.text
+
+
+async def test_explain_repository_steers_through_the_tools():
+    text = await prompt_text("explain_repository", {"repository": " octo/demo "})
+    assert "'octo/demo'" in text
+    for tool in ("analyze_repository", "list_definitions", "get_file"):
+        assert tool in text
+
+
+@pytest.mark.parametrize(
+    ("arguments", "scope"),
+    [
+        ({"feature": "request retries", "repository": "7"}, "with repository '7'"),
+        # An empty optional argument means every repository, as if it were left out
+        ({"feature": "request retries", "repository": ""}, "across every indexed repository"),
+    ],
+)
+async def test_find_implementation_searches_one_or_every_repository(arguments, scope):
+    text = await prompt_text("find_implementation", arguments)
+    assert text.startswith("Find where request retries is implemented")
+    assert scope in text
+    for tool in ("search_code", "list_definitions", "get_file"):
+        assert tool in text
+
+
+@pytest.mark.parametrize(
+    ("name", "arguments", "needle"),
+    [
+        ("explain_repository", {}, "needs the 'repository' argument"),
+        ("find_implementation", {"feature": "  "}, "needs the 'feature' argument"),
+        ("nope", {}, "Unknown prompt 'nope'"),
+    ],
+)
+async def test_bad_prompt_requests_are_mcp_errors(name, arguments, needle):
+    async with make_client(Backend(down)) as client:
+        with pytest.raises(MCPError) as err:
+            await client.get_prompt(name, arguments)
+    assert needle in err.value.message
+
+
 async def test_stdio_subprocess_smoke():
     params = StdioServerParameters(
         command=sys.executable,
@@ -282,6 +370,8 @@ async def test_stdio_subprocess_smoke():
         assert "not reachable" in result.content[0].text
         # Still answering after the failed call
         assert len((await client.list_tools()).tools) == 7
+        # Prompts are built locally, so they work with the backend down
+        assert [p.name for p in (await client.list_prompts()).prompts] == list(PROMPTS)
 
 
 async def test_proxy_401_blames_the_login_not_the_api_key():

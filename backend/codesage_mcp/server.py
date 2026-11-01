@@ -30,6 +30,7 @@ from mcp.server.context import ServerRequestContext
 from mcp.shared.exceptions import MCPError
 from pydantic import ValidationError
 
+from codesage_mcp.prompts import PROMPTS, get_prompt
 from codesage_mcp.schemas import TOOLS, input_schema
 
 logger = logging.getLogger("codesage_mcp")
@@ -42,6 +43,16 @@ CONNECT_TIMEOUT = 5.0
 SERVER_NAME = "codesage"
 SERVER_VERSION = "1.0.0"
 UNEXPECTED_RESPONSE = "CodeSage backend returned an unexpected response; check MCP_SERVER_URL"
+# Read through the backend's resources/read like any other URI; this only advertises the shape
+FILES_TEMPLATE = types.ResourceTemplate(
+    name="Repository files",
+    uri_template="codesage://repositories/{id}/files",
+    description=(
+        "The indexed files of one repository, by its ID from codesage://repositories: path, "
+        "language and line count, sorted by path, at most 5000"
+    ),
+    mime_type="application/json",
+)
 
 
 @dataclass(frozen=True)
@@ -339,6 +350,21 @@ def build_server(
     ) -> types.ReadResourceResult:
         return await bridge.read_resource(params.uri)
 
+    async def on_list_resource_templates(
+        ctx: ServerRequestContext, params: types.PaginatedRequestParams | None
+    ) -> types.ListResourceTemplatesResult:
+        return types.ListResourceTemplatesResult(resource_templates=[FILES_TEMPLATE])
+
+    async def on_list_prompts(
+        ctx: ServerRequestContext, params: types.PaginatedRequestParams | None
+    ) -> types.ListPromptsResult:
+        return types.ListPromptsResult(prompts=[spec.prompt for spec in PROMPTS.values()])
+
+    async def on_get_prompt(
+        ctx: ServerRequestContext, params: types.GetPromptRequestParams
+    ) -> types.GetPromptResult:
+        return get_prompt(params.name, params.arguments)
+
     return Server(
         SERVER_NAME,
         version=SERVER_VERSION,
@@ -348,6 +374,9 @@ def build_server(
         on_call_tool=on_call_tool,
         on_list_resources=on_list_resources,
         on_read_resource=on_read_resource,
+        on_list_resource_templates=on_list_resource_templates,
+        on_list_prompts=on_list_prompts,
+        on_get_prompt=on_get_prompt,
     )
 
 
