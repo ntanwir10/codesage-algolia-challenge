@@ -49,7 +49,7 @@ def make_repository(db_session, **fields):
 async def test_a_repository_never_runs_two_jobs_at_once(monkeypatch):
     release = asyncio.Event()
 
-    async def slow_job(repository_id, force_reprocess):
+    async def slow_job(repository_id, force_reprocess, incremental=False):
         await release.wait()
 
     monkeypatch.setattr(repository_service, "_run_job", slow_job)
@@ -85,7 +85,7 @@ async def test_runs_beyond_the_limit_wait_for_a_free_slot(db_session, job_sessio
     monkeypatch.setattr(repository_service, "_run_slots", weakref.WeakKeyDictionary())
     started, release = [], asyncio.Event()
 
-    async def blocking_files(self, repository):
+    async def blocking_files(self, repository, incremental=False):
         started.append(repository.id)
         await release.wait()
 
@@ -149,7 +149,7 @@ async def test_a_cancelled_delete_keeps_the_slot_until_its_row_clear_finishes(
 async def test_a_crashed_job_does_not_stay_processing(db_session, job_sessions, monkeypatch):
     repo = make_repository(db_session, status="pending")
 
-    async def crash(self, repository, force_reprocess=False):
+    async def crash(self, repository, force_reprocess=False, incremental=False):
         # e.g. "database is locked" while recording the failure itself
         repository.status = "processing"
         self.db.commit()
@@ -270,7 +270,7 @@ async def test_a_reprocess_starts_progress_from_zero(db_session, github, algolia
     db_session.commit()
     seen = []
 
-    async def record_progress(self, repository):
+    async def record_progress(self, repository, incremental=False):
         seen.append(repository.processed_files)
 
     monkeypatch.setattr(RepositoryService, "process_repository_files", record_progress)
@@ -406,8 +406,8 @@ class TestEndpoints:
     def scheduled(self, monkeypatch):
         calls = []
 
-        def fake_start(repository_id, force_reprocess=False):
-            calls.append((repository_id, force_reprocess))
+        def fake_start(repository_id, force_reprocess=False, incremental=False):
+            calls.append((repository_id, force_reprocess) + (("incremental",) if incremental else ()))
 
         monkeypatch.setattr(repositories_endpoint, "start_processing", fake_start)
         return calls
@@ -430,10 +430,18 @@ class TestEndpoints:
         assert forced.status_code == 202
         assert scheduled == [(repo.id, True)]
 
+    def test_incremental_reprocesses_a_completed_repository_without_force(self, client, db_session, scheduled):
+        repo = make_repository(db_session, status="completed")
+
+        response = client.post(f"/api/v1/repositories/{repo.id}/process", params={"incremental": "true"})
+
+        assert response.status_code == 202
+        assert scheduled == [(repo.id, True, "incremental")]
+
     def test_process_while_running_returns_409(self, client, db_session, monkeypatch):
         repo = make_repository(db_session, status="processing")
 
-        def busy(repository_id, force_reprocess=False):
+        def busy(repository_id, force_reprocess=False, incremental=False):
             raise RepositoryBusyError("already being processed")
 
         monkeypatch.setattr(repositories_endpoint, "start_processing", busy)

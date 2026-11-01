@@ -128,6 +128,7 @@ class FakeAlgoliaIndex:
         self.records = {}
         self.fail_saves = False
         self.fail_deletes = False
+        self.delete_filters = []
         self.waited_deletes = 0
         self.searches = []
         self.save_batch_sizes = []
@@ -173,6 +174,16 @@ class FakeAlgoliaIndex:
         if record["repository_id"] != self._repository_id(repository_clause):
             return False
         for clause in run_clauses:
+            if clause.startswith("("):
+                # (file_path:"a" OR file_path:"b"), values escaped like _escape_filter_value
+                paths = []
+                for part in clause[1:-1].split(" OR "):
+                    field, _, value = part.partition(":")
+                    assert field == "file_path", f"unsupported filter {part!r}"
+                    paths.append(value[1:-1].replace('\\"', '"').replace("\\\\", "\\"))
+                if record.get("file_path") not in paths:
+                    return False
+                continue
             negated = clause.startswith("NOT ")
             field, _, value = clause.removeprefix("NOT ").partition(":")
             assert field == "run_id", f"unsupported filter {clause!r}"
@@ -181,6 +192,7 @@ class FakeAlgoliaIndex:
         return True
 
     def delete_by(self, params):
+        self.delete_filters.append(params["filters"])
         if self.fail_deletes:
             raise AlgoliaException("delete_by failed")
         self.records = {

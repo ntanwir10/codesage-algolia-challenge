@@ -137,6 +137,10 @@ class Settings(BaseSettings):
     rate_limit_default: str = "100/minute"
     rate_limit_ai: str = "30/minute"  # For MCP tool endpoints
 
+    # Scheduled refresh: every N minutes, re-index changed files of repositories whose branch moved.
+    # 0 turns it off. Freshness answers are cached for 10 minutes, so shorter intervals add nothing
+    refresh_interval_minutes: float = Field(default=0, ge=0)
+
     # Logging Settings
     log_level: str = "INFO"
 
