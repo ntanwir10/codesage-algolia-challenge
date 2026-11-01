@@ -9,6 +9,7 @@ from aiohttp import web
 from aiohttp.test_utils import TestServer
 
 from app.models.repository import Repository
+from app.schemas.repository import RepositoryCreate
 from app.services import algolia_service as algolia_module
 from app.services import repository_service
 from app.services.github_service import GitHubService, RepositoryCheckError
@@ -248,7 +249,7 @@ def test_duplicates_ignore_case_and_name_the_existing_row(client, db_session, mo
 @pytest.mark.parametrize(
     ("payload", "loc"),
     [
-        ({"url": "https://example.com/octo/demo"}, ["body", "url"]),
+        ({"url": "https://example.com/octo"}, ["body", "url"]),
         ({"url": URL, "branch": "a/../b"}, ["body", "branch"]),
         ({"url": URL, "name": "n" * 256}, ["body", "name"]),
         ({"url": URL, "branch": "b" * 101}, ["body", "branch"]),
@@ -377,15 +378,13 @@ def remote_checks(monkeypatch):
 async def test_a_gitlab_url_goes_through_check_remote_not_the_github_check(
     db_session, remote_checks, monkeypatch
 ):
-    from app.schemas.repository import AnyHostRepositoryCreate
-
     async def no_github(self, url, branch=None):
         raise AssertionError("the GitHub check must not run for gitlab.com")
 
     monkeypatch.setattr(GitHubService, "check_repository", no_github)
 
     created = await repository_service.add_repository(
-        db_session, AnyHostRepositoryCreate(url=f"{GITLAB}.git/-/tree/dev")
+        db_session, RepositoryCreate(url=f"{GITLAB}.git/-/tree/dev")
     )
 
     assert remote_checks == [(GITLAB, "dev")]
@@ -393,7 +392,6 @@ async def test_a_gitlab_url_goes_through_check_remote_not_the_github_check(
 
 
 async def test_a_refused_remote_check_becomes_a_repository_add_error(db_session, monkeypatch):
-    from app.schemas.repository import AnyHostRepositoryCreate
     from app.services import git_source
 
     async def refuse(url, branch=None):
@@ -402,18 +400,58 @@ async def test_a_refused_remote_check_becomes_a_repository_add_error(db_session,
     monkeypatch.setattr(git_source, "check_remote", refuse)
 
     with pytest.raises(repository_service.RepositoryAddError) as caught:
-        await repository_service.add_repository(db_session, AnyHostRepositoryCreate(url=GITLAB))
+        await repository_service.add_repository(db_session, RepositoryCreate(url=GITLAB))
 
     assert (caught.value.status_code, caught.value.repository_id) == (422, None)
     assert db_session.query(Repository).count() == 0
 
 
-def test_the_rest_api_stays_github_only(client, remote_checks):
-    response = client.post(f"{API}/", json={"url": GITLAB})
+@pytest.mark.parametrize(
+    "url, name, branch",
+    [
+        (f"{GITLAB}/-/tree/dev", "gitlab.com/group/sub/repo", "dev"),
+        ("git@gitlab.com:group/sub/repo.git", "gitlab.com/group/sub/repo", None),
+        ("https://bitbucket.org/team/repo/src/main", "bitbucket.org/team/repo", "main"),
+        ("https://git.example.org/team/repo.git", "git.example.org/team/repo", None),
+    ],
+)
+def test_the_rest_api_takes_other_hosts_through_the_remote_check(
+    client, remote_checks, monkeypatch, url, name, branch
+):
+    async def no_github(self, url, branch=None):
+        raise AssertionError("the GitHub check must not run for another host")
 
-    assert response.status_code == 422
-    assert response.json()["detail"][0]["loc"] == ["body", "url"]
-    assert "host must be github.com" in response.json()["detail"][0]["msg"]
+    monkeypatch.setattr(GitHubService, "check_repository", no_github)
+
+    response = client.post(f"{API}/", json={"url": url})
+
+    assert response.status_code == 201
+    assert (response.json()["name"], response.json()["branch"]) == (name, branch)
+    assert remote_checks == [(response.json()["url"], branch)]
+
+
+def test_a_refused_remote_check_is_the_rest_status(client, monkeypatch):
+    from app.services import git_source
+
+    async def refuse(url, branch=None):
+        raise RepositoryCheckError(422, "Branch 'dev' does not exist in gitlab.com/group/sub/repo.")
+
+    monkeypatch.setattr(git_source, "check_remote", refuse)
+
+    response = client.post(f"{API}/", json={"url": GITLAB, "branch": "dev"})
+
+    assert (response.status_code, response.json()["detail"]) == (
+        422,
+        "Branch 'dev' does not exist in gitlab.com/group/sub/repo.",
+    )
+
+
+@pytest.mark.parametrize(
+    "url",
+    ["https://localhost/a/b", "https://10.0.0.1/a/b", "https://user:pw@gitlab.com/a/b", "https://gitlab.com:8443/a/b"],
+)
+def test_the_rest_api_refuses_unsafe_hosts_before_any_check(client, remote_checks, url):
+    assert client.post(f"{API}/", json={"url": url}).status_code == 422
     assert remote_checks == []
 
 
@@ -426,13 +464,11 @@ def test_github_repositories_keep_their_owner_repo_name(client, monkeypatch):
 
 
 async def test_a_duplicate_on_another_host_is_named_without_the_scheme(db_session, remote_checks):
-    from app.schemas.repository import AnyHostRepositoryCreate
-
     db_session.add(Repository(name="gitlab.com/group/sub/repo", url=GITLAB, status="completed"))
     db_session.commit()
 
     with pytest.raises(repository_service.RepositoryAddError) as caught:
-        await repository_service.add_repository(db_session, AnyHostRepositoryCreate(url=GITLAB.title()))
+        await repository_service.add_repository(db_session, RepositoryCreate(url=GITLAB.title()))
 
     assert caught.value.status_code == 409
     assert caught.value.detail == "gitlab.com/Group/Sub/Repo has already been added."
@@ -442,14 +478,11 @@ async def test_a_duplicate_on_another_host_is_named_without_the_scheme(db_sessio
 # --- derived values keep the field limits; http and ssh GitHub URLs still work ---
 
 
-@pytest.mark.parametrize("cls_name", ["RepositoryCreate", "AnyHostRepositoryCreate"])
-def test_a_long_branch_from_the_url_is_rejected(cls_name):
+def test_a_long_branch_from_the_url_is_rejected():
     from pydantic import ValidationError
 
-    from app.schemas import repository as schemas
-
     with pytest.raises(ValidationError, match="too long"):
-        getattr(schemas, cls_name)(url=f"{URL}/tree/" + "b" * 150)
+        RepositoryCreate(url=f"{URL}/tree/" + "b" * 150)
 
 
 def test_a_long_branch_from_the_url_is_422_on_create(client):
@@ -459,10 +492,8 @@ def test_a_long_branch_from_the_url_is_422_on_create(client):
 def test_a_very_long_nested_path_gives_a_422_name():
     from pydantic import ValidationError
 
-    from app.schemas.repository import AnyHostRepositoryCreate
-
     with pytest.raises(ValidationError, match="too long"):
-        AnyHostRepositoryCreate(url="https://gitlab.com/" + "/".join(["g" * 40] * 8))
+        RepositoryCreate(url="https://gitlab.com/" + "/".join(["g" * 40] * 8))
 
 
 @pytest.mark.parametrize("url", ["http://github.com/octo/demo", "git@github.com:octo/demo.git"])
@@ -482,11 +513,5 @@ def test_http_and_ssh_github_urls_are_normalised_on_create(client, monkeypatch, 
     assert seen == ["https://github.com/octo/demo"]
 
 
-def test_rest_still_rejects_other_hosts_after_the_rewrite(client):
-    assert client.post(f"{API}/", json={"url": "git@gitlab.com:g/r.git"}).status_code == 422
-
-
-def test_any_host_schema_accepts_an_ssh_gitlab_url():
-    from app.schemas.repository import AnyHostRepositoryCreate
-
-    assert AnyHostRepositoryCreate(url="git@gitlab.com:group/repo.git").url == "https://gitlab.com/group/repo"
+def test_the_schema_accepts_an_ssh_gitlab_url():
+    assert RepositoryCreate(url="git@gitlab.com:group/repo.git").url == "https://gitlab.com/group/repo"

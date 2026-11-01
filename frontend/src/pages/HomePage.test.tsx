@@ -34,7 +34,7 @@ function renderHome() {
 
 async function submitUrl() {
   await userEvent.type(
-    screen.getByLabelText(/github repository/i),
+    screen.getByLabelText(/^repository/i),
     "owner/repo"
   );
   const submit = screen.getByRole("button", { name: /add repository/i });
@@ -71,6 +71,6 @@ describe("HomePage", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent(msg);
     expect(screen.queryByText("repo page")).not.toBeInTheDocument();
     expect(addToast).not.toHaveBeenCalled();
-    expect(screen.getByLabelText(/github repository/i)).toHaveValue("owner/repo");
+    expect(screen.getByLabelText(/^repository/i)).toHaveValue("owner/repo");
   });
 });

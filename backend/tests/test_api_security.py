@@ -281,7 +281,6 @@ class TestUrlValidation:
         [
             "not a url",
             "",
-            "https://gitlab.com/o/r",
             "https://github.com/onlyowner",
             "https://github.com/../user",  # would call api.github.com/user with the token
             "https://github.com/./r",

@@ -15,17 +15,25 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 
-// Accepts owner/repo or a pasted GitHub URL; returns "owner/repo" or null.
+// Accepts owner/repo, a GitHub URL, or a repository URL on another git host.
+// Returns the https URL to send, or null. Other hosts are only shape-checked: the server parses them.
 function parseRepo(input: string): string | null {
-  const path = input
+  const raw = input
     .trim()
-    .replace(/^git@github\.com:/i, "")
-    .replace(/^(https?:\/\/)?(www\.)?(github\.com\/)?/i, "")
-    .replace(/\/+$/, "")
+    .replace(/^git@([^:/\s]+):/i, "https://$1/")
+    .replace(/^http:\/\//i, "https://")
+    .replace(/\/+$/, "");
+  const [, host, rest] = raw.match(/^(?:https:\/\/)?([^/\s@]+)\/(.*)$/i) ?? [];
+  // A GitHub owner can't contain a dot, so a dotted first segment is a host
+  if (host?.includes(".") && !/^(www\.)?github\.com$/i.test(host)) {
+    return /^[^/\s]+(\/[^/\s]+)+$/.test(rest) ? `https://${host}/${rest}` : null;
+  }
+  const path = raw
+    .replace(/^(https:\/\/)?(www\.)?(github\.com\/)?/i, "")
     // Only the repository's clone suffix: a branch in /tree/ may itself end in ".git"
     .replace(/^([\w.-]+\/[\w.-]+?)\.git(?=\/tree\/|$)/, "$1");
   // owner/repo, optionally with /tree/<branch>: the server reads the branch from the URL
-  return /^[\w.-]+\/[\w.-]+(\/tree\/[^\s]+)?$/.test(path) ? path : null;
+  return /^[\w.-]+\/[\w.-]+(\/tree\/[^\s]+)?$/.test(path) ? `https://github.com/${path}` : null;
 }
 
 // Validation schema: submits the normalised full URL.
@@ -34,9 +42,9 @@ const githubUrlSchema = z.object({
     .string()
     .refine(
       (v) => parseRepo(v) !== null,
-      "Enter owner/repo, for example facebook/react"
+      "Enter owner/repo for GitHub, or a repository's https URL"
     )
-    .transform((v) => `https://github.com/${parseRepo(v)}`),
+    .transform((v) => parseRepo(v) as string),
   // Empty means "use the repository's default branch"; never sent when empty.
   branch: z.string().optional(),
   description: z.string().optional(),
@@ -73,9 +81,9 @@ export function GitHubForm({ onSubmit, isLoading = false }: GitHubFormProps) {
   // Set when the server says the repo already exists (409), to link to it.
   const [existingId, setExistingId] = useState<number>();
 
-  // Watch input to preview the normalised owner/repo
+  // Preview the name the server will give it: owner/repo on GitHub, host/path elsewhere
   const urlValue = watch("url");
-  const repoName = (urlValue && parseRepo(urlValue)) || "";
+  const repoName = ((urlValue && parseRepo(urlValue)) || "").replace(/^https:\/\/(github\.com\/)?/, "");
 
   const urlField = register("url");
   const serverError = errors.root?.server;
@@ -115,40 +123,32 @@ export function GitHubForm({ onSubmit, isLoading = false }: GitHubFormProps) {
       <CardHeader>
         <CardTitle className="flex items-center gap-2">
           <span className="text-2xl">🚀</span>
-          Add GitHub Repository
+          Add Repository
         </CardTitle>
         <CardDescription>
-          Enter a GitHub repository (owner/repo) to index and analyze with AI
+          Enter a GitHub repository (owner/repo), or the https URL of a public
+          repository on GitLab, Bitbucket or another git host
         </CardDescription>
       </CardHeader>
       <CardContent>
         <form onSubmit={handleSubmit(handleFormSubmit)} className="space-y-6">
           <div className="space-y-2">
             <label htmlFor="url" className="text-sm font-medium">
-              GitHub repository *
+              Repository *
             </label>
-            <div
-              className={`flex items-center rounded-md border border-input bg-background focus-within:ring-2 focus-within:ring-ring ${
-                errors.url ? "border-destructive" : ""
-              }`}
-            >
-              <span className="pl-3 text-sm text-muted-foreground select-none">
-                github.com/
-              </span>
-              <Input
-                id="url"
-                placeholder="owner/repo"
-                {...urlField}
-                onChange={(e) => {
-                  clearErrors("root.server");
-                  setExistingId(undefined);
-                  return urlField.onChange(e);
-                }}
-                aria-invalid={!!(errors.url || serverError)}
-                aria-describedby={errorId}
-                className="border-0 shadow-none focus-visible:ring-0 pl-0.5"
-              />
-            </div>
+            <Input
+              id="url"
+              placeholder="owner/repo or https://gitlab.com/group/project"
+              {...urlField}
+              onChange={(e) => {
+                clearErrors("root.server");
+                setExistingId(undefined);
+                return urlField.onChange(e);
+              }}
+              aria-invalid={!!(errors.url || serverError)}
+              aria-describedby={errorId}
+              className={errors.url ? "border-destructive" : ""}
+            />
             {errors.url && (
               <p id="url-error" className="text-sm text-destructive">
                 {errors.url.message}

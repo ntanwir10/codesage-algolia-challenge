@@ -1,5 +1,5 @@
 from datetime import UTC, datetime
-from typing import ClassVar, Literal
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from pydantic_core import PydanticCustomError
@@ -25,10 +25,7 @@ class RepositoryBase(BaseModel):
 class RepositoryCreate(RepositoryBase):
     """Schema for creating a repository"""
 
-    url: str = Field(..., max_length=500, description="GitHub repository URL")
-
-    # The REST API takes github.com only; the MCP tool sets this to accept any https git host
-    any_host: ClassVar[bool] = False
+    url: str = Field(..., max_length=500, description="Repository URL on GitHub or any https git host")
 
     @field_validator("url", mode="before")
     @classmethod
@@ -39,11 +36,9 @@ class RepositoryCreate(RepositoryBase):
     @classmethod
     def url_is_valid(cls, url: str) -> str:
         try:
-            host, _, _ = parse_repository_url(url)
+            parse_repository_url(url)
         except ValueError as e:
             raise PydanticCustomError("invalid_url", str(e)) from e
-        if not cls.any_host and host != "github.com":
-            raise PydanticCustomError("invalid_url", "Invalid GitHub URL (host must be github.com): {url}", {"url": url})
         return url
 
     @field_validator("branch")
@@ -71,12 +66,6 @@ class RepositoryCreate(RepositoryBase):
         if len(self.name) > 255:
             raise PydanticCustomError("name_too_long", "Repository name from the URL is too long (max 255 characters)")
         return self
-
-
-class AnyHostRepositoryCreate(RepositoryCreate):
-    """RepositoryCreate for the MCP tool: any https git host"""
-
-    any_host: ClassVar[bool] = True
 
 
 class RepositoryUpdate(BaseModel):
