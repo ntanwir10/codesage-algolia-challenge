@@ -366,11 +366,12 @@ Prod needs a certificate in `deployment/ssl/`, a login in `deployment/htpasswd`,
 make test                         # backend tests
 .venv/bin/ruff check backend      # backend lint
 cd frontend && npm test           # frontend unit tests
+cd frontend && npm run test:e2e   # Playwright end-to-end tests (first: npx playwright install chromium)
 cd frontend && npm run lint
 cd frontend && npm run build      # type-check and production build
 ```
 
-CI ([.github/workflows/ci.yml](.github/workflows/ci.yml)) runs on pushes to `master` and on every pull request. It runs the backend lint and tests, the frontend lint, build and tests, validates both Compose files and both nginx configs (`nginx -t`), and builds the prod backend image. It then starts the dev stack (`deployment/docker-compose.yml`) with a throwaway `backend/.env` and fake Algolia keys, and checks that the backend answers `/health`, that nginx serves the app at `/`, and that nginx proxies `/health` and an API call to the backend. The stack is torn down afterwards, and its logs are printed if a check fails.
+CI ([.github/workflows/ci.yml](.github/workflows/ci.yml)) runs on pushes to `master` and on every pull request. It runs the backend lint and tests, the frontend lint, build and tests, and the Playwright end-to-end tests. It also validates both Compose files and both nginx configs (`nginx -t`), and builds the prod backend image. It then starts the dev stack (`deployment/docker-compose.yml`) with a throwaway `backend/.env` and fake Algolia keys, and checks that the backend answers `/health`, that nginx serves the app at `/`, and that nginx proxies `/health` and an API call to the backend. The stack is torn down afterwards, and its logs are printed if a check fails.
 
 ```
 backend/app/            FastAPI app: api/ (routes), core/ (config, auth, database), models/, schemas/, services/
@@ -389,6 +390,6 @@ mcp_launcher.sh         what Claude Desktop launches
 - **One worker.** Run exactly one: job state, the two-run limit and WebSocket subscriptions live in the server process.
 - **SQLite only.** Migrations run at startup, and a database from before Alembic is stamped first.
 - **Synchronous Algolia client.** Its calls run in worker threads.
-- **Tests and CI.** Frontend tests are unit tests only. CI starts the dev Docker stack with fake Algolia keys and checks that it answers, but never indexes a repository in it. The prod stack (HTTPS, basic auth) is only config-checked and built; it was last run by hand.
+- **Tests and CI.** The Playwright end-to-end tests run in Chromium only, against a seeded database with no Algolia or GitHub, so they cover the Home form, the dashboard, the repository page and the file viewer, but not search, freshness or indexing. CI starts the dev Docker stack with fake Algolia keys and checks that it answers, but never indexes a repository in it. The prod stack (HTTPS, basic auth) is only config-checked and built; it was last run by hand.
 - **Search scope.** Searching across all repositories includes ones that are being reprocessed.
 - **Git redirects.** For hosts other than github.com, git follows the host's first HTTP redirect without re-checking where it points. A hostile public host could send it to an internal address. If that matters, route the backend's traffic through an egress proxy that refuses private addresses.
