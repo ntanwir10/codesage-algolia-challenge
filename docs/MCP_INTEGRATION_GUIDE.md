@@ -139,7 +139,7 @@ Lists indexed repositories with `id`, `name`, `url`, `branch`, `status`, `total_
 
 ### `search_code`
 
-Full-text search over functions, classes (including interfaces, type aliases and enums), doc sections and Terraform blocks. Imports are searched only when `entity_type` is `"import"`. The query is at most 512 bytes. Each result has the entity name and type, file path, line range, language, a signature, a snippet and a source link.
+Full-text search over functions, classes (including interfaces, type aliases and enums), doc sections and Terraform blocks. Imports are searched only when `entity_type` is `"import"`. The query is at most 512 bytes. Each result has its repository (`repository_id` and `repository`, the name), the entity name and type, file path, line range, language, a signature, a snippet and a source link.
 
 | Argument | Type | Default | Notes |
 | --- | --- | --- | --- |

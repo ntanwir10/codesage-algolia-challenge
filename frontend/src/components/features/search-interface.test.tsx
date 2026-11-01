@@ -100,6 +100,29 @@ describe("SearchInterface states", () => {
     expect(button).toBeEnabled();
   });
 
+  it("searches every repository without one, linking each hit to its own", async () => {
+    mockApi();
+    const search = vi.spyOn(api, "searchCode").mockResolvedValue({
+      query: "store",
+      repository: null,
+      total_hits: 1,
+      page: 0,
+      pages: 1,
+      results: [
+        { repository_id: 7, repository: "octo/other", entity_name: "createStore", entity_type: "function",
+          file_path: "src/a.ts", line_start: 3, line_end: 9 } as SearchHit,
+      ],
+    });
+    renderSearch(<SearchInterface canSearch />);
+    await userEvent.type(queryInput(), "store{enter}");
+
+    const link = await screen.findByRole("link", { name: "createStore" });
+    expect(link).toHaveAttribute("href", "/repository/7/file?path=src%2Fa.ts&line=3&end=9");
+    expect(link.querySelector("mark")).toHaveTextContent("Store");
+    expect(screen.getByText("📦 octo/other")).toBeInTheDocument();
+    expect(search.mock.calls[0][0]).not.toHaveProperty("repository", expect.anything());
+  });
+
   it("re-runs the search when a filter changes, and links hits to the viewer", async () => {
     mockApi();
     const hit = { entity_name: "foo", file_path: "src/a.py", line_start: 3, line_end: 9 } as SearchHit;
