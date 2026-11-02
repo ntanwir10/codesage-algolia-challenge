@@ -2,6 +2,7 @@ import { Link, useLocation } from "react-router-dom";
 import { ConnectionStatus } from "@/components/ui/connection-status";
 import { usePageTitle } from "@/hooks/usePageTitle";
 import { useGlobalToasts } from "@/hooks/useStatusToasts";
+import { ThemeToggle } from "@/components/layout/theme-toggle";
 
 interface LayoutProps {
   children: React.ReactNode;
@@ -67,6 +68,7 @@ export function Layout({ children }: LayoutProps) {
               <span className="text-sm text-muted-foreground hidden sm:block">
                 Powered by Algolia MCP
               </span>
+              <ThemeToggle />
             </div>
           </div>
         </div>

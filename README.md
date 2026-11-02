@@ -258,6 +258,8 @@ Restart Claude Desktop and keep the backend running. Then ask Claude something l
 
 ### Web dashboard
 
+The dashboard follows your system's light or dark theme. The ☾ / ☀ button in the header switches it, and the browser remembers that choice.
+
 | Page | What you can do |
 | --- | --- |
 | Home (`/`) | Add a repository. Type `owner/repo` or paste a GitHub URL, and it is trimmed to `owner/repo`. Any other URL whose first part is a host name, such as `gitlab.com/group/project` or `git@gitlab.com:group/project.git`, is sent as an https URL and checked by the server. The branch and a description have their own optional fields; the description shows on the repository page. |

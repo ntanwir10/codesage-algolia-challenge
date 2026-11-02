@@ -31,7 +31,7 @@ export function ConnectionStatus() {
     switch (status) {
       case "connected":
         return {
-          color: "text-green-600 bg-green-50 border-green-200",
+          color: "text-green-600 dark:text-green-400 bg-green-50 dark:bg-green-950/40 border-green-200 dark:border-green-800",
           icon: "🟢",
           text: "Real-time updates active",
           description:
@@ -39,14 +39,14 @@ export function ConnectionStatus() {
         };
       case "connecting":
         return {
-          color: "text-yellow-600 bg-yellow-50 border-yellow-200",
+          color: "text-yellow-600 dark:text-yellow-400 bg-yellow-50 dark:bg-yellow-950/40 border-yellow-200 dark:border-yellow-800",
           icon: "🟡",
           text: "Connecting...",
           description: "Establishing real-time connection...",
         };
       default:
         return {
-          color: "text-gray-600 bg-gray-50 border-gray-200",
+          color: "text-gray-600 dark:text-gray-300 bg-gray-50 dark:bg-gray-900 border-gray-200 dark:border-gray-700",
           icon: "⚪",
           text: "No active processing",
           description:
@@ -65,7 +65,7 @@ export function ConnectionStatus() {
   if (lost && status !== "connected") {
     return (
       <div className="fixed bottom-4 right-4 z-40">
-        <Card className="border text-yellow-700 bg-yellow-50 border-yellow-200">
+        <Card className="border text-yellow-700 dark:text-yellow-300 bg-yellow-50 dark:bg-yellow-950/40 border-yellow-200 dark:border-yellow-800">
           <CardContent className="p-3">
             <p role="status" className="text-sm font-medium">
               Live updates unavailable.

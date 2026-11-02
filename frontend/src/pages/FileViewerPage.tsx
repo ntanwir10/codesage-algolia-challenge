@@ -62,7 +62,7 @@ export function FileViewerPage() {
   return (
     <div className="container mx-auto px-4 py-8">
       <div className="max-w-6xl mx-auto space-y-4">
-        <Link to={back} className="text-sm text-blue-600 hover:underline">
+        <Link to={back} className="text-sm text-blue-600 dark:text-blue-400 hover:underline">
           ← Back to repository
         </Link>
 
@@ -80,7 +80,7 @@ export function FileViewerPage() {
             <CardContent className="space-y-3">
               {file.isPending && !!path && <LoadingSpinner text="Loading file..." />}
               {file.error && (
-                <p role="alert" className="text-sm text-red-600 break-words">
+                <p role="alert" className="text-sm text-red-600 dark:text-red-400 break-words">
                   {describeError(file.error).message}
                 </p>
               )}
@@ -91,14 +91,14 @@ export function FileViewerPage() {
                       ↑ Previous {WINDOW} lines
                     </Button>
                   )}
-                  <pre className="text-xs font-mono overflow-x-auto bg-gray-50 rounded p-2">
+                  <pre className="text-xs font-mono overflow-x-auto bg-gray-50 dark:bg-gray-900 rounded p-2">
                     {lines.map(({ number, text }) => (
                       <div
                         key={number}
                         id={`L${number}`}
-                        className={line && number >= line && number <= end ? "bg-yellow-100" : undefined}
+                        className={line && number >= line && number <= end ? "bg-yellow-100 dark:bg-yellow-900/40" : undefined}
                       >
-                        <span className="select-none inline-block w-12 pr-3 text-right text-gray-400">
+                        <span className="select-none inline-block w-12 pr-3 text-right text-gray-400 dark:text-gray-500">
                           {number}
                         </span>
                         {text}
@@ -129,7 +129,7 @@ export function FileViewerPage() {
                   <li key={`${d.entity_type}:${d.entity_name}:${d.line_start}`}>
                     <Link
                       to={fileViewerPath(repositoryId, path, d.line_start, d.line_end)}
-                      className="text-blue-600 hover:underline break-all"
+                      className="text-blue-600 dark:text-blue-400 hover:underline break-all"
                     >
                       {d.entity_name}
                     </Link>{" "}

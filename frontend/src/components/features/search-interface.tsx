@@ -255,7 +255,7 @@ export function SearchInterface({
                   id={listboxId}
                   role="listbox"
                   aria-label="Search suggestions"
-                  className="absolute top-full left-0 right-0 mt-1 bg-white border rounded-md shadow-lg z-10"
+                  className="absolute top-full left-0 right-0 mt-1 bg-popover text-popover-foreground border rounded-md shadow-lg z-10"
                 >
                   {suggestions.map((suggestion, index) => (
                     <div
@@ -263,8 +263,8 @@ export function SearchInterface({
                       id={`${listboxId}-${index}`}
                       role="option"
                       aria-selected={index === active}
-                      className={`w-full text-left px-3 py-2 hover:bg-gray-50 text-sm cursor-pointer ${
-                        index === active ? "bg-gray-100" : ""
+                      className={`w-full text-left px-3 py-2 hover:bg-gray-50 dark:hover:bg-gray-900 text-sm cursor-pointer ${
+                        index === active ? "bg-gray-100 dark:bg-gray-800" : ""
                       }`}
                       // mousedown fires before blur, so the click is not lost
                       onMouseDown={(e) => e.preventDefault()}
@@ -323,8 +323,8 @@ export function SearchInterface({
             role="alert"
             className={`p-4 rounded-md border ${
               searchError.kind === "network"
-                ? "bg-red-50 border-red-200"
-                : "bg-orange-50 border-orange-200"
+                ? "bg-red-50 dark:bg-red-950/40 border-red-200 dark:border-red-800"
+                : "bg-orange-50 dark:bg-orange-950/40 border-orange-200 dark:border-orange-800"
             }`}
           >
             <div className="flex items-start justify-between">
@@ -336,14 +336,14 @@ export function SearchInterface({
                     ? "Search failed"
                     : "Service Error"}
                 </h4>
-                <p className="text-sm text-gray-600">{searchError.message}</p>
+                <p className="text-sm text-gray-600 dark:text-gray-300">{searchError.message}</p>
               </div>
               <Button
                 variant="ghost"
                 size="sm"
                 aria-label="Dismiss error"
                 onClick={() => setSearchError(null)}
-                className="text-gray-400 hover:text-gray-600"
+                className="text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300"
               >
                 ✕
               </Button>
@@ -400,7 +400,7 @@ export function SearchInterface({
                             result.line_start,
                             result.line_end
                           )}
-                          className="text-blue-600 hover:underline"
+                          className="text-blue-600 dark:text-blue-400 hover:underline"
                         >
                           <Highlight text={result.entity_name} query={activeQuery} />
                         </Link>
@@ -419,7 +419,7 @@ export function SearchInterface({
                       )}
                     </h4>
                     {result.entity_type && (
-                      <span className="bg-gray-100 text-gray-700 px-2 py-1 rounded text-xs">
+                      <span className="bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-200 px-2 py-1 rounded text-xs">
                         {result.entity_type}
                       </span>
                     )}
@@ -450,7 +450,7 @@ export function SearchInterface({
                       )}
 
                     {result.snippet && (
-                      <div className="mt-2 p-2 bg-gray-50 rounded text-xs font-mono overflow-x-auto">
+                      <div className="mt-2 p-2 bg-gray-50 dark:bg-gray-900 rounded text-xs font-mono overflow-x-auto">
                         <pre className="whitespace-pre">
                           <Highlight text={result.snippet} query={activeQuery} />
                         </pre>
