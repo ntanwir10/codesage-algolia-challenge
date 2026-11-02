@@ -146,6 +146,7 @@ With a key set, the backend answers only to loopback hosts, the hosts in `CORS_O
 - **uvicorn trust.** `Dockerfile.prod` starts uvicorn with `--forwarded-allow-ips "*"`. That is safe only because the backend has no published port and nginx is the only peer that can reach it. Keep it that way.
 - **Behind a load balancer or CDN.** nginx takes the client address from the connection, which would then always be the balancer's, so every user would share one rate limit and one WebSocket cap. Add `set_real_ip_from <the balancer's address range>;` and `real_ip_header X-Forwarded-For;` to the 443 server so nginx reads the client's address from the balancer's header. List only ranges you control: anyone else can set that header.
 - **Limits.** `client_max_body_size` is 2 MB, and `/ws` allows idle connections for an hour.
+- **Caching.** `index.html` is sent with `Cache-Control: no-cache`, so browsers re-check it on every load. A cached copy would otherwise outlive an upgrade and ask for hashed assets the new build no longer has. Both nginx configs do this.
 
 ### MCP clients against prod
 

@@ -58,7 +58,7 @@ Put these in `frontend/.env.local` for development (see `.env.example`). In Dock
 - **Base URL.** It comes from `VITE_API_BASE_URL`, as above. Request paths are relative and must not repeat `/api/v1`.
 - **API key.** A request interceptor sets `X-API-Key` when `VITE_CODESAGE_API_KEY` is set.
 - **401 responses.** A response interceptor calls `notifyAuthError()`. The layout listens for it and shows an "API key rejected" toast. It fires once, then stays quiet until a request succeeds or the WebSocket's `connected` frame arrives, because polling keeps getting `401`. A `401` with nginx's `WWW-Authenticate: Basic` challenge is the prod login, not the key, so it raises no toast; the browser asks for the login again.
-- **Messages.** `describeError` in `src/lib/errors.ts` turns an error into text: the server's `detail` for most statuses, a fixed line for `401`, `429` and `500`, and the server's own message for `502`, `503` and `504`. A timeout reads "took too long"; no response reads "Cannot reach the CodeSage server".
+- **Messages.** `describeError` in `src/lib/errors.ts` turns an error into text: the server's `detail` for most statuses, a fixed line for `401`, `429` and `500`, and the server's own message for `502`, `503` and `504`. A timeout reads "took too long"; no response, or a `500` without the backend's request ID (the Vite proxy's answer when the backend is down), reads "Cannot reach the CodeSage server".
 - **Retries.** TanStack Query does not retry 4xx responses. Other failures retry up to 3 times.
 - **Coverage.** It wraps repository CRUD, status and stats, reprocess, search, search suggestions and the MCP tool endpoints under `/ai/mcp`.
 

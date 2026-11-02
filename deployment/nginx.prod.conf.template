@@ -108,5 +108,11 @@ server {
         root /usr/share/nginx/html;
         index index.html;
         try_files $uri /index.html;
+
+        # The page names this build's hashed assets, so browsers re-check it on every load: a
+        # cached copy would outlive an upgrade (asking for assets that are gone) and a changed login
+        location = /index.html {
+            expires -1;
+        }
     }
 }

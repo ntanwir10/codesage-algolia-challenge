@@ -27,6 +27,19 @@ function renderViewer(url: string) {
 describe("FileViewerPage", () => {
   afterEach(() => vi.restoreAllMocks());
 
+  it.each([["-5", 1], ["2.7", 2], ["abc", 1]])("reads ?from=%s as line %i", async (from, start) => {
+    const getFile = vi.spyOn(api, "getFile").mockResolvedValue({
+      repository: "octo/demo", path: "a.py", language: "python", total_lines: 3,
+      start_line: start, end_line: 3, truncated: false, content: numbered(start, ["x"]),
+    });
+    vi.spyOn(api, "listDefinitions").mockResolvedValue({ repository: "octo/demo", total: 0, definitions: [] });
+
+    renderViewer(`/repository/2/file?path=a.py&from=${from}`);
+
+    expect(await screen.findByText("x")).toBeInTheDocument();
+    expect(getFile).toHaveBeenCalledWith(2, "a.py", start, start + 399);
+  });
+
   it("shows the window around the target, highlights it and lists the file's definitions", async () => {
     const getFile = vi.spyOn(api, "getFile").mockResolvedValue({
       repository: "octo/demo",

@@ -19,6 +19,8 @@ export function isLoginRefused(error: unknown): boolean {
   return typeof challenge === "string" && challenge.toLowerCase().startsWith("basic");
 }
 
+const UNREACHABLE = "Cannot reach the CodeSage server. Check that the backend is running.";
+
 export interface DescribedError {
   message: string;
   status?: number;
@@ -61,7 +63,7 @@ export function describeError(error: unknown): DescribedError {
         message:
           error.code === "ECONNABORTED"
             ? "The server took too long to respond. Try again."
-            : "Cannot reach the CodeSage server. Check that the backend is running.",
+            : UNREACHABLE,
         kind: "network",
       };
     }
@@ -89,7 +91,11 @@ export function describeError(error: unknown): DescribedError {
             : "Too many requests. Please wait a moment and try again.";
         break;
       case 500:
-        message = `Server error${requestId ? ` (request ${requestId})` : ""}. Please try again later.`;
+        // The backend's own 500s carry a request ID; an empty one is a proxy that can't reach it
+        // (the Vite dev server answers that way when the backend isn't running)
+        message = requestId
+          ? `Server error (request ${requestId}). Please try again later.`
+          : UNREACHABLE;
         break;
       case 502:
       case 503:
