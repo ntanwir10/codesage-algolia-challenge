@@ -106,8 +106,9 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="CodeSage - MCP-First Code Discovery",
     description=(
-        "Indexes GitHub repositories into Algolia and serves code search to Claude "
-        "Desktop and other clients through the Model Context Protocol (MCP)."
+        "Indexes git repositories into Algolia and serves code search to any MCP "
+        "client (Claude Desktop, Cursor, VS Code and others) through the Model "
+        "Context Protocol (MCP)."
     ),
     version="1.0.0",
     docs_url="/docs" if settings.environment != "production" else None,

@@ -1,4 +1,4 @@
-"""MCP prompts: ready-made questions that steer Claude through the CodeSage tools.
+"""MCP prompts: ready-made questions that steer the assistant through the CodeSage tools.
 
 They are plain text built here, so prompts/list and prompts/get work even when the backend is down.
 """
