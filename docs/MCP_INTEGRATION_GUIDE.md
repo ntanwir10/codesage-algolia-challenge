@@ -13,7 +13,7 @@ How to connect an MCP client (Claude Desktop, Cursor, VS Code, Windsurf or any o
 - [Resources](#resources)
 - [Prompts](#prompts)
 - [HTTP endpoints](#http-endpoints)
-- [How failures reach Claude](#how-failures-reach-claude)
+- [How failures reach your assistant](#how-failures-reach-your-assistant)
 - [Troubleshooting](#troubleshooting)
 - [Checking the bridge with the MCP Inspector](#checking-the-bridge-with-the-mcp-inspector)
 - [Known limitations](#known-limitations)
@@ -262,7 +262,7 @@ Adds a repository and starts indexing it. It returns `repository_id`, `name`, `s
 
 ### Other git hosts
 
-Ask Claude: *"Add https://gitlab.com/group/project to CodeSage"*, then *"Search it for where requests are retried"*.
+Ask your assistant: *"Add https://gitlab.com/group/project to CodeSage"*, then *"Search it for where requests are retried"*.
 
 - **Hosts.** GitHub, GitLab (nested groups too), Bitbucket and self-hosted servers, over https. `http://` and `git@host:path` URLs are rewritten to `https://`. Branch URLs such as `.../-/tree/dev` or Bitbucket's `/src/<branch>` work.
 - **Public only.** Private repositories are refused on every host but github.com, where the backend's `GITHUB_TOKEN` can read them.
@@ -285,9 +285,9 @@ The bridge also answers `resources/list` and `resources/read`. Reading needs the
 
 ## Prompts
 
-`prompts/list` and `prompts/get` are answered by the bridge alone (`codesage_mcp/prompts.py`), so they work with the backend down and need no key. Each prompt returns one user message that tells Claude which tools to call, in what order, and what to answer with.
+`prompts/list` and `prompts/get` are answered by the bridge alone (`codesage_mcp/prompts.py`), so they work with the backend down and need no key. Each prompt returns one user message that tells the assistant which tools to call, in what order, and what to answer with.
 
-| Prompt | Arguments | Steers Claude to |
+| Prompt | Arguments | Steers the assistant to |
 | --- | --- | --- |
 | `explain_repository` ("Explain this repository") | `repository` (required) | `analyze_repository`, then `list_definitions` (with `path_prefix`, and `entity_type: "doc_section"` for docs), then `get_file` on the README and central files. The answer covers what the repository does, its layout and main parts, and where to start, citing paths and lines |
 | `find_implementation` ("Where is this implemented?") | `feature` (required), `repository` (optional; empty searches every repository) | `search_code`, then `list_definitions` around the best hits and `find_references` on a key function or class, then `get_file` to confirm. The answer gives files, line ranges and source links, or says nothing matched |
@@ -317,7 +317,7 @@ curl -X POST http://127.0.0.1:8001/api/v1/ai/mcp/tools/call \
 - **Status codes.** Unknown tool is 404, invalid arguments are 422, a missing or wrong key is 401, and too many requests is 429 with `Retry-After`. An unknown resource is 404. An unexpected failure is 500 with `{detail, request_id}`.
 - **Other guards.** The request guard still applies: with a key set, a `Host` that is not allowed gets 403. See [Security in the README](../README.md#security).
 
-## How failures reach Claude
+## How failures reach your assistant
 
 | Backend result | Tool error text |
 | --- | --- |
@@ -349,14 +349,14 @@ Read the bridge's stderr in your client's MCP log for the `codesage` server (Cur
 | Symptom | Cause | Fix |
 | --- | --- | --- |
 | `CodeSage backend not reachable at ...` | Backend not running, or `MCP_SERVER_URL` is wrong | `make start-backend`, or correct the URL in the config. `tools/list` still works meanwhile |
-| `rejected the API key (401)` | `CODESAGE_API_KEY` in the Claude config differs from `backend/.env` | Re-run `make install-claude` |
+| `rejected the API key (401)` | `CODESAGE_API_KEY` in the client's config differs from `backend/.env` | Re-run `make install-claude` (or your client's target) |
 | `The proxy ... rejected the login (401)` | Wrong user, or no Keychain entry for it | Re-run the installer with `--basic-auth USER` and enter the password again |
 | `Refusing to send the CodeSage key or login over plain http` | A remote `http://` URL with a key or login | Use `https://`, or set `CODESAGE_ALLOW_INSECURE_AUTH=1` on a trusted network |
 | `refused the request (403)` | The backend runs on another host, and its `Host` isn't allowed | Add the host to `ALLOWED_HOSTS` on the backend, and check `MCP_SERVER_URL` |
 | `The backend returned 404 for ...` | `MCP_SERVER_URL` points at the wrong place | Point it at the backend root, without `/api/v1` |
 | `did not answer within 30 s` | The backend is overloaded, or something in front of it is stuck | Check the backend log, then retry |
 | `CodeSage backend error (500) ... (request <id>)` | An unexpected backend error | Find the request ID in the backend log |
-| `No API key is configured` | The backend needs a key, and the Claude config has none | Re-run `make install-claude`, or set `CODESAGE_API_KEY` in the server's `env` |
+| `No API key is configured` | The backend needs a key, and the client's config has none | Re-run `make install-claude` (or your client's target), or set `CODESAGE_API_KEY` in the server's `env` |
 | `rate limit exceeded (429)` | More than 30 tool calls or resource reads a minute from one address | Wait and retry |
 | `returned an unexpected response; check MCP_SERVER_URL` | The URL points at something that is not the CodeSage backend | Point `MCP_SERVER_URL` at the backend root, without `/api/v1` |
 | `Invalid arguments for ...` | A wrong or unknown argument | Match the argument tables above |
@@ -369,7 +369,7 @@ Read the bridge's stderr in your client's MCP log for the `codesage` server (Cur
 | Tools are listed but searches return nothing | No repository has finished indexing | Check `GET /api/v1/repositories/` for status and `error_message` |
 | `.venv/bin/python not found` or `Python dependencies are missing` (launcher) | No virtualenv, or the dependencies aren't installed in it | `make setup` |
 | `no Keychain password found for ...` (launcher) | `CODESAGE_BASIC_AUTH_USER` is set but its Keychain entry is missing | Re-run the installer with `--basic-auth USER` |
-| Server missing in Claude Desktop | Config not reloaded | Restart Claude Desktop |
+| Server missing in the client | Config not reloaded | Restart the client |
 
 ## Checking the bridge with the MCP Inspector
 

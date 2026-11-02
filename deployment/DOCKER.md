@@ -144,16 +144,18 @@ With a key set, the backend answers only to loopback hosts, the hosts in `CORS_O
 - **uvicorn trust.** `Dockerfile.prod` starts uvicorn with `--forwarded-allow-ips "*"`. That is safe only because the backend has no published port and nginx is the only peer that can reach it. Keep it that way.
 - **Limits.** `client_max_body_size` is 2 MB, and `/ws` allows idle connections for an hour.
 
-### Claude Desktop against prod
+### MCP clients against prod
 
 ```bash
 make install-claude ARGS="--server-url https://your-host --basic-auth <user>"   # asks for the password
 ```
 
-- **Password.** The installer stores it in the macOS Keychain (service `codesage-mcp`). The Claude Desktop config holds only the user name.
+For Cursor, VS Code or Windsurf, run `make install-cursor`, `make install-vscode` or `make install-windsurf` with the same `ARGS`.
+
+- **Password.** The installer stores it in the macOS Keychain (service `codesage-mcp`). The client's config holds only the user name.
 - **No key needed.** nginx adds the API key, so the bridge sends none.
 - **Plain HTTP is refused.** The bridge won't send the login or a key over `http://` to a non-loopback host unless `CODESAGE_ALLOW_INSECURE_AUTH=1` is set in its `env`.
-- **Self-signed certificate.** Add `SSL_CERT_FILE=/path/to/cert.pem` to the bridge's `env` in the Claude Desktop config.
+- **Self-signed certificate.** Add `SSL_CERT_FILE=/path/to/cert.pem` to the bridge's `env` in the client's config.
 - **Without the Keychain.** Set `CODESAGE_BASIC_AUTH_PASSWORD` in that `env` block instead. It is stored in plain text, in a file the installer keeps at mode 600.
 
 ## Configuration
@@ -234,4 +236,4 @@ The smoke test never adds a repository, so indexing in Docker (Algolia and `git`
 | `/health` says `degraded`, or adding a repository returns `503` | Algolia is not configured, or unreachable. Empty Algolia values and `your-...-here` placeholders count as unset. `degraded` is still HTTP `200`, so the container stays healthy | Set `ALGOLIA_APP_ID` and `ALGOLIA_ADMIN_API_KEY` in `backend/.env`, then restart the stack |
 | Adding a repository returns `422`, `502` or `504` | GitHub refused the repository, rejected `GITHUB_TOKEN`, or didn't answer one of its two requests within 10 s. The dashboard shows the message | Fix the URL or branch, or the token, and try again. A `503` with `Retry-After` is GitHub's rate limit |
 | Repository ends in `failed` | `error_message` says why, for example a GitHub rate limit or an Algolia error. The dashboard card and `GET /api/v1/repositories/{id}/status` show it | Fix the cause, or set `GITHUB_TOKEN`, then reprocess |
-| Claude Desktop can't reach prod | The bridge refuses plain `http://`, or doesn't trust a self-signed cert | Use `https://`, and add `SSL_CERT_FILE` to the bridge's `env` |
+| The MCP client can't reach prod | The bridge refuses plain `http://`, or doesn't trust a self-signed cert | Use `https://`, and add `SSL_CERT_FILE` to the bridge's `env` |
