@@ -1,4 +1,4 @@
-.PHONY: help setup start start-backend start-frontend stop build up down restart logs logs-backend shell health test test-mcp db-reset db-migrate db-migration clean clean-all prod-build prod-up status install-claude
+.PHONY: help setup start start-backend start-frontend stop build up down restart logs logs-backend shell health test test-mcp db-reset db-migrate db-migration clean clean-all prod-build prod-up status install-claude install-cursor install-vscode install-windsurf
 
 COMPOSE      = docker compose -f deployment/docker-compose.yml
 COMPOSE_PROD = docker compose -f deployment/docker-compose.prod.yml
@@ -30,6 +30,9 @@ help:
 	@echo "  start-frontend  - Start frontend development server"
 	@echo "  health          - Check backend health and MCP status"
 	@echo "  install-claude  - Add the CodeSage MCP server to Claude Desktop (merges config, keeps a backup)"
+	@echo "  install-cursor  - The same for Cursor (~/.cursor/mcp.json)"
+	@echo "  install-vscode  - The same for VS Code (user mcp.json)"
+	@echo "  install-windsurf - The same for Windsurf (~/.codeium/windsurf/mcp_config.json)"
 	@echo ""
 	@echo "🧪 Testing:"
 	@echo "  test            - Run API tests"
@@ -68,7 +71,7 @@ setup:
 	@echo "   GITHUB_TOKEN                           (optional; raises GitHub rate limits)"
 	@echo "   CODESAGE_API_KEY                       (generated automatically and copied to frontend/.env; keep it, rotate by deleting the line and re-running 'make setup')"
 	@echo ""
-	@echo "🎯 Next: 'make start', then 'make install-claude' for Claude Desktop"
+	@echo "🎯 Next: 'make start', then 'make install-claude' (or install-cursor, install-vscode, install-windsurf)"
 
 # Quick start commands  
 start:
@@ -194,7 +197,11 @@ status:
 	@echo "📊 CodeSage MCP Server Status:"
 	@$(COMPOSE) ps
 
-# Register the MCP server with Claude Desktop (use ARGS='--dry-run' to preview)
+# Register the MCP server with an MCP client (use ARGS='--dry-run' to preview)
 install-claude:
 	.venv/bin/python scripts/ensure_api_key.py
 	.venv/bin/python scripts/install_claude_desktop.py $(ARGS)
+
+install-cursor install-vscode install-windsurf: install-%:
+	.venv/bin/python scripts/ensure_api_key.py
+	.venv/bin/python scripts/install_claude_desktop.py --client $* $(ARGS)

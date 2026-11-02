@@ -53,7 +53,7 @@ def ensure(backend_env: Path, frontend_env: Path) -> int:
     _chmod_600(backend_env)
     _chmod_600(frontend_env)
     if generated:
-        print("Run 'make install-claude' and restart Claude Desktop so Claude uses it.")
+        print("Run 'make install-claude' (or install-cursor, install-vscode, install-windsurf) and restart the client so it uses it.")
     return 0
 
 

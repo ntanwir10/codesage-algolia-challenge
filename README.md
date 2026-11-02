@@ -2,14 +2,14 @@
 
 [![CI](https://github.com/ntanwir10/codesage-algolia-challenge/actions/workflows/ci.yml/badge.svg)](https://github.com/ntanwir10/codesage-algolia-challenge/actions/workflows/ci.yml)
 
-**Search and read codebases from Claude.** CodeSage indexes a repository's functions, classes, imports, documentation and Terraform blocks into Algolia, then serves them to Claude Desktop (or any MCP client) as eight tools. A web dashboard adds repositories from GitHub, GitLab, Bitbucket or any https git host, shows indexing progress live and searches the index. Claude can add them too.
+**Search and read codebases from any AI assistant.** CodeSage indexes a repository's functions, classes, imports, documentation and Terraform blocks into Algolia, then serves them to any MCP client (Claude Desktop, Cursor, VS Code, Windsurf and others) as eight tools. A web dashboard adds repositories from GitHub, GitLab, Bitbucket or any https git host, shows indexing progress live and searches the index. Your assistant can add them too.
 
 Built for the [Algolia MCP Server Challenge](https://dev.to/challenges/algolia-2025-07-09).
 
 ```mermaid
 flowchart TB
     you(["You"]) --> browser["Web dashboard<br/>React + Vite"]
-    you --> claude["Claude Desktop"]
+    you --> claude["MCP client<br/>Claude Desktop, Cursor, VS Code, ..."]
     claude -- "tools/call over stdio" --> bridge["MCP bridge"]
     browser -- "REST and WebSocket" --> nginx["nginx, prod only<br/>HTTPS, login, adds the API key"]
     bridge -- "HTTP with the API key" --> nginx
@@ -40,7 +40,7 @@ In development there is no nginx: the dashboard and the bridge call the backend 
 There are two ways in, and both end at the same FastAPI backend:
 
 - **Web dashboard** (React + Vite). Add a repository from GitHub or another git host, watch it index, and search it.
-- **Claude Desktop.** Claude Desktop starts `mcp_launcher.sh`, which runs a small stdio MCP bridge (`backend/codesage_mcp`). The bridge turns Claude's tool calls into HTTP calls to the backend. Claude can search, read and also add repositories, including public ones on GitLab, Bitbucket and other git hosts.
+- **MCP clients** such as Claude Desktop, Cursor, VS Code or Windsurf. The client starts `mcp_launcher.sh`, which runs a small stdio MCP bridge (`backend/codesage_mcp`). The bridge turns the assistant's tool calls into HTTP calls to the backend. The assistant can search, read and also add repositories, including public ones on GitLab, Bitbucket and other git hosts.
 
 Indexing runs as a background job inside the backend. Search goes to Algolia; reading files and listing definitions go to SQLite.
 
@@ -159,13 +159,13 @@ flowchart TB
 
 Progress arrives over the WebSocket, with polling every 3 seconds as well.
 
-### Using it from Claude Desktop
+### Using it from an MCP client
 
 ```mermaid
 flowchart TB
-    install["make install-claude"] --> restart["Restart Claude Desktop"]
+    install["make install-claude, install-cursor,<br/>install-vscode or install-windsurf"] --> restart["Restart the client"]
     restart --> ask["Ask about a repository"]
-    ask --> tools["Claude calls CodeSage tools"]
+    ask --> tools["The assistant calls CodeSage tools"]
     tools --> answer["Answer with code and source links"]
 ```
 
@@ -174,7 +174,7 @@ Each tool call takes this path:
 ```mermaid
 sequenceDiagram
     actor You
-    participant Claude as Claude Desktop
+    participant Claude as MCP client
     participant Bridge as MCP bridge
     participant API as Backend
     participant Data as Algolia or SQLite
@@ -189,10 +189,10 @@ sequenceDiagram
     Claude-->>You: answer with code
 ```
 
-- **Bridge.** It talks to Claude Desktop over stdio and checks the arguments first. It won't send the key over plain `http://` to a remote host.
+- **Bridge.** It talks to the MCP client over stdio and checks the arguments first. It won't send the key over plain `http://` to a remote host.
 - **nginx.** In prod the request goes through nginx, which checks your login and adds the API key.
 - **Backend.** `search_code` queries Algolia; the other tools read SQLite.
-- **Errors.** A rejected key or login (`401`), a refused host (`403`), a wrong URL (`404`), bad arguments (`422`), a rate limit (`429`), a backend error (`5xx`), a timeout or an unreachable backend comes back to Claude as a tool error that says what to fix. Every tool also refuses a repository that failed or is still indexing, and says why or how far along it is.
+- **Errors.** A rejected key or login (`401`), a refused host (`403`), a wrong URL (`404`), bad arguments (`422`), a rate limit (`429`), a backend error (`5xx`), a timeout or an unreachable backend comes back to the assistant as a tool error that says what to fix. Every tool also refuses a repository that failed or is still indexing, and says why or how far along it is.
 
 More detail is in [docs/architecture.md](docs/architecture.md) (data model, search index, WebSocket protocol) and [docs/MCP_INTEGRATION_GUIDE.md](docs/MCP_INTEGRATION_GUIDE.md) (tools, arguments, troubleshooting).
 
@@ -245,14 +245,17 @@ make start   # backend on http://127.0.0.1:8001, dashboard on http://localhost:5
 
 **4. Index a repository.** Open http://localhost:5173 and enter `owner/repo` (a pasted GitHub URL works too, and so does an https URL on GitLab, Bitbucket or another git host). The repository page shows progress live and turns searchable when it's done. If GitHub or Algolia refuses the repository, the form says why; see [Adding a repository](#adding-a-repository).
 
-**5. Connect Claude Desktop.**
+**5. Connect your MCP client.**
 
 ```bash
 make install-claude                 # add CodeSage to the Claude Desktop config
-make install-claude ARGS=--dry-run  # preview first; the key is masked, but it is still generated in .env if missing
+make install-cursor                 # or Cursor (~/.cursor/mcp.json)
+make install-vscode                 # or VS Code (your user mcp.json)
+make install-windsurf               # or Windsurf (~/.codeium/windsurf/mcp_config.json)
+make install-claude ARGS=--dry-run  # preview first: prints only the CodeSage entry, key masked (the key is still generated in .env if missing)
 ```
 
-Restart Claude Desktop and keep the backend running. Then ask Claude something like *"Search the zustand repository for where the store is created"*.
+Restart the client and keep the backend running. Then ask your assistant something like *"Search the zustand repository for where the store is created"*.
 
 ## Using CodeSage
 
@@ -272,7 +275,7 @@ On the repository page, a finished repository shows a green card. It shows amber
 
 An unknown path shows "Page not found". A repository that doesn't exist says so; any other load error shows the message with "Try again". A failed repository says why on its page and on its dashboard card.
 
-### Claude Desktop and MCP tools
+### MCP clients and tools
 
 | Tool | What it returns |
 | --- | --- |
@@ -287,7 +290,7 @@ An unknown path shows "Page not found". A repository that doesn't exist says so;
 
 The bridge also offers two prompts: ready-made requests that an MCP client can list for you to pick. **Explain this repository** (`explain_repository`, takes `repository`) walks Claude through `analyze_repository`, `list_definitions` and `get_file`. **Where is this implemented?** (`find_implementation`, takes `feature` and an optional `repository`) goes through `search_code`, `list_definitions`, `find_references` and `get_file`, and answers with file paths and line ranges. A resource template, `codesage://repositories/{id}/files`, lists one repository's indexed files; see [Resources](docs/MCP_INTEGRATION_GUIDE.md#resources).
 
-The installer merges CodeSage into your Claude Desktop config without touching other servers. It writes a backup first, and both files are mode 600 because they hold the key.
+The installer merges CodeSage into your client's config without touching other servers. It writes a backup first, and both files are mode 600 because they hold the key. Any other client that runs stdio MCP servers takes the same `command` and `env`; see [Manual install](docs/MCP_INTEGRATION_GUIDE.md#manual-install).
 
 For the HTTPS prod stack, use `make install-claude ARGS="--server-url https://your-host --basic-auth <user>"`. The password goes to the macOS Keychain, and nginx supplies the API key. See [docs/MCP_INTEGRATION_GUIDE.md](docs/MCP_INTEGRATION_GUIDE.md) for manual setup and troubleshooting.
 
@@ -380,14 +383,14 @@ CI ([.github/workflows/ci.yml](.github/workflows/ci.yml)) runs on pushes to `mas
 
 ```
 backend/app/            FastAPI app: api/ (routes), core/ (config, auth, database), models/, schemas/, services/
-backend/codesage_mcp/   stdio MCP bridge Claude Desktop runs (python -m codesage_mcp)
+backend/codesage_mcp/   stdio MCP bridge your MCP client runs (python -m codesage_mcp)
 backend/alembic/        database migrations, applied at startup
 backend/tests/          pytest suite
 frontend/src/           React dashboard: pages/, components/, services/ (API and WebSocket clients)
 deployment/             Compose files, dev nginx.conf and the prod nginx template
 docs/                   architecture notes and the MCP guide
-scripts/                install_claude_desktop.py
-mcp_launcher.sh         what Claude Desktop launches
+scripts/                install_claude_desktop.py (the installer for every client, --client picks it)
+mcp_launcher.sh         what the MCP client launches
 ```
 
 ## Known limitations
