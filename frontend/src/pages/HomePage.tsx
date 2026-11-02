@@ -46,8 +46,8 @@ export function HomePage() {
             Discover Code with AI
           </h2>
           <p className="text-xl text-muted-foreground max-w-2xl mx-auto">
-            Add a repository from GitHub, GitLab, Bitbucket or any git host, search its code here, and let Claude
-            answer questions about it through MCP. Powered by Algolia search.
+            Add a repository from GitHub, GitLab, Bitbucket or any git host, search its code here, and let your AI
+            assistant answer questions about it through MCP. Powered by Algolia search.
           </p>
         </div>
 
@@ -84,9 +84,9 @@ export function HomePage() {
               <div className="w-8 h-8 bg-primary text-primary-foreground rounded-full flex items-center justify-center mx-auto font-bold">
                 3
               </div>
-              <h4 className="font-medium">Search and Ask Claude</h4>
+              <h4 className="font-medium">Search and Ask Your Assistant</h4>
               <p className="text-sm text-muted-foreground">
-                Search definitions here, or ask Claude about the code
+                Search definitions here, or ask your AI assistant about the code
               </p>
             </div>
           </div>
@@ -98,15 +98,18 @@ export function HomePage() {
             <h3 className="text-lg font-semibold mb-2">🔍 Smart Search</h3>
             <p className="text-muted-foreground">
               Search names like "authMiddleware" or "createStore", including
-              part of a camelCase name. Ask Claude "How does authentication
-              work?" and it searches the index for you.
+              part of a camelCase name. Ask your assistant "How does
+              authentication work?" and it searches the index for you.
             </p>
           </div>
           <div className="bg-card border rounded-lg p-6">
-            <h3 className="text-lg font-semibold mb-2">🤖 Claude Desktop</h3>
-            <p className="text-muted-foreground">
-              Connect Claude Desktop over MCP to search code, read files, list
-              definitions and find patterns in your indexed repositories.
+            <h3 className="text-lg font-semibold mb-2">🤖 MCP Clients</h3>
+            <p className="text-muted-foreground [&_code]:whitespace-nowrap">
+              Connect Claude Desktop, Cursor, VS Code or Windsurf over MCP to
+              search code, read files, list definitions and find patterns in
+              your indexed repositories. Set one up with{" "}
+              <code>make install-claude</code> (or <code>install-cursor</code>,{" "}
+              <code>install-vscode</code>, <code>install-windsurf</code>).
             </p>
           </div>
         </div>
