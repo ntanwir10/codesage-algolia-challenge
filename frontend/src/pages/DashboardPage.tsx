@@ -206,7 +206,7 @@ export function DashboardPage() {
           <Card>
             <CardContent className="p-6">
               <div className="flex items-center gap-3">
-                <div className="p-2 bg-blue-100 rounded-lg">
+                <div className="p-2 bg-blue-100 dark:bg-blue-900/40 rounded-lg">
                   <span className="text-2xl">📊</span>
                 </div>
                 <div>
@@ -222,11 +222,11 @@ export function DashboardPage() {
           <Card>
             <CardContent className="p-6">
               <div className="flex items-center gap-3">
-                <div className="p-2 bg-green-100 rounded-lg">
+                <div className="p-2 bg-green-100 dark:bg-green-900/40 rounded-lg">
                   <span className="text-2xl">✅</span>
                 </div>
                 <div>
-                  <div className="text-2xl font-bold text-green-600">
+                  <div className="text-2xl font-bold text-green-600 dark:text-green-400">
                     {stats.completed}
                   </div>
                   <div className="text-sm text-muted-foreground">Completed</div>
@@ -238,11 +238,11 @@ export function DashboardPage() {
           <Card>
             <CardContent className="p-6">
               <div className="flex items-center gap-3">
-                <div className="p-2 bg-blue-100 rounded-lg">
+                <div className="p-2 bg-blue-100 dark:bg-blue-900/40 rounded-lg">
                   <span className="text-2xl">⏳</span>
                 </div>
                 <div>
-                  <div className="text-2xl font-bold text-blue-600">
+                  <div className="text-2xl font-bold text-blue-600 dark:text-blue-400">
                     {stats.processing}
                   </div>
                   <div className="text-sm text-muted-foreground">
@@ -256,11 +256,11 @@ export function DashboardPage() {
           <Card>
             <CardContent className="p-6">
               <div className="flex items-center gap-3">
-                <div className="p-2 bg-red-100 rounded-lg">
+                <div className="p-2 bg-red-100 dark:bg-red-900/40 rounded-lg">
                   <span className="text-2xl">❌</span>
                 </div>
                 <div>
-                  <div className="text-2xl font-bold text-red-600">
+                  <div className="text-2xl font-bold text-red-600 dark:text-red-400">
                     {stats.failed}
                   </div>
                   <div className="text-sm text-muted-foreground">Failed</div>
@@ -271,7 +271,7 @@ export function DashboardPage() {
         </div>
 
         {repositories.length >= MAX_LISTED && (
-          <p className="text-sm text-amber-700">
+          <p className="text-sm text-amber-700 dark:text-amber-300">
             Showing the first {MAX_LISTED} repositories; more may exist.
           </p>
         )}
@@ -312,7 +312,7 @@ export function DashboardPage() {
                 <CardHeader>
                   <div className="flex flex-wrap items-center justify-between gap-2">
                     <div className="flex items-center gap-3">
-                      <div className="p-2 bg-gray-100 rounded-lg">
+                      <div className="p-2 bg-gray-100 dark:bg-gray-800 rounded-lg">
                         <span className="text-2xl">📂</span>
                       </div>
                       <div>
@@ -336,7 +336,7 @@ export function DashboardPage() {
                           onClick={() => handleDeleteClick(repo)}
                           // The server refuses (409) while a run holds the repository
                           disabled={isActiveStatus(repo.status)}
-                          className="text-red-600 hover:text-red-700 hover:bg-red-50"
+                          className="text-red-600 dark:text-red-400 hover:text-red-700 dark:hover:text-red-300 hover:bg-red-50 dark:hover:bg-red-950/40"
                           title={isActiveStatus(repo.status) ? "Can't delete while processing" : "Delete repository"}
                           aria-label={`Delete ${repo.name}`}
                         >
@@ -348,38 +348,38 @@ export function DashboardPage() {
                 </CardHeader>
                 <CardContent>
                   {repo.status === "failed" && repo.error_message && (
-                    <p className="text-sm text-red-600 break-words mb-4">
+                    <p className="text-sm text-red-600 dark:text-red-400 break-words mb-4">
                       {repo.error_message}
                     </p>
                   )}
                   {/* A completed run's error_message says what it left out */}
                   {repo.status === "completed" && repo.error_message && (
-                    <p className="text-sm text-amber-700 break-words mb-4">
+                    <p className="text-sm text-amber-700 dark:text-amber-300 break-words mb-4">
                       ⚠️ {repo.error_message}
                     </p>
                   )}
                   <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm mb-4">
                     <div className="flex items-center gap-2">
-                      <span className="text-gray-500">📄</span>
+                      <span className="text-gray-500 dark:text-gray-400">📄</span>
                       <span>
                         <strong>{repo.total_files}</strong> files
                       </span>
                     </div>
                     <div className="flex items-center gap-2">
-                      <span className="text-gray-500">🔢</span>
+                      <span className="text-gray-500 dark:text-gray-400">🔢</span>
                       <span>
                         <strong>{repo.total_lines.toLocaleString()}</strong>{" "}
                         lines
                       </span>
                     </div>
                     <div className="flex items-center gap-2">
-                      <span className="text-gray-500">💻</span>
+                      <span className="text-gray-500 dark:text-gray-400">💻</span>
                       <span>
                         <strong>{repo.language || "Unknown"}</strong>
                       </span>
                     </div>
                     <div className="flex items-center gap-2">
-                      <span className="text-gray-500">🌿</span>
+                      <span className="text-gray-500 dark:text-gray-400">🌿</span>
                       <span>
                         <strong>{repo.branch || "default"}</strong>
                       </span>
@@ -431,7 +431,7 @@ export function DashboardPage() {
                         href={repo.url}
                         target="_blank"
                         rel="noopener noreferrer"
-                        className="text-sm text-blue-600 hover:underline"
+                        className="text-sm text-blue-600 dark:text-blue-400 hover:underline"
                       >
                         {sourceLabel(repo.url)} →
                       </a>

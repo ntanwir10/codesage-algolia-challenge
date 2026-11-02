@@ -74,7 +74,7 @@ export function DefinitionsBrowser({ repositoryId, className }: DefinitionsBrows
         </div>
 
         {error && (
-          <p role="alert" className="text-sm text-red-600">
+          <p role="alert" className="text-sm text-red-600 dark:text-red-400">
             {describeError(error).message}
           </p>
         )}
@@ -94,7 +94,7 @@ export function DefinitionsBrowser({ repositoryId, className }: DefinitionsBrows
                 >
                   <Link
                     to={fileViewerPath(repositoryId, d.file_path, d.line_start, d.line_end)}
-                    className="text-blue-600 hover:underline break-all font-medium"
+                    className="text-blue-600 dark:text-blue-400 hover:underline break-all font-medium"
                   >
                     {d.entity_name}
                   </Link>

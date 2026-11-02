@@ -96,7 +96,7 @@ export function AnimatedProgress({
         aria-valuemin={0}
         aria-valuemax={100}
         aria-valuenow={indeterminate ? undefined : Math.round(percentage)}
-        className={`w-full bg-gray-200 rounded-full ${getSizeClasses()}`}
+        className={`w-full bg-gray-200 dark:bg-gray-700 rounded-full ${getSizeClasses()}`}
       >
         {indeterminate ? (
           <div

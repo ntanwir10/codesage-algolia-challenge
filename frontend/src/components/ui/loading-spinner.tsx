@@ -27,7 +27,7 @@ export function LoadingSpinner({
     >
       <div
         className={cn(
-          "animate-spin rounded-full border-2 border-gray-300 border-t-blue-600",
+          "animate-spin rounded-full border-2 border-gray-300 dark:border-gray-600 border-t-blue-600",
           sizeClasses[size]
         )}
       />

@@ -7,6 +7,17 @@
     <meta name="description" content="Search and explore GitHub repositories through the Model Context Protocol (MCP), with Algolia-powered code search" />
     <meta name="theme-color" content="#6366f1" />
     <title>CodeSage - AI-Powered Code Discovery</title>
+    <script>
+      // Before the first paint, so a dark page never flashes light: the saved choice, else the system's
+      try {
+        const theme = localStorage.getItem("theme");
+        if (theme === "dark" || (!theme && matchMedia("(prefers-color-scheme: dark)").matches)) {
+          document.documentElement.classList.add("dark");
+        }
+      } catch {
+        // Storage blocked: follow the default (light)
+      }
+    </script>
   </head>
   <body>
     <div id="root"></div>

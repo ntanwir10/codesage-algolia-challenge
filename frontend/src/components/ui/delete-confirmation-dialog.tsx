@@ -70,12 +70,12 @@ export function DeleteConfirmationDialog({
     danger: {
       icon: "🗑️",
       confirmButton: "bg-red-600 hover:bg-red-700 text-white",
-      iconBg: "bg-red-100",
+      iconBg: "bg-red-100 dark:bg-red-900/40",
     },
     warning: {
       icon: "⚠️",
       confirmButton: "bg-orange-600 hover:bg-orange-700 text-white",
-      iconBg: "bg-orange-100",
+      iconBg: "bg-orange-100 dark:bg-orange-900/40",
     },
   };
 

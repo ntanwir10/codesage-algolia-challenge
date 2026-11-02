@@ -251,7 +251,7 @@ export function RepositoryPage() {
           {connectionStatus === "connected" && (
             <>
               <span>/</span>
-              <span className="text-green-600 flex items-center gap-1">
+              <span className="text-green-600 dark:text-green-400 flex items-center gap-1">
                 🔄 Live updates
               </span>
             </>
@@ -261,7 +261,7 @@ export function RepositoryPage() {
         {/* Repository Header */}
         <div className="flex flex-wrap items-start justify-between gap-2">
           <div className="flex items-start gap-4 min-w-0">
-            <div className="p-3 bg-blue-100 rounded-lg">
+            <div className="p-3 bg-blue-100 dark:bg-blue-900/40 rounded-lg">
               <span className="text-3xl">📂</span>
             </div>
             <div className="min-w-0">
@@ -277,7 +277,7 @@ export function RepositoryPage() {
                     href={repository.url}
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="text-sm text-blue-600 hover:underline font-medium break-all"
+                    className="text-sm text-blue-600 dark:text-blue-400 hover:underline font-medium break-all"
                   >
                     {sourceLabel(repository.url)} →
                   </a>
@@ -300,7 +300,7 @@ export function RepositoryPage() {
                           type="button"
                           onClick={() => setConfirmReprocess(true)}
                           disabled={isReprocessing}
-                          className="text-blue-600 hover:underline font-medium"
+                          className="text-blue-600 dark:text-blue-400 hover:underline font-medium"
                         >
                           Reprocess to update
                         </button>
@@ -319,7 +319,7 @@ export function RepositoryPage() {
               onClick={handleDeleteClick}
               // The server refuses (409) while a run holds the repository
               disabled={isActiveStatus(repository.status)}
-              className="text-red-600 hover:text-red-700 hover:bg-red-50"
+              className="text-red-600 dark:text-red-400 hover:text-red-700 dark:hover:text-red-300 hover:bg-red-50 dark:hover:bg-red-950/40"
               title={isActiveStatus(repository.status) ? "Can't delete while processing" : "Delete repository"}
             >
               <span className="mr-1">🗑️</span>
@@ -333,13 +333,13 @@ export function RepositoryPage() {
 
         {/* Processing Status */}
         {isActiveStatus(repository.status) && (
-          <Card className="border-blue-200 bg-blue-50/50">
+          <Card className="border-blue-200 dark:border-blue-800 bg-blue-50/50">
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
                 <span className="animate-spin">⏳</span>
                 Processing Status
                 {connectionStatus === "connected" && (
-                  <span className="text-xs bg-green-100 text-green-700 px-2 py-1 rounded-full">
+                  <span className="text-xs bg-green-100 dark:bg-green-900/40 text-green-700 dark:text-green-300 px-2 py-1 rounded-full">
                     Live Updates
                   </span>
                 )}
@@ -389,8 +389,8 @@ export function RepositoryPage() {
           <Card
             className={
               repository.error_message
-                ? "border-amber-200 bg-amber-50/50"
-                : "border-green-200 bg-green-50/50"
+                ? "border-amber-200 dark:border-amber-800 bg-amber-50/50"
+                : "border-green-200 dark:border-green-800 bg-green-50/50"
             }
           >
             <CardContent className="p-4">
@@ -402,8 +402,8 @@ export function RepositoryPage() {
                   <p
                     className={
                       repository.error_message
-                        ? "font-medium text-amber-700"
-                        : "font-medium text-green-700"
+                        ? "font-medium text-amber-700 dark:text-amber-300"
+                        : "font-medium text-green-700 dark:text-green-300"
                     }
                   >
                     {repository.error_message?.startsWith("Reprocessing failed")
@@ -417,7 +417,7 @@ export function RepositoryPage() {
                       {repository.error_message}
                     </p>
                   ) : (
-                    <p className="text-sm text-green-600">
+                    <p className="text-sm text-green-600 dark:text-green-400">
                       Your repository is ready for AI-powered search and
                       exploration.
                       {connectionStatus === "connected" && (
@@ -441,18 +441,18 @@ export function RepositoryPage() {
 
         {/* Error Status */}
         {repository.status === "failed" && (
-          <Card className="border-red-200 bg-red-50/50">
+          <Card className="border-red-200 dark:border-red-800 bg-red-50/50">
             <CardContent className="p-4">
               <div className="flex items-center gap-3">
                 <span className="text-2xl">❌</span>
                 <div>
-                  <p className="font-medium text-red-700">Processing failed</p>
-                  <p className="text-sm text-red-600">
+                  <p className="font-medium text-red-700 dark:text-red-300">Processing failed</p>
+                  <p className="text-sm text-red-600 dark:text-red-400">
                     There was an error processing this repository. You can try
                     reprocessing it.
                   </p>
                   {repository.error_message && (
-                    <p className="mt-1 text-sm text-red-700">
+                    <p className="mt-1 text-sm text-red-700 dark:text-red-300">
                       {repository.error_message}
                     </p>
                   )}
