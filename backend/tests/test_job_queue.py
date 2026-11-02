@@ -95,6 +95,29 @@ async def test_a_failing_job_is_still_removed(external, monkeypatch):
     assert external.query(Job).count() == 0
 
 
+async def test_a_failed_heartbeat_does_not_stop_the_next_ones(external, monkeypatch):
+    # Without later heartbeats the job looks abandoned and a second worker runs it too
+    repo = add_repository(external)
+    jobs.start_processing(repo.id)
+    beats = []
+
+    def flaky_heartbeat(job_id, worker):
+        beats.append(job_id)
+        if len(beats) == 1:
+            raise RuntimeError("database connection lost")
+
+    async def long_run(*args):
+        while len(beats) < 2:
+            await asyncio.sleep(0)
+
+    monkeypatch.setattr(jobs, "JOB_HEARTBEAT_SECONDS", 0)
+    monkeypatch.setattr(jobs, "heartbeat_job", flaky_heartbeat)
+    monkeypatch.setattr(jobs, "_run_job", long_run)
+
+    assert await asyncio.wait_for(run_one("host:1"), 5) is True
+    assert len(beats) >= 2
+
+
 def test_recovery_leaves_runs_that_workers_own(external, monkeypatch):
     owned = add_repository(external, "o/owned", status="processing")
     orphan = add_repository(external, "o/orphan", status="processing")

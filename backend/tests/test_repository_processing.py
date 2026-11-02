@@ -1,5 +1,7 @@
 """process_repository end to end: honest final status and idempotent reprocessing"""
 
+import asyncio
+
 import pytest
 
 from app.models.code_entity import CodeEntity
@@ -179,6 +181,42 @@ async def test_failed_fetch_during_reprocess_keeps_the_existing_index(
     assert (repository.total_files, repository.processed_files) == (2, 2)
     assert stored_counts(db_session, repository.id) == (2, 5)
     assert len(algolia_index.records) == 5
+
+
+async def test_a_failed_reprocess_started_through_the_api_keeps_the_existing_index(
+    db_session, repository, github, algolia_index, job_sessions
+):
+    """The endpoint and the real job together: the job must still read 'completed' when it starts"""
+    import httpx2 as httpx
+
+    from app.core.database import get_db
+    from app.main import app
+    from app.services import repository_service
+
+    github.files = [FILE_A, FILE_B]
+    await process(db_session, repository)
+    github.error = GitHubAPIError(404, "GitHub repository or path not found (404)")
+
+    app.dependency_overrides[get_db] = lambda: db_session
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 50000))
+    try:
+        async with httpx.AsyncClient(transport=transport, base_url="http://localhost") as api:
+            response = await api.post(
+                f"/api/v1/repositories/{repository.id}/process", params={"force_reprocess": "true"}
+            )
+        # The job runs on this event loop; let it finish
+        for _ in range(500):
+            if not repository_service.is_processing(repository.id):
+                break
+            await asyncio.sleep(0.01)
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 202
+    db_session.refresh(repository)
+    assert repository.status == "completed"
+    assert repository.error_message.endswith(PREVIOUS_INDEX_NOTE)
+    assert (repository.total_files, repository.processed_files) == (2, 2)
 
 
 async def test_a_run_whose_old_records_cannot_be_removed_still_completes(

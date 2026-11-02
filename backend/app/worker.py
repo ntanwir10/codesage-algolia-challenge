@@ -28,7 +28,11 @@ async def run_one(worker: str) -> bool:
     async def beat():
         while True:
             await asyncio.sleep(jobs.JOB_HEARTBEAT_SECONDS)
-            jobs.heartbeat_job(job.id, worker)
+            try:
+                jobs.heartbeat_job(job.id, worker)
+            except Exception as e:
+                # One failed write must not end the heartbeats, or the job is queued again while it runs
+                logger.warning("Heartbeat failed", job_id=job.id, error=str(e))
 
     heartbeat = asyncio.create_task(beat())
     try:
