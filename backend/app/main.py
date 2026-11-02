@@ -229,7 +229,8 @@ async def _check_algolia() -> dict:
         result = {"status": "not_configured"}
     else:
         try:
-            await asyncio.wait_for(asyncio.to_thread(client.list_indices), 5)
+            # Not list_indices: its v4 response model rejects what this API returns
+            await asyncio.wait_for(asyncio.to_thread(client.custom_get, "1/indexes", {"hitsPerPage": 1}), 5)
             result = {"status": "healthy"}
         except Exception as e:
             logger.warning("Algolia health check failed", error=str(e))

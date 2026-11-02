@@ -109,7 +109,7 @@ async def test_an_unpublished_save_does_not_hang_indexing(algolia_index, monkeyp
 
 
 async def test_settings_create_a_brand_new_index(algolia_index, monkeypatch):
-    from algoliasearch.exceptions import RequestException
+    from algoliasearch.http.exceptions import RequestException
 
     def missing():
         raise RequestException("Index does not exist", 404)
@@ -182,3 +182,47 @@ def test_terraform_and_doc_records_carry_their_name():
 
     assert service._create_algolia_document(tf, 1, "main.tf", "terraform")["entity_name"] == "resource aws_s3_bucket.logs"
     assert service._create_algolia_document(doc, 1, "README.md", "markdown")["entity_name"] == "Overview"
+
+
+def test_the_v4_adapter_keeps_the_index_methods_the_service_uses():
+    from types import SimpleNamespace
+
+    from app.services.algolia_service import _Index
+
+    calls = []
+
+    class Client:
+        def get_settings(self, name):
+            calls.append(("get_settings", name))
+            return SimpleNamespace(to_dict=lambda: {"hitsPerPage": 20})
+
+        def set_settings(self, name, settings):
+            calls.append(("set_settings", name, settings))
+            return SimpleNamespace(task_id=1)
+
+        def save_objects(self, name, objects):
+            calls.append(("save_objects", name, len(objects)))
+            return [SimpleNamespace(task_id=2), SimpleNamespace(task_id=3)]
+
+        def delete_by(self, name, params):
+            calls.append(("delete_by", name, params))
+            return SimpleNamespace(task_id=4)
+
+        def search_single_index(self, name, params):
+            calls.append(("search", name, params))
+            return SimpleNamespace(to_dict=lambda: {"nbHits": 0})
+
+        def get_task(self, name, task_id):
+            calls.append(("get_task", name, task_id))
+            return SimpleNamespace(status="published")
+
+    index = _Index(Client(), "idx")
+
+    assert index.get_settings() == {"hitsPerPage": 20}
+    assert index.set_settings({"a": 1}).raw_responses == [{"taskID": 1}]
+    assert index.save_objects([{}, {}]).raw_responses == [{"taskID": 2}, {"taskID": 3}]
+    assert index.delete_by({"filters": "x"}).raw_responses == [{"taskID": 4}]
+    assert index.search("q", {"hitsPerPage": 1}) == {"nbHits": 0}
+    assert index.get_task(9) == {"status": "published"}
+    # v4 takes the query inside the search parameters
+    assert ("search", "idx", {"hitsPerPage": 1, "query": "q"}) in calls
