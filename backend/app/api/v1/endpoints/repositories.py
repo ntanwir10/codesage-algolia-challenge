@@ -208,7 +208,12 @@ async def update_repository(
         setattr(repository, key, value)
 
     if reindex:
-        start_processing(repository_id, force_reprocess=True)
+        try:
+            start_processing(repository_id, force_reprocess=True)
+        except RepositoryBusyError as e:
+            # A run started while check_source awaited the host (a scheduled refresh, another tab)
+            db.rollback()
+            raise HTTPException(status_code=409, detail=str(e)) from e
         repository.status = "processing"
         repository.error_message = None
     db.commit()

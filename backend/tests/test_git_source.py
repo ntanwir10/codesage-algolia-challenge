@@ -84,7 +84,7 @@ async def test_hosts_that_resolve_to_private_addresses_are_refused(spawn, resolv
     error = await check()
     assert error is not None and error.status_code == 422
     with pytest.raises(GitHubAPIError, match="private or loopback") as clone_error:
-        await git_source.fetch_files(URL)
+        await git_source.GitSource().get_repository_files(URL)
     assert clone_error.value.status == 422
     assert spawn.calls == []
 
@@ -183,7 +183,7 @@ async def test_anything_else_is_502_without_the_stderr(spawn):
     assert (await check()).status_code == 502
 
 
-# --- fetch_files -------------------------------------------------------------
+# --- GitSource ---------------------------------------------------------------
 
 
 def fake_clone(monkeypatch, populate, code=0, stderr=""):
@@ -227,10 +227,10 @@ def populate(root: Path):
     os.symlink("/etc", root / "etcdir")
 
 
-async def test_fetch_files_walks_the_clone_and_applies_the_selection_rules(monkeypatch):
+async def test_a_clone_is_walked_and_applies_the_selection_rules(monkeypatch):
     seen = fake_clone(monkeypatch, populate)
 
-    files = await git_source.fetch_files(URL, "main")
+    files = await git_source.GitSource().get_repository_files(URL, "main")
 
     assert {f.path: f.language for f in files} == {
         "README.md": "markdown",
@@ -248,9 +248,9 @@ async def test_fetch_files_walks_the_clone_and_applies_the_selection_rules(monke
     assert not seen["target"].parent.exists()  # the temp dir is removed
 
 
-async def test_fetch_files_without_a_branch_clones_the_default(monkeypatch):
+async def test_without_a_branch_it_clones_the_default(monkeypatch):
     seen = fake_clone(monkeypatch, populate)
-    await git_source.fetch_files(URL)
+    await git_source.GitSource().get_repository_files(URL)
     assert "--branch" not in seen["args"]
 
 
@@ -287,7 +287,7 @@ async def test_clone_failures_are_user_facing_and_clean_up(monkeypatch, stderr, 
     seen = fake_clone(monkeypatch, populate, code=128, stderr=stderr)
 
     with pytest.raises(GitHubAPIError) as caught:
-        await git_source.fetch_files(URL, "dev")
+        await git_source.GitSource().get_repository_files(URL, "dev")
 
     assert (caught.value.status, str(caught.value)) == (status, message)
     assert caught.value.user_facing
@@ -304,7 +304,7 @@ async def test_a_clone_timeout_is_504_and_cleans_up(monkeypatch):
     monkeypatch.setattr(git_source, "_git", run)
 
     with pytest.raises(GitHubAPIError) as caught:
-        await git_source.fetch_files(URL)
+        await git_source.GitSource().get_repository_files(URL)
 
     assert caught.value.status == 504
     assert "did not respond in time" in str(caught.value)
@@ -319,7 +319,7 @@ async def test_the_temp_dir_is_removed_when_reading_fails(monkeypatch):
 
     monkeypatch.setattr(git_source.GitSource, "_read_tree", boom)
     with pytest.raises(RuntimeError):
-        await git_source.fetch_files(URL)
+        await git_source.GitSource().get_repository_files(URL)
     assert not seen["target"].parent.exists()
 
 
@@ -348,6 +348,6 @@ async def test_symlinks_in_a_real_clone_are_not_indexed(tmp_path, monkeypatch):
     monkeypatch.setattr(git_source, "_git", local_git)
     monkeypatch.setattr(git_source, "_SAFE_GIT_ARGS", [*git_source._SAFE_GIT_ARGS, "-c", "protocol.file.allow=always"])
 
-    files = await git_source.fetch_files(URL)
+    files = await git_source.GitSource().get_repository_files(URL)
 
     assert [f.path for f in files] == ["a.py"]

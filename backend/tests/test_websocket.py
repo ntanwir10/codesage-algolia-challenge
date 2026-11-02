@@ -94,7 +94,7 @@ def test_subscribe_ping_unsubscribe_and_errors():
         assert ws.receive_json()["type"] == "unsubscribed"
         assert not websocket_manager.repository_connections.get(5)
     # disconnect cleans up
-    assert websocket_manager.get_connection_count() == 0
+    assert len(websocket_manager.active_connections) == 0
 
 
 def test_status_delivery_over_real_websocket():
@@ -247,13 +247,13 @@ async def test_a_connection_counts_against_the_cap_before_its_accept_completes()
 
     class Slow(FakeWebSocket):
         async def accept(self, subprotocol=None):
-            seen.append(manager.get_connection_count())
+            seen.append(len(manager.active_connections))
             raise RuntimeError("client went away")
 
     with pytest.raises(RuntimeError):
         await manager.connect(Slow())
     assert seen == [1]
-    assert manager.get_connection_count() == 0
+    assert len(manager.active_connections) == 0
 
 
 def test_one_client_cannot_take_every_slot(monkeypatch):
@@ -339,7 +339,7 @@ async def test_disconnect_cleans_subscriptions():
     await manager.subscribe_to_repository(ws, 1)
     await manager.subscribe_to_repository(ws, 2)
     await manager.disconnect(ws)
-    assert manager.get_connection_count() == 0
+    assert len(manager.active_connections) == 0
     assert manager.repository_connections == {}
 
 

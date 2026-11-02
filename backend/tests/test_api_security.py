@@ -375,6 +375,30 @@ class TestUrlValidation:
         created = client.post(REPOS, json={"url": URL}).json()
         assert client.put(f"{REPOS}{created['id']}", json=body).status_code == 422
 
+    def test_a_run_that_starts_during_the_branch_check_is_409(self, client, db_session, monkeypatch):
+        # The check awaits the host, so a scheduled refresh or another tab can start a run meanwhile
+        from app.api.v1.endpoints import repositories
+        from app.services.repository_service import RepositoryBusyError
+
+        async def check(url, branch):
+            pass
+
+        def busy(repository_id, **kwargs):
+            raise RepositoryBusyError(f"Repository {repository_id} is already being processed")
+
+        monkeypatch.setattr(repositories, "check_source", check)
+        monkeypatch.setattr(repositories, "start_processing", busy)
+        repo = Repository(name="r", url=URL, status="completed", branch="main")
+        db_session.add(repo)
+        db_session.commit()
+
+        response = client.put(f"{REPOS}{repo.id}", json={"branch": "dev"})
+
+        assert response.status_code == 409
+        assert "already being processed" in response.json()["detail"]
+        db_session.refresh(repo)
+        assert (repo.branch, repo.status) == ("main", "completed")
+
     def test_changing_an_indexed_repositorys_branch_rebuilds_its_index(self, client, db_session, monkeypatch):
         from app.api.v1.endpoints import repositories
 

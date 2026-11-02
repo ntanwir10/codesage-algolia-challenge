@@ -387,33 +387,3 @@ class AlgoliaService:
 
         logger.info("Repository entities deleted from Algolia", repository_id=repository_id)
         return True
-
-    async def get_repository_stats(self, repository_id: int) -> dict[str, Any]:
-        """Entity and language counts for one repository's indexed records"""
-        if not self.is_available():
-            return {}
-
-        try:
-            results = await asyncio.to_thread(
-                self.index.search,
-                "",
-                {
-                    "filters": self._repository_filter(repository_id),
-                    "hitsPerPage": 0,
-                    "facets": ["entity_type", "language"],
-                    "maxValuesPerFacet": 100,
-                },
-            )
-        except Exception as e:
-            logger.error(
-                "Failed to get repository stats",
-                repository_id=repository_id,
-                error=str(e),
-            )
-            return {}
-
-        return {
-            "total_entities": results.get("nbHits", 0),
-            "entity_types": results.get("facets", {}).get("entity_type", {}),
-            "languages": results.get("facets", {}).get("language", {}),
-        }
