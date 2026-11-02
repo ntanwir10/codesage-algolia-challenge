@@ -346,7 +346,7 @@ curl -X POST http://127.0.0.1:8001/api/v1/repositories/ \
 | `ALGOLIA_APP_ID`, `ALGOLIA_ADMIN_API_KEY` | unset | Required for indexing and search. Empty or `your-...-here` values count as unset: adding or reprocessing a repository returns `503`, MCP search says Algolia isn't configured, and `/health` is `degraded` |
 | `ALGOLIA_INDEX_NAME` | `codesage_code_entities` | One index per database; the Compose files use their own |
 | `GITHUB_TOKEN` | unset | Raises GitHub rate limits and allows private github.com repositories. If GitHub rejects it, adding a repository returns `502` |
-| `DATABASE_URL` | `sqlite:///./codesage.db` | SQLite only |
+| `DATABASE_URL` | `sqlite:///./codesage.db` | SQLite, or Postgres with `postgresql://user:password@host:5432/db` (the psycopg driver is installed). The migrations run on either at startup. Use Postgres to run `INDEX_WORKERS=external` workers on more than one machine |
 | `CORS_ORIGINS` | localhost ports 3000, 5173, 5174 (`.env.example`, which `make setup` copies, sets only 3000 and 5173) | Comma-separated list of origins; `*` is rejected. Also decides which browser origins may write |
 | `ALLOWED_HOSTS` | unset | With a key set, extra hostnames the API answers to, besides loopback and the `CORS_ORIGINS` hosts. Comma-separated; `*.example.com` allows subdomains, `*` allows any host |
 | `INDEX_WORKERS` | `inline` | Who runs indexing jobs. `inline`: the API process. `external`: the API only queues them in the database (the `jobs` table), and one or more `python -m app.worker` processes run them, so heavy parsing and embedding never slow the API. Start workers after the API, which applies the migrations. With Compose: `INDEX_WORKERS=external docker compose -f deployment/docker-compose.yml --profile workers up -d --scale worker=2` |
@@ -394,7 +394,7 @@ mcp_launcher.sh         what Claude Desktop launches
 
 - **One API process.** Run exactly one: WebSocket subscriptions, rate limits and caches live in it. Indexing can move out of it with `INDEX_WORKERS=external` and any number of `python -m app.worker` processes.
 - **Interrupted runs.** A restart during a run starts it again, as a full run. With external workers, a job whose worker stops sending heartbeats for 5 minutes is queued again for another worker.
-- **SQLite only.** Migrations run at startup, and a database from before Alembic is stamped first.
+- **SQLite by default.** Postgres works through `DATABASE_URL`, and CI runs migrations, column types and the job claim against Postgres 16. The rest of the test suite runs on SQLite. Migrations run at startup, and a database from before Alembic is stamped first.
 - **Synchronous Algolia client.** Its calls run in worker threads.
 - **Tests and CI.** The Playwright end-to-end tests run in Chromium only, against a seeded database with no Algolia or GitHub, so they cover the Home form, the dashboard, the repository page and the file viewer, but not search, freshness or indexing. CI starts the dev Docker stack with fake Algolia keys and checks that it answers, but never indexes a repository in it. The prod stack (HTTPS, basic auth) is only config-checked and built; it was last run by hand.
 - **Search scope.** Searching across all repositories includes ones that are being reprocessed.
