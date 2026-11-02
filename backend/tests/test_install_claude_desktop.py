@@ -77,6 +77,14 @@ def test_dry_run_masks_key_and_writes_nothing(tmp_path, capsys):
     assert not list(tmp_path.glob("c.json.bak-*"))
 
 
+def test_dry_run_never_prints_other_servers(tmp_path, capsys):
+    cfg = tmp_path / "c.json"
+    cfg.write_text(json.dumps({"mcpServers": {"other": {"command": "x", "env": {"TOKEN": "other-secret"}}}}))
+    assert run(cfg, "--dry-run") == 0
+    out = capsys.readouterr().out
+    assert "other-secret" not in out and '"codesage"' in out
+
+
 def test_env_file_parser_never_evaluates(tmp_path):
     env = tmp_path / ".env"
     env.write_text('# c\nOTHER=1\nexport CODESAGE_API_KEY="abc $(touch pwned)"\n')
@@ -164,7 +172,7 @@ def test_write_failure_is_a_clean_error(tmp_path, monkeypatch, capsys):
 
 def test_missing_claude_desktop_folder_warns_but_proceeds(tmp_path, monkeypatch, capsys):
     cfg = tmp_path / "Claude" / "claude_desktop_config.json"
-    monkeypatch.setattr(installer, "default_config_path", lambda: cfg)
+    monkeypatch.setattr(installer, "default_config_path", lambda client: cfg)
     assert installer.main(["--server-url", "http://x:1", "--api-key", "k"]) == 0
     assert "Claude Desktop doesn't seem to be installed" in capsys.readouterr().err
     assert cfg.exists()
@@ -189,6 +197,55 @@ def test_backup_names_are_unique_within_the_same_second(tmp_path):
     for _ in range(3):
         assert run(cfg) == 0
     assert len(list(tmp_path.glob("c.json.bak-*"))) == 3
+
+
+@pytest.mark.parametrize(
+    "client, key, label",
+    [
+        ("claude", "mcpServers", "Claude Desktop"),
+        ("cursor", "mcpServers", "Cursor"),
+        ("vscode", "servers", "VS Code"),
+        ("windsurf", "mcpServers", "Windsurf"),
+    ],
+)
+def test_each_client_gets_its_own_servers_key(tmp_path, capsys, client, key, label):
+    cfg = tmp_path / "c.json"
+    cfg.write_text(json.dumps({key: {"other": {"command": "x"}}, "inputs": []}))
+    assert run(cfg, "--client", client) == 0
+    data = json.loads(cfg.read_text())
+    entry = data[key]["codesage"]
+    assert data[key]["other"] == {"command": "x"} and data["inputs"] == []
+    assert entry["env"]["CODESAGE_API_KEY"] == "k-123"
+    # VS Code wants the transport spelled out; the others infer stdio from "command"
+    assert entry.get("type") == ("stdio" if client == "vscode" else None)
+    out = capsys.readouterr().out
+    assert f"{key}.codesage" in out and f"Restart {label}" in out
+
+
+def test_default_client_is_claude_desktop(tmp_path):
+    cfg = tmp_path / "c.json"
+    assert run(cfg) == 0
+    assert list(json.loads(cfg.read_text())) == ["mcpServers"]
+
+
+@pytest.mark.parametrize(
+    "client, tail",
+    [
+        ("claude", ("Claude", "claude_desktop_config.json")),
+        ("cursor", (".cursor", "mcp.json")),
+        ("vscode", ("User", "mcp.json")),
+        ("windsurf", ("windsurf", "mcp_config.json")),
+    ],
+)
+def test_default_config_paths(client, tail):
+    assert installer.default_config_path(client).parts[-2:] == tail
+
+
+def test_wrong_servers_type_names_the_clients_key(tmp_path, capsys):
+    cfg = tmp_path / "c.json"
+    cfg.write_text('{"servers": []}')
+    assert run(cfg, "--client", "vscode") == 1
+    assert "'servers' in the existing config is not an object" in capsys.readouterr().err
 
 
 def test_keychain_failure_says_nothing_changed(tmp_path, monkeypatch, capsys):

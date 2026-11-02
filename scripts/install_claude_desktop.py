@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
-"""Register the CodeSage MCP server in Claude Desktop's config (stdlib only).
+"""Register the CodeSage MCP server in an MCP client's config (stdlib only).
 
-Merges ``mcpServers[<name>]`` into the existing JSON, keeping every other key,
+Claude Desktop by default; ``--client`` picks Cursor, VS Code or Windsurf.
+Merges ``<servers key>[<name>]`` into the existing JSON, keeping every other key,
 backs the file up first, and writes atomically with mode 600.
 """
 
@@ -21,20 +22,30 @@ LAUNCHER = REPO / "mcp_launcher.sh"
 ENV_FILE = REPO / "backend" / ".env"
 DEFAULT_URL = "http://127.0.0.1:8001"
 
+# Each client's name and the key its config lists servers under (VS Code alone says "servers")
+CLIENTS = {
+    "claude": ("Claude Desktop", "mcpServers"),
+    "cursor": ("Cursor", "mcpServers"),
+    "vscode": ("VS Code", "servers"),
+    "windsurf": ("Windsurf", "mcpServers"),
+}
 
-def default_config_path() -> Path:
+
+def default_config_path(client: str = "claude") -> Path:
+    if client == "cursor":
+        return Path.home() / ".cursor" / "mcp.json"
+    if client == "windsurf":
+        return Path.home() / ".codeium" / "windsurf" / "mcp_config.json"
+    # Claude Desktop and VS Code (its user profile) keep theirs in the per-OS app data folder
+    folder, name = (Path("Claude"), "claude_desktop_config.json")
+    if client == "vscode":
+        folder, name = (Path("Code") / "User", "mcp.json")
     if sys.platform == "darwin":
-        return (
-            Path.home()
-            / "Library"
-            / "Application Support"
-            / "Claude"
-            / "claude_desktop_config.json"
-        )
+        return Path.home() / "Library" / "Application Support" / folder / name
     if sys.platform.startswith("win"):
         appdata = os.environ.get("APPDATA") or str(Path.home() / "AppData" / "Roaming")
-        return Path(appdata) / "Claude" / "claude_desktop_config.json"
-    return Path.home() / ".config" / "Claude" / "claude_desktop_config.json"
+        return Path(appdata) / folder / name
+    return Path.home() / ".config" / folder / name
 
 
 def read_env_value(env_file: Path, key: str) -> str | None:
@@ -63,20 +74,20 @@ def read_env_value(env_file: Path, key: str) -> str | None:
     return value
 
 
-def merge_config(existing: dict, name: str, entry: dict) -> dict:
+def merge_config(existing: dict, name: str, entry: dict, key: str = "mcpServers") -> dict:
     merged = dict(existing)
-    servers = merged.get("mcpServers")
+    servers = merged.get(key)
     if servers is None:
         servers = {}
     if not isinstance(servers, dict):
-        raise ValueError("'mcpServers' in the existing config is not an object")
-    merged["mcpServers"] = {**servers, name: entry}
+        raise ValueError(f"'{key}' in the existing config is not an object")
+    merged[key] = {**servers, name: entry}
     return merged
 
 
-def masked(config: dict, name: str) -> dict:
+def masked(config: dict, name: str, key: str = "mcpServers") -> dict:
     out = json.loads(json.dumps(config))
-    env = out.get("mcpServers", {}).get(name, {}).get("env", {})
+    env = out.get(key, {}).get(name, {}).get("env", {})
     if env.get("CODESAGE_API_KEY"):
         env["CODESAGE_API_KEY"] = "********"
     return out
@@ -99,12 +110,18 @@ def write_atomic(path: Path, data: bytes) -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
-    ap = argparse.ArgumentParser(description="Add the CodeSage MCP server to Claude Desktop.")
+    ap = argparse.ArgumentParser(description="Add the CodeSage MCP server to an MCP client.")
     ap.add_argument(
-        "--config", type=Path, default=None, help="Claude Desktop config path (default: per-OS)"
+        "--client",
+        choices=CLIENTS,
+        default="claude",
+        help="claude (Claude Desktop, the default), cursor, vscode or windsurf",
     )
     ap.add_argument(
-        "--name", default="codesage", help="server name in mcpServers (default: codesage)"
+        "--config", type=Path, default=None, help="the client's config path (default: per client and OS)"
+    )
+    ap.add_argument(
+        "--name", default="codesage", help="server name in the config (default: codesage)"
     )
     ap.add_argument(
         "--server-url", default=None, help=f"backend URL (default: MCP_SERVER_URL or {DEFAULT_URL})"
@@ -123,7 +140,8 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = ap.parse_args(argv)
 
-    config_path = args.config or default_config_path()
+    label, key = CLIENTS[args.client]
+    config_path = args.config or default_config_path(args.client)
     server_url = args.server_url or os.environ.get("MCP_SERVER_URL") or DEFAULT_URL
     # Behind the basic-auth proxy nginx supplies the key, so don't copy the backend's into this config
     api_key = args.api_key or ("" if args.basic_auth else read_env_value(ENV_FILE, "CODESAGE_API_KEY")) or ""
@@ -151,8 +169,10 @@ def main(argv: list[str] | None = None) -> int:
             print(f"error: cannot read {config_path}: {exc}", file=sys.stderr)
             return 1
         except json.JSONDecodeError as exc:
+            # VS Code allows comments in mcp.json; rewriting it would drop them
             print(
-                f"error: {config_path} is not valid JSON ({exc}); refusing to overwrite it",
+                f"error: {config_path} is not valid JSON ({exc}); refusing to overwrite it. "
+                "If it has comments, add the entry by hand; --dry-run with --config set to a new file prints it",
                 file=sys.stderr,
             )
             return 1
@@ -167,22 +187,25 @@ def main(argv: list[str] | None = None) -> int:
         "command": str(LAUNCHER),
         "env": {"MCP_SERVER_URL": server_url, "CODESAGE_API_KEY": api_key},
     }
+    if args.client == "vscode":
+        entry = {"type": "stdio", **entry}
     if args.basic_auth:
         entry["env"]["CODESAGE_BASIC_AUTH_USER"] = args.basic_auth
     try:
-        merged = merge_config(existing, args.name, entry)
+        merged = merge_config(existing, args.name, entry, key)
     except ValueError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
 
     if args.dry_run:
-        print(f"# dry run: would write {config_path}")
-        print(json.dumps(masked(merged, args.name), indent=2))
+        # Only this entry: other servers' env blocks often hold their own tokens
+        print(f"# dry run: would add {key}.{args.name} to {config_path} and keep everything else in it")
+        print(json.dumps(masked({key: {args.name: entry}}, args.name, key), indent=2))
         return 0
 
     if args.config is None and not config_path.parent.exists():
         print(
-            f"warning: {config_path.parent} does not exist; Claude Desktop doesn't seem to be installed",
+            f"warning: {config_path.parent} does not exist; {label} doesn't seem to be installed",
             file=sys.stderr,
         )
     # Fail on an unwritable directory before the Keychain is touched, so no orphan item is left
@@ -224,8 +247,8 @@ def main(argv: list[str] | None = None) -> int:
     except OSError as exc:
         print(f"error: cannot write {config_path}: {exc}", file=sys.stderr)
         return 1
-    print(f"updated {config_path}: mcpServers.{args.name} -> {LAUNCHER}")
-    print("Restart Claude Desktop to pick it up.")
+    print(f"updated {config_path}: {key}.{args.name} -> {LAUNCHER}")
+    print(f"Restart {label} to pick it up.")
     return 0
 
 

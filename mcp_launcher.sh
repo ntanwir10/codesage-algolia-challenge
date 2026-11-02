@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Starts the CodeSage MCP stdio server for Claude Desktop.
+# Starts the CodeSage MCP stdio server for an MCP client (Claude Desktop, Cursor, VS Code, ...).
 # Configuration (MCP_SERVER_URL, CODESAGE_API_KEY) comes from the environment,
-# which Claude Desktop sets from the "env" block of its config.
+# which the client sets from the "env" block of its config.
 set -euo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -18,7 +18,7 @@ if ! (cd "$REPO/backend" && "$PYTHON" -c 'import codesage_mcp, mcp'); then
 fi
 
 # No key in the config: a local backend's own key is in backend/.env, so a regenerated key can't
-# leave Claude behind. Never for a remote MCP_SERVER_URL, which has its own key.
+# leave the client behind. Never for a remote MCP_SERVER_URL, which has its own key.
 if [ -z "${CODESAGE_API_KEY:-}" ] && [ -z "${CODESAGE_BASIC_AUTH_USER:-}" ]; then
   case "${MCP_SERVER_URL:-http://127.0.0.1:8001}" in
     http://127.0.0.1 | http://127.0.0.1[:/]* | http://localhost | http://localhost[:/]* | http://\[::1\]*)
@@ -29,7 +29,7 @@ if [ -z "${CODESAGE_API_KEY:-}" ] && [ -z "${CODESAGE_BASIC_AUTH_USER:-}" ]; the
   esac
 fi
 
-# A basic-auth password lives in the macOS Keychain, not in the Claude Desktop config
+# A basic-auth password lives in the macOS Keychain, not in the client's config
 if [ -n "${CODESAGE_BASIC_AUTH_USER:-}" ] && [ -z "${CODESAGE_BASIC_AUTH_PASSWORD:-}" ] \
     && command -v security >/dev/null; then
   CODESAGE_BASIC_AUTH_PASSWORD="$(security find-generic-password -s codesage-mcp \

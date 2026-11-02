@@ -1,12 +1,12 @@
 # MCP integration guide
 
-How to connect Claude Desktop (or any MCP client) to CodeSage: the installer, the stdio bridge's settings, the eight tools and the resources it serves, the backend endpoints behind them, and what to do when a call fails. For the end-to-end picture, including the tool-call sequence diagram, see the [root README](../README.md#using-it-from-claude-desktop).
+How to connect an MCP client (Claude Desktop, Cursor, VS Code, Windsurf or any other) to CodeSage: the installer, the stdio bridge's settings, the eight tools and the resources it serves, the backend endpoints behind them, and what to do when a call fails. For the end-to-end picture, including the tool-call sequence diagram, see the [root README](../README.md#using-it-from-an-mcp-client).
 
 ## Contents
 
 - [How the pieces fit](#how-the-pieces-fit)
 - [Prerequisites](#prerequisites)
-- [Install into Claude Desktop](#install-into-claude-desktop)
+- [Install into an MCP client](#install-into-an-mcp-client)
 - [Manual install](#manual-install)
 - [Bridge settings](#bridge-settings)
 - [Tools](#tools)
@@ -20,7 +20,7 @@ How to connect Claude Desktop (or any MCP client) to CodeSage: the installer, th
 
 ## How the pieces fit
 
-Claude Desktop starts `mcp_launcher.sh`. The launcher runs `python -m codesage_mcp` (the bridge) from `backend/`, using `.venv/bin/python` at the repo root. The bridge is built on the `mcp` Python SDK (pinned in `backend/requirements.txt`) and forwards each tool call as an HTTP request to the backend.
+Your MCP client starts `mcp_launcher.sh`. The launcher runs `python -m codesage_mcp` (the bridge) from `backend/`, using `.venv/bin/python` at the repo root. The bridge is built on the `mcp` Python SDK (pinned in `backend/requirements.txt`) and forwards each tool call as an HTTP request to the backend.
 
 - **Schemas live in the bridge.** `tools/list` is answered from `backend/codesage_mcp/schemas.py`, so it works while the backend is down. Only tool calls and resource reads need the backend.
 - **Arguments are checked twice.** The bridge validates them first, then the backend validates them again. Unknown arguments are rejected in both places.
@@ -29,59 +29,66 @@ Claude Desktop starts `mcp_launcher.sh`. The launcher runs `python -m codesage_m
 ## Prerequisites
 
 - **Virtualenv.** `.venv` exists at the repo root (`make setup`).
-- **Backend config.** `backend/.env` has your Algolia credentials, and `CODESAGE_API_KEY`, which `make setup`, `make start` and `make install-claude` generate if it is missing (and copy to `frontend/.env`). To rotate it, delete the line, run `make setup` and `make install-claude`, then restart Claude Desktop. Those targets also replace a leftover `your-...-here` key, but the backend itself uses such a key as is. For `ALGOLIA_APP_ID`, `ALGOLIA_ADMIN_API_KEY` and `GITHUB_TOKEN`, an empty value or a `your-...-here` placeholder counts as unset; without Algolia, search fails with a clear message.
+- **Backend config.** `backend/.env` has your Algolia credentials, and `CODESAGE_API_KEY`, which `make setup`, `make start` and `make install-claude` generate if it is missing (and copy to `frontend/.env`). To rotate it, delete the line, run `make setup` and `make install-claude`, then restart your client. Those targets also replace a leftover `your-...-here` key, but the backend itself uses such a key as is. For `ALGOLIA_APP_ID`, `ALGOLIA_ADMIN_API_KEY` and `GITHUB_TOKEN`, an empty value or a `your-...-here` placeholder counts as unset; without Algolia, search fails with a clear message.
 - **Backend running.** `make start-backend`, with at least one repository in status `completed`. Every tool refuses a repository that is `failed`, `pending` or `processing`.
 
-## Install into Claude Desktop
+## Install into an MCP client
 
 ```bash
 make install-claude                 # merge CodeSage into the Claude Desktop config
-make install-claude ARGS=--dry-run  # print the merged config with the key masked; the Claude config is not written
+make install-cursor                 # the same for Cursor
+make install-vscode                 # the same for VS Code
+make install-windsurf               # the same for Windsurf
+make install-claude ARGS=--dry-run  # print the CodeSage entry with the key masked; nothing is written
 ```
 
-`make install-claude` runs `.venv/bin/python scripts/install_claude_desktop.py $(ARGS)`. It uses only the standard library.
+`make install-claude` runs `.venv/bin/python scripts/install_claude_desktop.py $(ARGS)`; the other targets add `--client cursor`, `vscode` or `windsurf`. It uses only the standard library. Only Claude Desktop has been tested end to end; the others write the format their docs describe.
 
 ### Options
 
 | Option | Default | Notes |
 | --- | --- | --- |
-| `--config PATH` | Per-OS location, see below | The Claude Desktop config file to merge into |
-| `--name NAME` | `codesage` | Key under `mcpServers` |
+| `--client NAME` | `claude` | `claude` (Claude Desktop), `cursor`, `vscode` or `windsurf`. Picks the default config path and the key servers are listed under |
+| `--config PATH` | Per client and OS, see below | The config file to merge into |
+| `--name NAME` | `codesage` | The server's name in the config |
 | `--server-url URL` | `MCP_SERVER_URL` from your shell, else `http://127.0.0.1:8001` | Backend base URL. Must be an `http(s)` URL with a host. A URL containing a password is refused |
 | `--api-key KEY` | `CODESAGE_API_KEY` from `backend/.env` | Written into the config's `env` block |
 | `--basic-auth USER` | unset | For the prod stack behind nginx. Prompts for the password and stores it in the macOS Keychain (service `codesage-mcp`). No API key is written |
-| `--dry-run` | off | Print the merged config (`CODESAGE_API_KEY` shown as `********`) and don't write the Claude Desktop config. `make install-claude` still runs `scripts/ensure_api_key.py` first, so a missing key is generated in `backend/.env` and copied to `frontend/.env` even on a dry run |
+| `--dry-run` | off | Print only the CodeSage entry (`CODESAGE_API_KEY` shown as `********`; other servers are never printed, since their `env` blocks often hold tokens) and write nothing. `make install-claude` still runs `scripts/ensure_api_key.py` first, so a missing key is generated in `backend/.env` and copied to `frontend/.env` even on a dry run |
 
 ```bash
 make install-claude ARGS="--server-url https://your-host --basic-auth alice"  # prod behind nginx
 make install-claude ARGS="--name codesage-dev --api-key abc123"               # a second entry with an explicit key
 ```
 
-Options go through `ARGS`. Restart Claude Desktop afterwards.
+Options go through `ARGS`. Restart the client afterwards.
 
 ### Config file locations
 
-| OS | Path |
-| --- | --- |
-| macOS | `~/Library/Application Support/Claude/claude_desktop_config.json` |
-| Windows | `%APPDATA%\Claude\claude_desktop_config.json` (falls back to `~\AppData\Roaming`) |
-| Linux | `~/.config/Claude/claude_desktop_config.json` |
+| Client | Servers key | macOS | Windows | Linux |
+| --- | --- | --- | --- | --- |
+| Claude Desktop | `mcpServers` | `~/Library/Application Support/Claude/claude_desktop_config.json` | `%APPDATA%\Claude\claude_desktop_config.json` | `~/.config/Claude/claude_desktop_config.json` |
+| Cursor | `mcpServers` | `~/.cursor/mcp.json` | `%USERPROFILE%\.cursor\mcp.json` | `~/.cursor/mcp.json` |
+| VS Code (user profile) | `servers`, with `"type": "stdio"` | `~/Library/Application Support/Code/User/mcp.json` | `%APPDATA%\Code\User\mcp.json` | `~/.config/Code/User/mcp.json` |
+| Windsurf | `mcpServers` | `~/.codeium/windsurf/mcp_config.json` | `%USERPROFILE%\.codeium\windsurf\mcp_config.json` | `~/.codeium/windsurf/mcp_config.json` |
+
+`%APPDATA%` falls back to `~\AppData\Roaming`. VS Code allows comments in `mcp.json`; the installer refuses a file it can't parse as plain JSON, so add the entry by hand there.
 
 `--basic-auth` needs the `security` command, so it works on macOS only.
 
 ### What the installer does
 
-- **Merges one entry.** It adds or replaces `mcpServers.<name>` and keeps every other key and server. It refuses a config whose `mcpServers` is not an object.
-- **Backs up first.** If the config exists, it writes `claude_desktop_config.json.bak-<YYYYMMDD-HHMMSS>-<pid>` next to it (a `-1`, `-2` suffix if the name is taken), a byte-exact copy.
+- **Merges one entry.** It adds or replaces `<servers key>.<name>` (`mcpServers`, or `servers` for VS Code) and keeps every other key and server. It refuses a config whose servers key is not an object.
+- **Backs up first.** If the config exists, it writes `<config file>.bak-<YYYYMMDD-HHMMSS>-<pid>` next to it (a `-1`, `-2` suffix if the name is taken), a byte-exact copy.
 - **Protects the key.** Both files are written atomically (temp file, then rename) at mode 600, because they can hold the API key.
 - **Refuses to overwrite a bad file.** If the config is not valid JSON, or not a JSON object, it exits with an error and changes nothing. A config it can't read, or a folder it can't write to, is also a one-line error, and it checks this before touching the Keychain, so a failed run leaves no stray item.
-- **Warns when Claude Desktop looks missing.** If the default config folder doesn't exist, it prints a warning and creates the folder anyway. It doesn't warn when you pass `--config`.
+- **Warns when the client looks missing.** If the default config folder doesn't exist, it prints a warning and creates the folder anyway. It doesn't warn when you pass `--config`.
 - **Reads the key from `backend/.env`.** `--api-key` wins. With `--basic-auth` it does not copy the backend's key, because nginx adds it. `make install-claude` first generates the key if `backend/.env` has none. Run directly with no key found and no `--basic-auth`, it warns and writes an empty `CODESAGE_API_KEY`.
 - **Keeps passwords out of the config.** A password in `--server-url` is refused, and the `--basic-auth` password is never in argv or the file.
 
 ## Manual install
 
-Copy `claude_desktop_config.example.json` into your Claude Desktop config and set the absolute launcher path and key:
+Copy `claude_desktop_config.example.json` into your client's config and set the absolute launcher path and key. VS Code lists servers under `servers` and wants `"type": "stdio"` in the entry; Claude Desktop, Cursor and Windsurf use `mcpServers` as below. Other stdio clients take the same `command` and `env` in their own format:
 
 ```json
 {
@@ -107,7 +114,7 @@ Copy `claude_desktop_config.example.json` into your Claude Desktop config and se
 
 ## Bridge settings
 
-All settings come from the environment, which Claude Desktop fills from the `env` block.
+All settings come from the environment, which the MCP client fills from the `env` block.
 
 | Variable | Default | Notes |
 | --- | --- | --- |
@@ -337,7 +344,7 @@ Resource reads fail as MCP protocol errors instead of tool errors, with the same
 
 ## Troubleshooting
 
-Read the bridge's stderr in Claude Desktop's MCP log for the `codesage` server. On macOS that is `~/Library/Logs/Claude/mcp-server-codesage.log`; the file is named after the key under `mcpServers`, so a second entry made with `--name` has its own log.
+Read the bridge's stderr in your client's MCP log for the `codesage` server (Cursor and VS Code show it in the Output panel). For Claude Desktop on macOS, that is `~/Library/Logs/Claude/mcp-server-codesage.log`; the file is named after the key under `mcpServers`, so a second entry made with `--name` has its own log.
 
 | Symptom | Cause | Fix |
 | --- | --- | --- |
