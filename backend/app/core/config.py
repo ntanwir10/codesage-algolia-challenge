@@ -8,6 +8,7 @@ and the MCP server description.
 
 import re
 from functools import lru_cache
+from typing import Literal
 from urllib.parse import urlsplit
 
 # Load environment variables from .env file
@@ -136,6 +137,10 @@ class Settings(BaseSettings):
     enable_rate_limiting: bool = True
     rate_limit_default: str = "100/minute"
     rate_limit_ai: str = "30/minute"  # For MCP tool endpoints
+
+    # Who runs indexing jobs. inline: this API process, as before. external: the API only queues
+    # them in the database, and `python -m app.worker` processes (one or more) run them
+    index_workers: Literal["inline", "external"] = "inline"
 
     # Semantic search, bring your own key: any OpenAI-compatible embeddings endpoint (OpenAI, Voyage,
     # a gateway, or a local Ollama at http://localhost:11434/v1/embeddings). Off without a key

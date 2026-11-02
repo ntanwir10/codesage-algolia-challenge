@@ -9,7 +9,7 @@ from sqlalchemy import create_engine, inspect, text
 from alembic import command
 from app.core.migrations import _ALEMBIC_DIR, upgrade_database
 
-HEAD = "entity_embeddings"
+HEAD = "jobs"
 DROPPED = {
     "repositories": {"repo_metadata", "security_score", "vulnerability_count"},
     "code_files": {"file_name", "is_analyzed", "size_bytes"},
@@ -17,7 +17,7 @@ DROPPED = {
         "full_name", "start_column", "end_column", "complexity_score", "is_public", "is_async",
     },
 }
-NEW_TABLES = {"repositories", "code_files", "code_entities", "alembic_version"}
+NEW_TABLES = {"repositories", "code_files", "code_entities", "jobs", "alembic_version"}
 
 
 _engines = []
@@ -219,7 +219,7 @@ def test_downgrade_to_baseline(tmp_path):
     command.downgrade(_cfg(db), "baseline")
 
     insp = inspect(engine)
-    assert set(insp.get_table_names()) == NEW_TABLES | {"sessions", "search_indexes"}
+    assert set(insp.get_table_names()) == (NEW_TABLES - {"jobs"}) | {"sessions", "search_indexes"}
     assert not insp.get_unique_constraints("repositories")
     # and back up again
     upgrade_database(engine)

@@ -21,6 +21,8 @@ services:
       # Algolia records are keyed by repository id, so this database must not
       # share an index with a local one (they'd delete each other's records)
       - ALGOLIA_INDEX_NAME=${DOCKER_ALGOLIA_INDEX_NAME:-codesage_code_entities_docker}
+      # external: only queue jobs; the worker service below runs them
+      - INDEX_WORKERS=${INDEX_WORKERS:-inline}
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
       interval: 30s
@@ -28,6 +30,28 @@ services:
       retries: 3
     # Single worker: WebSocket/rate-limit/job state are in-process
     command: uvicorn app.main:app --host 0.0.0.0 --port 8001 --reload --reload-dir app
+    restart: unless-stopped
+
+  # Optional indexing workers, off by default. To use them:
+  #   INDEX_WORKERS=external docker compose -f deployment/docker-compose.yml --profile workers up -d --scale worker=2
+  worker:
+    build:
+      context: ../backend
+      dockerfile: Dockerfile
+    profiles: ["workers"]
+    volumes:
+      - ../backend:/app
+      - backend_data:/app/data
+    env_file:
+      - ../backend/.env
+    environment:
+      - INDEX_WORKERS=external
+      - DATABASE_URL=sqlite:///./data/codesage.db
+      - ALGOLIA_INDEX_NAME=${DOCKER_ALGOLIA_INDEX_NAME:-codesage_code_entities_docker}
+    command: python -m app.worker
+    depends_on:
+      backend:
+        condition: service_healthy  # the API applies the migrations
     restart: unless-stopped
 
   # nginx: serves the built frontend and proxies /api, /ws and /health to backend

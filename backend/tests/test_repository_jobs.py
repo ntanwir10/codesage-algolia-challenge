@@ -181,18 +181,17 @@ async def test_database_errors_do_not_leak_sql_or_file_contents(
     assert repo.error_message == "Database error while storing the repository"
 
 
-def test_restart_fails_repositories_left_mid_run(db_session):
+def test_restart_reruns_repositories_left_mid_run(db_session, monkeypatch):
+    started = []
+    monkeypatch.setattr(repository_service, "start_processing", lambda rid, **kw: started.append((rid, kw)))
     pending = make_repository(db_session, name="a", url="https://github.com/o/a", status="pending")
     running = make_repository(db_session, name="b", url="https://github.com/o/b", status="processing")
-    done = make_repository(db_session, name="c", url="https://github.com/o/c", status="completed")
+    make_repository(db_session, name="c", url="https://github.com/o/c", status="completed")
 
     assert recover_interrupted_jobs(db_session) == 2
 
-    for repo in (pending, running, done):
-        db_session.refresh(repo)
-    assert (pending.status, running.status, done.status) == ("failed", "failed", "completed")
-    assert "interrupted by a server restart" in pending.error_message
-    assert done.error_message is None
+    # Full runs: they replace the interrupted run's partial rows along with the old index
+    assert started == [(pending.id, {"force_reprocess": True}), (running.id, {"force_reprocess": True})]
 
 
 @pytest.mark.parametrize("branch", ["develop", None])
