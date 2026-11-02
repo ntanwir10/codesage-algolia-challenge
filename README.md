@@ -349,6 +349,7 @@ curl -X POST http://127.0.0.1:8001/api/v1/repositories/ \
 | `DATABASE_URL` | `sqlite:///./codesage.db` | SQLite only |
 | `CORS_ORIGINS` | localhost ports 3000, 5173, 5174 (`.env.example`, which `make setup` copies, sets only 3000 and 5173) | Comma-separated list of origins; `*` is rejected. Also decides which browser origins may write |
 | `ALLOWED_HOSTS` | unset | With a key set, extra hostnames the API answers to, besides loopback and the `CORS_ORIGINS` hosts. Comma-separated; `*.example.com` allows subdomains, `*` allows any host |
+| `INDEX_WORKERS` | `inline` | Who runs indexing jobs. `inline`: the API process. `external`: the API only queues them in the database (the `jobs` table), and one or more `python -m app.worker` processes run them, so heavy parsing and embedding never slow the API. Start workers after the API, which applies the migrations. With Compose: `INDEX_WORKERS=external docker compose -f deployment/docker-compose.yml --profile workers up -d --scale worker=2` |
 | `EMBEDDING_API_URL`, `EMBEDDING_API_KEY`, `EMBEDDING_MODEL` | OpenAI's endpoint, unset, `text-embedding-3-small` | Semantic search, bring your own key: any OpenAI-compatible `/v1/embeddings` (OpenAI, Voyage, a gateway, or a local Ollama with any key). Off while the key is unset. Each run then embeds its definitions (not imports) and stores the vectors in SQLite; definitions and queries are sent to that provider |
 | `REFRESH_INTERVAL_MINUTES` | `0` (off) | Every N minutes, check each completed repository's branch (the same check as the freshness line) and run an incremental reindex of those that moved. Answers are cached for 10 minutes, so a shorter interval adds nothing |
 | `ENVIRONMENT`, `LOG_LEVEL` | `development`, `INFO` | `production` hides `/docs` and `/redoc`. `/openapi.json` stays on; the prod stack's nginx doesn't route it |
@@ -391,8 +392,8 @@ mcp_launcher.sh         what Claude Desktop launches
 
 ## Known limitations
 
-- **One worker.** Run exactly one: job state, the two-run limit and WebSocket subscriptions live in the server process.
-- **Interrupted runs.** A restart during a run marks the repository `failed`, even when it was a reprocess and the previous index is still in place, and a scheduled refresh skips failed repositories. Reprocess it to recover.
+- **One API process.** Run exactly one: WebSocket subscriptions, rate limits and caches live in it. Indexing can move out of it with `INDEX_WORKERS=external` and any number of `python -m app.worker` processes.
+- **Interrupted runs.** A restart during a run starts it again, as a full run. With external workers, a job whose worker stops sending heartbeats for 5 minutes is queued again for another worker.
 - **SQLite only.** Migrations run at startup, and a database from before Alembic is stamped first.
 - **Synchronous Algolia client.** Its calls run in worker threads.
 - **Tests and CI.** The Playwright end-to-end tests run in Chromium only, against a seeded database with no Algolia or GitHub, so they cover the Home form, the dashboard, the repository page and the file viewer, but not search, freshness or indexing. CI starts the dev Docker stack with fake Algolia keys and checks that it answers, but never indexes a repository in it. The prod stack (HTTPS, basic auth) is only config-checked and built; it was last run by hand.

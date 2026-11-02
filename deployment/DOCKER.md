@@ -69,6 +69,16 @@ The dev stack serves the built dashboard and proxies the API through nginx, with
 - **Hot reload.** `backend/` is bind-mounted into the container and uvicorn runs with `--reload --reload-dir app`.
 - **No TLS.** Port 443 is not published.
 
+### Indexing workers (optional)
+
+By default the backend container runs indexing itself. To move it into separate workers, start the `workers` profile with `INDEX_WORKERS=external`:
+
+```bash
+INDEX_WORKERS=external docker compose -f deployment/docker-compose.yml --profile workers up -d --build --scale worker=2
+```
+
+The backend then only queues jobs in the database, and each `worker` container (`python -m app.worker`) claims one at a time. They share the SQLite volume, and start after the backend is healthy, because the backend applies the migrations. For workers on more than one machine, use Postgres (`DATABASE_URL`).
+
 ## Prod stack
 
 In prod, nginx terminates TLS, asks for a password, and adds the API key to each request. The browser never sees the key.

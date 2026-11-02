@@ -14,17 +14,19 @@ import time
 import uuid
 import weakref
 from collections import Counter
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import structlog
 from sqlalchemy import func, or_
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 
+from app.core.config import get_settings
 from app.core.database import SessionLocal
 from app.core.security import failure_message
 from app.models.code_entity import CodeEntity
 from app.models.code_file import CodeFile
+from app.models.job import Job
 from app.models.repository import Repository
 from app.schemas.repository import RepositoryCreate
 from app.services import embeddings, git_source
@@ -104,15 +106,26 @@ class RepositoryBusyError(Exception):
 
 def is_processing(repository_id: int) -> bool:
     task = _jobs.get(repository_id)
-    return task is not None and not task.done()
+    if task is not None and not task.done():
+        return True
+    if get_settings().index_workers == "external":
+        with SessionLocal() as db:
+            return db.query(Job.id).filter(Job.repository_id == repository_id).first() is not None
+    return False
 
 
 def start_processing(
     repository_id: int, force_reprocess: bool = False, incremental: bool = False
-) -> asyncio.Task:
+) -> asyncio.Task | None:
     """Schedule a background processing job for one repository"""
     if is_processing(repository_id):
         raise RepositoryBusyError(f"Repository {repository_id} is already being processed")
+    if get_settings().index_workers == "external":
+        # A worker process (python -m app.worker) picks it up
+        with SessionLocal() as db:
+            db.add(Job(repository_id=repository_id, force_reprocess=force_reprocess, incremental=incremental))
+            db.commit()
+        return None
 
     task = asyncio.create_task(_run_job(repository_id, force_reprocess, incremental))
     _jobs[repository_id] = task
@@ -171,21 +184,97 @@ async def _to_thread_to_completion(fn):
 
 
 def recover_interrupted_jobs(db: Session) -> int:
-    """Fail repositories a previous server process left pending or processing"""
-    stuck = (
-        db.query(Repository)
-        .filter(Repository.status.in_(("pending", "processing")))
-        .all()
-    )
+    """Restart, as full runs, what a previous server process left pending or processing.
+
+    Any previous index is still in place; a full run replaces it along with the interrupted
+    run's partial rows and records. A run with a job row belongs to external workers, which
+    re-queue it themselves if its worker went silent, so it is left alone.
+    """
+    stuck = db.query(Repository).filter(Repository.status.in_(("pending", "processing"))).all()
+    owned = {repository_id for (repository_id,) in db.query(Job.repository_id)}
+    stuck = [repository for repository in stuck if repository.id not in owned]
     for repository in stuck:
-        repository.status = "failed"
-        repository.error_message = (
-            "Processing was interrupted by a server restart; reprocess the repository"
-        )
-    db.commit()
+        start_processing(repository.id, force_reprocess=True)
     if stuck:
-        logger.warning("Marked interrupted repositories as failed", count=len(stuck))
+        logger.warning("Restarted interrupted runs", count=len(stuck))
     return len(stuck)
+
+
+JOB_HEARTBEAT_SECONDS = 30
+JOB_STALE_SECONDS = 300  # a worker silent this long is gone; its job is queued again, as a full run
+
+
+def claim_job(worker: str) -> Job | None:
+    """Claim the oldest queued job for `worker`, after re-queuing jobs whose worker went silent"""
+    now = datetime.now(UTC)
+    with SessionLocal() as db:
+        db.query(Job).filter(
+            Job.claimed_by.isnot(None), Job.heartbeat_at < now - timedelta(seconds=JOB_STALE_SECONDS)
+        ).update({"claimed_by": None, "incremental": False}, synchronize_session=False)
+        db.commit()
+        candidate = db.query(Job.id).filter(Job.claimed_by.is_(None)).order_by(Job.id).first()
+        if candidate is None:
+            return None
+        # Only one worker's UPDATE still finds it unclaimed, in SQLite and in Postgres alike
+        won = (
+            db.query(Job)
+            .filter(Job.id == candidate.id, Job.claimed_by.is_(None))
+            .update({"claimed_by": worker, "heartbeat_at": now}, synchronize_session=False)
+        )
+        db.commit()
+        return db.get(Job, candidate.id) if won else None
+
+
+def heartbeat_job(job_id: int, worker: str) -> None:
+    with SessionLocal() as db:
+        db.query(Job).filter(Job.id == job_id, Job.claimed_by == worker).update(
+            {"heartbeat_at": datetime.now(UTC)}, synchronize_session=False
+        )
+        db.commit()
+
+
+def finish_job(job_id: int) -> None:
+    with SessionLocal() as db:
+        db.query(Job).filter(Job.id == job_id).delete(synchronize_session=False)
+        db.commit()
+
+
+async def relay_progress(interval: float = 2.0) -> None:
+    """With external workers, send this process's WebSocket clients what the database says.
+
+    Workers broadcast to their own (empty) connection lists, so the API reads progress back:
+    every active repository, and once more for each that just stopped. Cancel it to stop.
+    """
+    from app.services.websocket_service import websocket_manager
+
+    last: dict[int, tuple] = {}
+    while True:
+        await asyncio.sleep(interval)
+        try:
+            with SessionLocal() as db:
+                rows = (
+                    db.query(Repository)
+                    .filter(or_(Repository.status.in_(("pending", "processing")), Repository.id.in_(list(last))))
+                    .all()
+                )
+            for repository in rows:
+                state = (repository.status, repository.processed_files, repository.total_files)
+                if last.get(repository.id) != state:
+                    await websocket_manager.send_repository_status(
+                        repository_id=repository.id,
+                        status=repository.status,
+                        name=repository.name,
+                        processed_files=repository.processed_files,
+                        total_files=repository.total_files,
+                        error=repository.error_message if repository.status == "failed" else None,
+                    )
+            last = {
+                r.id: (r.status, r.processed_files, r.total_files)
+                for r in rows
+                if r.status in ("pending", "processing")
+            }
+        except Exception as e:
+            logger.warning("Progress relay failed", error=failure_message(e))
 
 
 class RepositoryService:
