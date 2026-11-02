@@ -4,6 +4,7 @@ from sqlalchemy import (
     DateTime,
     ForeignKey,
     Integer,
+    LargeBinary,
     String,
     Text,
 )
@@ -42,6 +43,11 @@ class CodeEntity(Base):
 
     # Metadata
     entity_metadata = Column(JSON, nullable=True)  # Additional metadata for analysis
+
+    # Semantic search: a unit float32 vector and the model that made it; vectors from another
+    # model don't compare, so a model change re-embeds
+    embedding = Column(LargeBinary, nullable=True)
+    embedding_model = Column(String(200), nullable=True)
 
     # Timestamps
     created_at = Column(DateTime(timezone=True), server_default=func.now())

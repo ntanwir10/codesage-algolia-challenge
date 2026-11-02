@@ -25,7 +25,7 @@ from app.models.code_entity import CodeEntity
 from app.models.code_file import CodeFile
 from app.models.repository import Repository
 from app.schemas.repository import RepositoryCreate
-from app.services import algolia_service
+from app.services import algolia_service, embeddings
 from app.services.github_service import FileSelector, quote_path
 from app.services.repository_service import RepositoryAddError, RepositoryService
 from app.services.repository_service import add_repository as create_repository
@@ -202,6 +202,9 @@ async def search_code(db: Session, args: schemas.SearchCodeArgs) -> dict:
             "or use list_definitions to list everything"
         )
 
+    if args.mode == "semantic":
+        return await _semantic_search(db, args, repository)
+
     service = algolia_service.AlgoliaService()
     if not service.is_available():
         raise ToolError(
@@ -252,6 +255,79 @@ async def search_code(db: Session, args: schemas.SearchCodeArgs) -> dict:
         "total_hits": response.get("nbHits", len(results)),
         "page": response.get("page", args.page),
         "pages": response.get("nbPages", 1 if results else 0),
+        "results": results,
+    }
+
+
+
+async def _semantic_search(db: Session, args: schemas.SearchCodeArgs, repository: Repository | None) -> dict:
+    """Rank definitions by how close their vectors are to the query's (bring your own key)"""
+    if not embeddings.is_configured():
+        raise ToolError(
+            "Semantic search needs an embeddings key on the server (EMBEDDING_API_KEY); use mode 'keyword'."
+        )
+    try:
+        [blob] = await embeddings.embed([args.query], kind="query")
+    except embeddings.EmbeddingError as exc:
+        raise ToolError(f"Semantic search is unavailable: {exc}") from exc
+    query_vector = embeddings.unpack(blob)
+
+    def rank():
+        # Only vectors from the current model compare; a repository being reindexed is left out
+        # until it completes, since its old and new rows both exist meanwhile
+        query = (
+            db.query(CodeEntity, CodeFile.file_path, CodeFile.language)
+            .join(CodeFile, CodeEntity.file_id == CodeFile.id)
+            .filter(CodeEntity.embedding_model == embeddings.model_name())
+        )
+        if repository is not None:
+            query = query.filter(CodeEntity.repository_id == repository.id)
+        else:
+            query = query.join(Repository, Repository.id == CodeEntity.repository_id).filter(
+                Repository.status == "completed"
+            )
+        if args.language:
+            query = query.filter(CodeFile.language == args.language)
+        if args.entity_type:
+            query = query.filter(CodeEntity.entity_type == args.entity_type)
+        scored = [
+            (embeddings.similarity(query_vector, embeddings.unpack(entity.embedding)), entity, path, language)
+            for entity, path, language in query
+        ]
+        scored.sort(key=lambda row: row[0], reverse=True)
+        return scored
+
+    scored = await asyncio.to_thread(rank)
+    page = scored[args.page * args.limit : (args.page + 1) * args.limit]
+    known = {repository.id: repository} if repository else {
+        found.id: found
+        for found in db.query(Repository).filter(Repository.id.in_({e.repository_id for _, e, _, _ in page}))
+    }
+    results = []
+    for score, entity, path, language in page:
+        hit = {"file_path": path, "line_start": entity.start_line, "line_end": entity.end_line}
+        results.append(
+            {
+                "repository_id": entity.repository_id,
+                "repository": known[entity.repository_id].name if entity.repository_id in known else None,
+                "entity_name": entity.entity_name,
+                "entity_type": entity.entity_type,
+                **hit,
+                "language": language,
+                "signature": (entity.signature or "")[:SIGNATURE_CHARS] or None,
+                "snippet": "",
+                "description": (entity.docstring or "")[:DESCRIPTION_CHARS] or None,
+                "url": _permalink(known.get(entity.repository_id), hit),
+                "score": round(score, 4),
+            }
+        )
+    return {
+        "query": args.query,
+        "repository": repository.name if repository else None,
+        "mode": "semantic",
+        "total_hits": len(scored),
+        "page": args.page,
+        "pages": -(-len(scored) // args.limit),
         "results": results,
     }
 

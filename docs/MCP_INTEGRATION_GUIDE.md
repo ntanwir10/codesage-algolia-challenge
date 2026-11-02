@@ -150,7 +150,9 @@ Full-text search over functions, classes (including interfaces, type aliases and
 | `entity_type` | `function`, `class`, `import`, `doc_section`, `terraform_block` | | |
 | `limit` | integer 1-50 | 10 | Results per page |
 | `page` | integer >= 0 | 0 | Zero-based |
+| `mode` | `keyword`, `semantic` | `keyword` | `semantic` ranks definitions by meaning; it needs `EMBEDDING_API_KEY` on the server |
 
+- **Semantic mode.** The query is embedded with the server's provider and compared (cosine) with the stored vectors of definitions from the same model. Hits have the same fields plus `score`, and an empty `snippet`. Without a repository it searches every `completed` repository, leaving out one being reindexed. Without a key it fails with a message naming `EMBEDDING_API_KEY`. Vectors exist only for repositories indexed since the key was set: reprocess older ones.
 - **Plain-words queries.** If no result matches every word, Algolia drops the words that miss, ignores stop words and plurals, and returns the best partial matches. A question works as a query.
 - **Source links.** Links point at the commit that was indexed (`list_repositories` reports it as `commit_sha`), so their line numbers stay right after the branch moves on. A repository indexed before commits were recorded links to its branch until it is reprocessed. GitHub gets `#L<start>-L<end>`, GitLab `/-/blob/...#L<start>-<end>` and Bitbucket `/src/...#lines-<start>:<end>`. GitLab links go to gitlab.com and to any host whose name starts with `gitlab.`; Bitbucket links only to bitbucket.org. A repository on any other host has no link.
 - **Truncation.** Snippets are cut at 600 characters, and signatures and descriptions at 300.

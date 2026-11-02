@@ -48,6 +48,13 @@ class SearchCodeArgs(_Args):
     entity_type: EntityType | None = Field(default=None, description="Restrict to one kind of entity")
     limit: int = Field(default=10, ge=1, le=50, description="Results per page")
     page: int = Field(default=0, ge=0, description="Zero-based result page")
+    mode: Literal["keyword", "semantic"] = Field(
+        default="keyword",
+        description=(
+            "keyword: full-text search over names, descriptions and code. semantic: rank definitions by "
+            "meaning, for questions in plain words; needs an embeddings key on the server (EMBEDDING_API_KEY)"
+        ),
+    )
 
 
 class GetFileArgs(_Args):

@@ -17,7 +17,7 @@ from collections import Counter
 from datetime import UTC, datetime
 
 import structlog
-from sqlalchemy import func
+from sqlalchemy import func, or_
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 
@@ -27,7 +27,7 @@ from app.models.code_entity import CodeEntity
 from app.models.code_file import CodeFile
 from app.models.repository import Repository
 from app.schemas.repository import RepositoryCreate
-from app.services import git_source
+from app.services import embeddings, git_source
 from app.services.github_service import GitHubService, RepositoryCheckError, parse_repository_url
 
 logger = structlog.get_logger()
@@ -438,6 +438,10 @@ class RepositoryService:
             if not await algolia_service.index_documents(documents):
                 raise IngestionError("Algolia rejected the indexing request")
 
+        # 3b. Semantic search (bring your own key): vectors for this run's definitions that lack
+        # one from the current model. A failure leaves keyword search intact and is reported below
+        unembedded = await self._embed_definitions(repository.id) if embeddings.is_configured() else 0
+
         # 4. This run is complete: drop the previous run's rows and records. Not waited on:
         # Algolia applies an index's tasks in order, and a timeout must not discard a good run
         await self._delete_rows(repository.id, previous=True)
@@ -467,6 +471,8 @@ class RepositoryService:
                 f"{github.skipped_files} files over the {github.max_files}-file or "
                 f"{github.max_total_bytes // 2**20} MB limit were skipped"
             )
+        if unembedded:
+            problems.append(f"{unembedded} definitions have no semantic search vectors (the embedding API failed)")
         if github.listing_truncated:
             problems.append(
                 "the repository is too large to list in full, so some directories were not indexed"
@@ -628,6 +634,40 @@ class RepositoryService:
             self.db.commit()
 
         await _to_thread_to_completion(delete)
+
+    async def _embed_definitions(self, repository_id: int) -> int:
+        """Embed this run's definitions that have no vector from the current model.
+
+        Reused files keep theirs. Returns how many are still without one: 0, or all of them
+        when the API failed. The text is the kind, name and path, then the definition's lines.
+        """
+        model = embeddings.model_name()
+        rows = (
+            self.db.query(CodeEntity, CodeFile.file_path, CodeFile.content)
+            .join(CodeFile, CodeEntity.file_id == CodeFile.id)
+            .filter(
+                CodeEntity.repository_id == repository_id,
+                CodeEntity.file_id > self._cut,
+                CodeEntity.entity_type != "import",
+                or_(CodeEntity.embedding_model.is_(None), CodeEntity.embedding_model != model),
+            )
+            .all()
+        )
+        if not rows:
+            return 0
+        texts = []
+        for entity, path, content in rows:
+            lines = content.splitlines()[(entity.start_line or 1) - 1 : entity.end_line or None]
+            texts.append(f"{entity.entity_type} {entity.entity_name} in {path}\n" + "\n".join(lines))
+        try:
+            vectors = await embeddings.embed(texts)
+        except embeddings.EmbeddingError as e:
+            logger.warning("Could not embed definitions", repository_id=repository_id, error=str(e))
+            return len(rows)
+        for (entity, _, _), vector in zip(rows, vectors, strict=True):
+            entity.embedding, entity.embedding_model = vector, model
+        await asyncio.to_thread(self.db.commit)
+        return 0
 
     async def _delete_old_records(self, algolia_service, repository_id: int, paths: list[str]) -> bool:
         """Delete earlier runs' records for these paths; False if any request failed"""
