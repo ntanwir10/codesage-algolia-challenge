@@ -11,6 +11,14 @@ export class MCPToolError extends Error {
   }
 }
 
+/** A 401 from the basic-auth login in front of CodeSage (the prod nginx); the backend's key
+ * check never sends this challenge */
+export function isLoginRefused(error: unknown): boolean {
+  if (!isAxiosError(error) || error.response?.status !== 401) return false;
+  const challenge = error.response.headers?.["www-authenticate"];
+  return typeof challenge === "string" && challenge.toLowerCase().startsWith("basic");
+}
+
 export interface DescribedError {
   message: string;
   status?: number;
@@ -69,7 +77,9 @@ export function describeError(error: unknown): DescribedError {
     let message: string;
     switch (status) {
       case 401:
-        message = "The server rejected the API key: this app's key doesn't match the server's.";
+        message = isLoginRefused(error)
+          ? "The site's login was refused. Reload the page and sign in again."
+          : "The server rejected the API key: this app's key doesn't match the server's.";
         break;
       case 429:
         // The server's own text says how long to wait
