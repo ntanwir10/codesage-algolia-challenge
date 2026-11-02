@@ -140,7 +140,7 @@ With a key set, the backend answers only to loopback hosts, the hosts in `CORS_O
 
 ### Security headers and forwarded headers
 
-- **Response headers.** nginx sends `Strict-Transport-Security` (2 years), `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `Content-Security-Policy: frame-ancestors 'none'` and `Referrer-Policy: same-origin`. TLS is 1.2 and 1.3 only.
+- **Response headers.** nginx sends `Strict-Transport-Security` (2 years), `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `Content-Security-Policy: frame-ancestors 'none'` and `Referrer-Policy: same-origin`. TLS is 1.2 and 1.3 only, and TLS 1.2 accepts only forward-secret ECDHE suites with AES-GCM or ChaCha20-Poly1305.
 - **Overwritten, not appended.** nginx sets `X-Forwarded-For` to the real client address and `X-Forwarded-Proto` to `https`, and clears `Authorization`. A client can't choose its own address for rate limiting.
 - **The key.** nginx sets `X-API-Key` itself on `/api` and `/ws`. Only `${CODESAGE_API_KEY}` is substituted in the template (`NGINX_ENVSUBST_FILTER`); nginx's own `$variables` are left alone.
 - **uvicorn trust.** `Dockerfile.prod` starts uvicorn with `--forwarded-allow-ips "*"`. That is safe only because the backend has no published port and nginx is the only peer that can reach it. Keep it that way.

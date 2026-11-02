@@ -44,6 +44,9 @@ server {
     ssl_certificate /etc/nginx/ssl/cert.pem;
     ssl_certificate_key /etc/nginx/ssl/key.pem;
     ssl_protocols TLSv1.2 TLSv1.3;
+    # TLS 1.2: ECDHE (forward secrecy) with AEAD only, Mozilla's intermediate list without DHE (no
+    # dhparam here). nginx's default also takes static-RSA and CBC suites, and lets the client pick them
+    ssl_ciphers ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305;
     ssl_session_cache shared:SSL:10m;
     add_header Strict-Transport-Security "max-age=63072000" always;
     # Server-level headers reach every location below while none sets its own add_header
