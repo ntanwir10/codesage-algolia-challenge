@@ -55,6 +55,11 @@ def no_real_github_check(request, monkeypatch):
     A test of the real check opts out with @pytest.mark.real_github_check.
     """
     monkeypatch.setattr(AlgoliaService, "is_available", lambda self: True)
+    # A developer's real embeddings key must never be called from the suite; the semantic
+    # search tests set their own fake provider
+    from app.core.config import get_settings
+
+    monkeypatch.setattr(get_settings(), "embedding_api_key", None)
     if request.node.get_closest_marker("real_github_check"):
         return
 

@@ -277,7 +277,7 @@ An unknown path shows "Page not found". A repository that doesn't exist says so;
 | Tool | What it returns |
 | --- | --- |
 | `list_repositories` | Indexed repositories with status and size |
-| `search_code` | Full-text matches over functions, classes (with interfaces, type aliases and enums), doc sections and Terraform blocks, with source links. Imports only with `entity_type: "import"`. Part of a camelCase name matches, and source ranks before tests. A question in plain words returns the best partial matches |
+| `search_code` | With `mode: "semantic"` and an embeddings key on the server, ranks definitions by meaning instead (see `EMBEDDING_API_KEY`). By default, full-text matches over functions, classes (with interfaces, type aliases and enums), doc sections and Terraform blocks, with source links. Imports only with `entity_type: "import"`. Part of a camelCase name matches, and source ranks before tests. A question in plain words returns the best partial matches |
 | `get_file` | A file with line numbers: at most 400 lines and 100,000 characters per call |
 | `list_definitions` | Definitions in a repository, by file and line |
 | `analyze_repository` | File, line and entity counts, languages, top directories, largest files |
@@ -349,6 +349,7 @@ curl -X POST http://127.0.0.1:8001/api/v1/repositories/ \
 | `DATABASE_URL` | `sqlite:///./codesage.db` | SQLite only |
 | `CORS_ORIGINS` | localhost ports 3000, 5173, 5174 (`.env.example`, which `make setup` copies, sets only 3000 and 5173) | Comma-separated list of origins; `*` is rejected. Also decides which browser origins may write |
 | `ALLOWED_HOSTS` | unset | With a key set, extra hostnames the API answers to, besides loopback and the `CORS_ORIGINS` hosts. Comma-separated; `*.example.com` allows subdomains, `*` allows any host |
+| `EMBEDDING_API_URL`, `EMBEDDING_API_KEY`, `EMBEDDING_MODEL` | OpenAI's endpoint, unset, `text-embedding-3-small` | Semantic search, bring your own key: any OpenAI-compatible `/v1/embeddings` (OpenAI, Voyage, a gateway, or a local Ollama with any key). Off while the key is unset. Each run then embeds its definitions (not imports) and stores the vectors in SQLite; definitions and queries are sent to that provider |
 | `REFRESH_INTERVAL_MINUTES` | `0` (off) | Every N minutes, check each completed repository's branch (the same check as the freshness line) and run an incremental reindex of those that moved. Answers are cached for 10 minutes, so a shorter interval adds nothing |
 | `ENVIRONMENT`, `LOG_LEVEL` | `development`, `INFO` | `production` hides `/docs` and `/redoc`. `/openapi.json` stays on; the prod stack's nginx doesn't route it |
 

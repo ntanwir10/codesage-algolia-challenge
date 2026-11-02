@@ -101,7 +101,7 @@ class Settings(BaseSettings):
         description="Comma-separated list of CORS origins",
     )
 
-    @field_validator("algolia_app_id", "algolia_admin_api_key", "github_token", mode="before")
+    @field_validator("algolia_app_id", "algolia_admin_api_key", "github_token", "embedding_api_key", mode="before")
     @classmethod
     def _placeholder_is_unset(cls, value):
         """An .env copied from the old example still holds 'your-...-here'; that means not configured"""
@@ -136,6 +136,12 @@ class Settings(BaseSettings):
     enable_rate_limiting: bool = True
     rate_limit_default: str = "100/minute"
     rate_limit_ai: str = "30/minute"  # For MCP tool endpoints
+
+    # Semantic search, bring your own key: any OpenAI-compatible embeddings endpoint (OpenAI, Voyage,
+    # a gateway, or a local Ollama at http://localhost:11434/v1/embeddings). Off without a key
+    embedding_api_url: str = "https://api.openai.com/v1/embeddings"
+    embedding_api_key: str | None = None
+    embedding_model: str = "text-embedding-3-small"
 
     # Scheduled refresh: every N minutes, re-index changed files of repositories whose branch moved.
     # 0 turns it off. Freshness answers are cached for 10 minutes, so shorter intervals add nothing

@@ -9,7 +9,7 @@ from sqlalchemy import create_engine, inspect, text
 from alembic import command
 from app.core.migrations import _ALEMBIC_DIR, upgrade_database
 
-HEAD = "commit_sha"
+HEAD = "entity_embeddings"
 DROPPED = {
     "repositories": {"repo_metadata", "security_score", "vulnerability_count"},
     "code_files": {"file_name", "is_analyzed", "size_bytes"},
@@ -94,6 +94,7 @@ def test_fresh_database_has_expected_schema(tmp_path):
         assert not dropped & {c["name"] for c in insp.get_columns(table)}
     assert "entity_metadata" in {c["name"] for c in insp.get_columns("code_entities")}
     assert "commit_sha" in {c["name"] for c in insp.get_columns("repositories")}
+    assert {"embedding", "embedding_model"} <= {c["name"] for c in insp.get_columns("code_entities")}
     with engine.connect() as conn:
         assert conn.execute(text("SELECT version_num FROM alembic_version")).scalar() == HEAD
 
