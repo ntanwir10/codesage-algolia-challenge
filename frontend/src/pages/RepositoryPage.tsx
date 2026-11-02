@@ -333,7 +333,7 @@ export function RepositoryPage() {
 
         {/* Processing Status */}
         {isActiveStatus(repository.status) && (
-          <Card className="border-blue-200 dark:border-blue-800 bg-blue-50/50">
+          <Card className="border-blue-200 dark:border-blue-800 bg-blue-50/50 dark:bg-blue-950/40">
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
                 <span className="animate-spin">⏳</span>
@@ -389,8 +389,8 @@ export function RepositoryPage() {
           <Card
             className={
               repository.error_message
-                ? "border-amber-200 dark:border-amber-800 bg-amber-50/50"
-                : "border-green-200 dark:border-green-800 bg-green-50/50"
+                ? "border-amber-200 dark:border-amber-800 bg-amber-50/50 dark:bg-amber-950/40"
+                : "border-green-200 dark:border-green-800 bg-green-50/50 dark:bg-green-950/40"
             }
           >
             <CardContent className="p-4">
@@ -441,7 +441,7 @@ export function RepositoryPage() {
 
         {/* Error Status */}
         {repository.status === "failed" && (
-          <Card className="border-red-200 dark:border-red-800 bg-red-50/50">
+          <Card className="border-red-200 dark:border-red-800 bg-red-50/50 dark:bg-red-950/40">
             <CardContent className="p-4">
               <div className="flex items-center gap-3">
                 <span className="text-2xl">❌</span>
