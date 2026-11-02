@@ -51,7 +51,7 @@ export function DashboardPage() {
       const active = data?.filter((r) => isActiveStatus(r.status)).length ?? 0;
       return active > MAX_SUBSCRIPTIONS ? POLL_INTERVAL_MS : pollWhileAnyActive(data);
     },
-    // Pick up repos added in another tab or via Claude (global default is 5 min).
+    // Pick up repos added in another tab or via an MCP client (global default is 5 min).
     staleTime: 30_000,
   });
 
