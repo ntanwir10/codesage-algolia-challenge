@@ -19,6 +19,26 @@ describe("describeError", () => {
     );
   });
 
+  it("reads a 500 without a request ID as an unreachable backend", () => {
+    // The Vite dev proxy answers this way when the backend isn't running
+    expect(describeError(withStatus(500, "")).message).toBe(
+      "Cannot reach the CodeSage server. Check that the backend is running."
+    );
+    expect(describeError(withStatus(500, { detail: "Internal server error", request_id: "abc123" })).message).toBe(
+      "Server error (request abc123). Please try again later."
+    );
+  });
+
+  it("tells a refused proxy login apart from a rejected key", () => {
+    const login = new AxiosError("x", "ERR_BAD_RESPONSE", undefined, undefined, {
+      status: 401,
+      data: "<html>401</html>",
+      headers: { "www-authenticate": 'Basic realm="CodeSage"' },
+    } as never);
+    expect(describeError(login).message).toBe("The site's login was refused. Reload the page and sign in again.");
+    expect(describeError(withStatus(401, { detail: "Invalid or missing API key" })).message).toMatch(/API key/);
+  });
+
   it.each([502, 503, 504])("uses the string detail for %i", (status) => {
     expect(describeError(withStatus(status, { detail: "GitHub is down." })).message).toBe(
       "GitHub is down."

@@ -12,7 +12,7 @@ interface Captured {
   body: unknown;
 }
 
-function makeApi(reply: unknown = {}, status = 200) {
+function makeApi(reply: unknown = {}, status = 200, headers: Record<string, string> = {}) {
   const api = new CodeSageAPI();
   const calls: Captured[] = [];
   api.client.defaults.adapter = async (config: InternalAxiosRequestConfig) => {
@@ -28,7 +28,7 @@ function makeApi(reply: unknown = {}, status = 200) {
       data: reply,
       status,
       statusText: "",
-      headers: {},
+      headers,
       config,
     };
     if (status >= 400) {
@@ -61,14 +61,11 @@ describe("CodeSageAPI", () => {
     );
   });
 
-  it("honours VITE_API_BASE_URL and sends /health at the origin", async () => {
+  it("honours VITE_API_BASE_URL", async () => {
     vi.stubEnv("VITE_API_BASE_URL", "https://api.example.com/api/v1/");
     const { api, calls } = makeApi({ status: "ok" });
     await api.getRepository(3);
     expect(calls[0].baseURL).toBe("https://api.example.com/api/v1");
-    await api.healthCheck();
-    expect(calls[1].baseURL).toBe("https://api.example.com");
-    expect(calls[1].url).toBe("/health");
   });
 
   it("sends X-API-Key when VITE_CODESAGE_API_KEY is set", async () => {
@@ -91,12 +88,6 @@ describe("CodeSageAPI", () => {
     expect(calls[0].url).toBe("/repositories/7/process");
     expect(calls[0].params).toEqual({ force_reprocess: true });
     expect(calls[0].body).toBeUndefined();
-  });
-
-  it("fetches the real status endpoint", async () => {
-    const { api, calls } = makeApi({ repository_id: 7, status: "processing" });
-    await api.getRepositoryStatus(7);
-    expect(calls[0].url).toBe("/repositories/7/status");
   });
 
   it("searchCode sends `repository` (never repository_id) and real page/limit", async () => {
@@ -170,6 +161,16 @@ describe("CodeSageAPI", () => {
     const off = onApiAuthError(listener);
     await expect(api.deleteRepository(1)).rejects.toBeInstanceOf(AxiosError);
     expect(listener).toHaveBeenCalledTimes(1);
+    off();
+  });
+
+  it("leaves a refused proxy login to the browser, without the key notice", async () => {
+    const listener = vi.fn();
+    const off = onApiAuthError(listener);
+    await makeApi({}, 200).api.getRepositories(); // reset any earlier streak
+    const login = makeApi("<html>401</html>", 401, { "www-authenticate": 'Basic realm="CodeSage"' }).api;
+    await expect(login.getRepositories()).rejects.toBeInstanceOf(AxiosError);
+    expect(listener).not.toHaveBeenCalled();
     off();
   });
 

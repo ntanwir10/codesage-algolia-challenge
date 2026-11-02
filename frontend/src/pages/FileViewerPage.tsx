@@ -28,7 +28,8 @@ export function FileViewerPage() {
   const path = params.get("path") ?? "";
   const line = Number(params.get("line")) || 0;
   const end = Math.max(Number(params.get("end")) || line, line);
-  const start = Number(params.get("from")) || Math.max(1, line - CONTEXT);
+  // A hand-edited ?from= below 1 or fractional would get get_file's raw validation message
+  const start = Math.max(1, Math.trunc(Number(params.get("from"))) || line - CONTEXT);
 
   const file = useQuery({
     queryKey: ["file", repositoryId, path, start],

@@ -11,6 +11,16 @@ export class MCPToolError extends Error {
   }
 }
 
+/** A 401 from the basic-auth login in front of CodeSage (the prod nginx); the backend's key
+ * check never sends this challenge */
+export function isLoginRefused(error: unknown): boolean {
+  if (!isAxiosError(error) || error.response?.status !== 401) return false;
+  const challenge = error.response.headers?.["www-authenticate"];
+  return typeof challenge === "string" && challenge.toLowerCase().startsWith("basic");
+}
+
+const UNREACHABLE = "Cannot reach the CodeSage server. Check that the backend is running.";
+
 export interface DescribedError {
   message: string;
   status?: number;
@@ -53,7 +63,7 @@ export function describeError(error: unknown): DescribedError {
         message:
           error.code === "ECONNABORTED"
             ? "The server took too long to respond. Try again."
-            : "Cannot reach the CodeSage server. Check that the backend is running.",
+            : UNREACHABLE,
         kind: "network",
       };
     }
@@ -69,7 +79,9 @@ export function describeError(error: unknown): DescribedError {
     let message: string;
     switch (status) {
       case 401:
-        message = "The server rejected the API key: this app's key doesn't match the server's.";
+        message = isLoginRefused(error)
+          ? "The site's login was refused. Reload the page and sign in again."
+          : "The server rejected the API key: this app's key doesn't match the server's.";
         break;
       case 429:
         // The server's own text says how long to wait
@@ -79,7 +91,11 @@ export function describeError(error: unknown): DescribedError {
             : "Too many requests. Please wait a moment and try again.";
         break;
       case 500:
-        message = `Server error${requestId ? ` (request ${requestId})` : ""}. Please try again later.`;
+        // The backend's own 500s carry a request ID; an empty one is a proxy that can't reach it
+        // (the Vite dev server answers that way when the backend isn't running)
+        message = requestId
+          ? `Server error (request ${requestId}). Please try again later.`
+          : UNREACHABLE;
         break;
       case 502:
       case 503:

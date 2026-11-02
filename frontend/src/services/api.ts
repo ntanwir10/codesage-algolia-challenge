@@ -1,9 +1,8 @@
 import axios, { type AxiosInstance } from "axios";
-import { MCPToolError } from "@/lib/errors";
+import { MCPToolError, isLoginRefused } from "@/lib/errors";
 import type {
   Repository,
   CreateRepositoryRequest,
-  ProcessingStatus,
   RepositoryFreshness,
   RepositoryStatsData,
   ReprocessResponse,
@@ -62,24 +61,12 @@ function resolveBaseURL(): string {
   return base.endsWith("/api/v1") ? base : `${base}/api/v1`;
 }
 
-/** Origin hosting /health: the API base's origin, or "" for same-origin. */
-function resolveOrigin(baseURL: string): string {
-  try {
-    return new URL(baseURL).origin;
-  } catch {
-    return "";
-  }
-}
-
 export class CodeSageAPI {
   readonly client: AxiosInstance;
-  private readonly origin: string;
 
   constructor() {
-    const baseURL = resolveBaseURL();
-    this.origin = resolveOrigin(baseURL);
     this.client = axios.create({
-      baseURL,
+      baseURL: resolveBaseURL(),
       timeout: 30000,
       headers: { "Content-Type": "application/json" },
     });
@@ -99,7 +86,8 @@ export class CodeSageAPI {
         return response;
       },
       (error: unknown) => {
-        if (axios.isAxiosError(error) && error.response?.status === 401) {
+        // A refused proxy login is the browser's to ask for again; the key notice would mislead
+        if (axios.isAxiosError(error) && error.response?.status === 401 && !isLoginRefused(error)) {
           notifyAuthError();
         }
         return Promise.reject(error);
@@ -140,13 +128,6 @@ export class CodeSageAPI {
       `/repositories/${id}/process`,
       undefined,
       { params: { force_reprocess: true } }
-    );
-    return response.data;
-  }
-
-  async getRepositoryStatus(id: number): Promise<ProcessingStatus> {
-    const response = await this.client.get<ProcessingStatus>(
-      `/repositories/${id}/status`
     );
     return response.data;
   }
@@ -260,14 +241,6 @@ export class CodeSageAPI {
 
   async getCapabilities(): Promise<MCPCapabilities> {
     const response = await this.client.get<MCPCapabilities>("/ai/mcp/capabilities");
-    return response.data;
-  }
-
-  // Health check lives at the origin root, not under the API base.
-  async healthCheck(): Promise<{ status: string }> {
-    const response = await this.client.get<{ status: string }>("/health", {
-      baseURL: this.origin,
-    });
     return response.data;
   }
 }
