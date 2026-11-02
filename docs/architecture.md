@@ -130,7 +130,7 @@ With `REFRESH_INTERVAL_MINUTES` above 0, the lifespan starts `refresh_loop`. It 
 - **Run failure.** Any other exception rolls back, sets `failed` with a message of at most 500 characters, and broadcasts it. A database error is recorded as a generic message, because its text carries SQL and file contents. A GitHub error is recorded as its own sentence, such as the rate-limit message with the wait. Other exceptions are recorded as `ClassName: message`. If a reprocess had already cleared the old index, the message ends with a note that the previous index was removed.
 - **Partial index.** The run still ends `completed` when something was left out, and `error_message` starts with `Partially indexed:`. It names each cause: files that could not be stored, files that could not be parsed, files skipped over the 1000-file or 100 MB limit, and a listing too large to read in full. The repository page shows this as amber. The Dashboard card shows a plain "Completed" badge.
 - **Job crash.** If the task itself dies, the row is set to `failed` ("Processing stopped unexpectedly") so it does not stay `processing`.
-- **Server restart.** At startup, every repository left `pending` or `processing` is set to `failed` ("interrupted by a server restart"). Reprocess it to retry.
+- **Server restart.** At startup, every repository left `pending` or `processing` is started again as a full run, unless an external worker's job row owns it. Its previous index stays in place until that run completes.
 - **Delete.** A repository can't be deleted, or have `branch`, `language` or `framework` changed, while its job runs (`409`). A delete returns as soon as Algolia accepts the removal; a reprocess waits for it.
 
 ## Search
@@ -277,6 +277,6 @@ The bridge sends the key itself when it talks to the backend directly. Through n
 - **SQLite by default.** The database is a single local file unless `DATABASE_URL` names Postgres (`postgresql://` maps to the psycopg 3 driver). `tests/test_postgres.py` runs against a real server in CI: the migrations, `bytea` vectors and the job claim.
 - **Synchronous Algolia client.** Calls run in worker threads.
 - **Partial results.** A repository over 1000 files or 100 MB, or too large for the trees API, is indexed in part. Source files are kept first, then tests, docs and data files.
-- **No automatic retry.** An interrupted or failed run waits for a manual reprocess.
+- **No automatic retry of failures.** A failed run waits for a manual reprocess. An interrupted one starts again at the next startup.
 - **Search scope.** Searching all repositories includes ones being reprocessed.
 - **Tests and CI.** The Playwright end-to-end tests (`frontend/e2e/`) start their own backend on port 8011, with a database seeded by `e2e/seed.py` and no Algolia, GitHub or API key, and Vite on 5183 proxying to it. They cover the Home form's validation and refusal, the dashboard, the repository page and the file viewer in Chromium, but not search, freshness or indexing. CI starts the dev Docker stack with fake Algolia keys and checks the backend's `/health`, the nginx front at `/`, and `/health` and one API call through nginx. It never indexes a repository there. The prod stack, with TLS, basic auth and the browser checks, is only config-checked and built; it was last run by hand.
