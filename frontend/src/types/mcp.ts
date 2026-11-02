@@ -46,6 +46,9 @@ export interface DefinitionsResponse {
   definitions: Definition[];
 }
 
+/** keyword: full-text over Algolia. semantic: definitions ranked by meaning (needs an embeddings key on the server). */
+export type SearchMode = "keyword" | "semantic";
+
 /** Arguments accepted by the search_code tool (unknown keys are rejected: 422). */
 export interface SearchQuery {
   query: string;
@@ -57,6 +60,7 @@ export interface SearchQuery {
   limit?: number;
   /** Zero-based page index. */
   page?: number;
+  mode?: SearchMode;
 }
 
 export interface SearchHit {
@@ -74,6 +78,8 @@ export interface SearchHit {
   description: string | null;
   /** GitHub permalink to the entity. */
   url: string | null;
+  /** Semantic mode only: cosine similarity to the query, higher is closer. */
+  score?: number;
 }
 
 /** The `result` payload of a successful search_code call. */
@@ -84,8 +90,15 @@ export interface SearchResponse {
   page: number;
   pages: number;
   results: SearchHit[];
+  /** Present ("semantic") only on a semantic search. */
+  mode?: SearchMode;
 }
 
 export interface SearchSuggestionsResponse {
   suggestions: string[];
+}
+
+/** GET /ai/mcp/capabilities; only the field the dashboard reads. */
+export interface MCPCapabilities {
+  semantic_search?: boolean;
 }

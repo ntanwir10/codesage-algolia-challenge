@@ -187,3 +187,48 @@ async def test_semantic_pages_go_past_algolias_1000_hit_limit(
 
 def test_the_suite_never_sees_a_real_embeddings_key():
     assert not embeddings.is_configured()
+
+
+# --- the dashboard: capabilities and suggestions -----------------------------
+
+SUGGESTIONS = "/api/v1/ai/search/suggestions"
+
+
+async def in_process_embed(texts, kind="document"):
+    """The fake provider's vectors without HTTP: the sync test client would block its event loop"""
+    return [embeddings._pack(vector(text)) for text in texts]
+
+
+async def test_capabilities_say_whether_semantic_search_is_on(client, provider, monkeypatch):
+    assert client.get("/api/v1/ai/mcp/capabilities").json()["semantic_search"] is True
+    monkeypatch.setattr(get_settings(), "embedding_api_key", None)
+    assert client.get("/api/v1/ai/mcp/capabilities").json()["semantic_search"] is False
+
+
+async def test_semantic_suggestions_name_the_closest_definitions(
+    client, db_session, repository, github, algolia_index, provider, monkeypatch
+):
+    github.files = [github_file("a.py", RETRY), github_file("b.py", STORE)]
+    await run(db_session, repository)
+    monkeypatch.setattr(embeddings, "embed", in_process_embed)
+
+    resp = client.get(SUGGESTIONS, params={"query": "retry it", "mode": "semantic", "limit": 1})
+
+    assert resp.json() == {"suggestions": ["retry_request"]}
+    both = client.get(SUGGESTIONS, params={"query": "a store", "mode": "semantic", "repository_id": repository.id})
+    assert both.json()["suggestions"][0] == "create_store"
+
+
+async def test_semantic_suggestions_are_empty_without_a_key_or_on_failure(
+    client, db_session, repository, github, algolia_index, provider, monkeypatch
+):
+    github.files = [github_file("a.py", RETRY)]
+    await run(db_session, repository)
+
+    async def failing(texts, kind="document"):
+        raise embeddings.EmbeddingError("provider down")
+
+    monkeypatch.setattr(embeddings, "embed", failing)
+    assert client.get(SUGGESTIONS, params={"query": "retry", "mode": "semantic"}).json() == {"suggestions": []}
+    monkeypatch.setattr(get_settings(), "embedding_api_key", None)
+    assert client.get(SUGGESTIONS, params={"query": "retry", "mode": "semantic"}).json() == {"suggestions": []}

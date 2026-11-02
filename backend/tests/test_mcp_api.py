@@ -53,6 +53,7 @@ def test_capabilities(client):
     body = client.get(f"{BASE}/mcp/capabilities").json()
     assert body["name"] and body["version"]
     assert body["capabilities"] == {"tools": True, "resources": True, "prompts": True}
+    assert body["semantic_search"] is False  # conftest pins no embeddings key
     assert "find_patterns" in body["tools"]
 
 

@@ -133,6 +133,25 @@ describe("CodeSageAPI", () => {
     expect(result.pages).toBe(3);
   });
 
+  it("sends mode only for a semantic search or suggestion, and reads capabilities", async () => {
+    const empty = { query: "q", repository: null, total_hits: 0, page: 0, pages: 0, results: [] };
+    const { api, calls } = makeApi({ tool: "search_code", result: empty, is_error: false, error: null });
+    await api.searchCode({ query: "q", mode: "semantic" });
+    await api.searchCode({ query: "q", mode: "keyword" });
+    const argsOf = (i: number) => (calls[i].body as { arguments: Record<string, unknown> }).arguments;
+    expect(argsOf(0).mode).toBe("semantic");
+    expect(argsOf(1)).not.toHaveProperty("mode");
+
+    await api.getSearchSuggestions("qq", { mode: "semantic" });
+    await api.getSearchSuggestions("qq");
+    expect(calls[2].params).toMatchObject({ query: "qq", mode: "semantic" });
+    expect(calls[3].params?.mode).toBeUndefined();
+
+    const caps = makeApi({ semantic_search: true });
+    expect(await caps.api.getCapabilities()).toEqual({ semantic_search: true });
+    expect(caps.calls[0].url).toBe("/ai/mcp/capabilities");
+  });
+
   it("maps is_error to a thrown MCPToolError", async () => {
     const { api } = makeApi({
       tool: "search_code",
