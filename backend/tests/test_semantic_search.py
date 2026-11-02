@@ -169,3 +169,21 @@ async def test_semantic_search_needs_a_key(db_session, repository, provider, mon
 
     with pytest.raises(ToolError, match="EMBEDDING_API_KEY"):
         await call_tool(db_session, "search_code", {"query": "retry", "mode": "semantic"})
+
+
+async def test_semantic_pages_go_past_algolias_1000_hit_limit(
+    db_session, repository, github, algolia_index, provider, monkeypatch
+):
+    from app.services import mcp_tools
+
+    github.files = [github_file("a.py", RETRY), github_file("b.py", STORE)]
+    await run(db_session, repository)
+    monkeypatch.setattr(mcp_tools, "MAX_SEARCH_HITS", 1)
+
+    result = await call_tool(db_session, "search_code", {"query": "store", "mode": "semantic", "limit": 1, "page": 1})
+
+    assert (result["pages"], len(result["results"])) == (2, 1)
+
+
+def test_the_suite_never_sees_a_real_embeddings_key():
+    assert not embeddings.is_configured()

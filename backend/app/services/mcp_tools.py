@@ -195,15 +195,15 @@ async def search_code(db: Session, args: schemas.SearchCodeArgs) -> dict:
             "pages": 0,
             "results": [],
         }
+    # Semantic search ranks every definition itself, so Algolia's page limit below doesn't apply
+    if args.mode == "semantic":
+        return await _semantic_search(db, args, repository)
     # Algolia pages through the first 1000 hits only; past that it reports none at all
     if args.page * args.limit >= MAX_SEARCH_HITS:
         raise ToolError(
             f"Search returns only the first {MAX_SEARCH_HITS} hits; narrow the query, "
             "or use list_definitions to list everything"
         )
-
-    if args.mode == "semantic":
-        return await _semantic_search(db, args, repository)
 
     service = algolia_service.AlgoliaService()
     if not service.is_available():

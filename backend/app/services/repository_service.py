@@ -643,8 +643,7 @@ class RepositoryService:
         """
         model = embeddings.model_name()
         rows = (
-            self.db.query(CodeEntity, CodeFile.file_path, CodeFile.content)
-            .join(CodeFile, CodeEntity.file_id == CodeFile.id)
+            self.db.query(CodeEntity)
             .filter(
                 CodeEntity.repository_id == repository_id,
                 CodeEntity.file_id > self._cut,
@@ -655,16 +654,24 @@ class RepositoryService:
         )
         if not rows:
             return 0
+        # Each file once, split once: a join would copy a file's content for every definition in it
+        files = {
+            file_id: (path, content.splitlines())
+            for file_id, path, content in self.db.query(CodeFile.id, CodeFile.file_path, CodeFile.content)
+            .filter(CodeFile.id.in_({entity.file_id for entity in rows}))
+        }
         texts = []
-        for entity, path, content in rows:
-            lines = content.splitlines()[(entity.start_line or 1) - 1 : entity.end_line or None]
-            texts.append(f"{entity.entity_type} {entity.entity_name} in {path}\n" + "\n".join(lines))
+        for entity in rows:
+            path, lines = files[entity.file_id]
+            body = lines[(entity.start_line or 1) - 1 : entity.end_line or None]
+            texts.append(f"{entity.entity_type} {entity.entity_name} in {path}\n" + "\n".join(body))
+        del files
         try:
             vectors = await embeddings.embed(texts)
         except embeddings.EmbeddingError as e:
             logger.warning("Could not embed definitions", repository_id=repository_id, error=str(e))
             return len(rows)
-        for (entity, _, _), vector in zip(rows, vectors, strict=True):
+        for entity, vector in zip(rows, vectors, strict=True):
             entity.embedding, entity.embedding_model = vector, model
         await asyncio.to_thread(self.db.commit)
         return 0
