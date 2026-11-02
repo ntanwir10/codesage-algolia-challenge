@@ -102,6 +102,8 @@ On port 80, `/health` is proxied to the backend and everything else gets a `301`
    docker run --rm httpd:alpine htpasswd -nbB <user> <password> > deployment/htpasswd   # bcrypt entry
    ```
 
+   Use a long random password, for example from `openssl rand -base64 24`. nginx allows each address 10 requests a second, in bursts of up to 50, and answers `429` past that. The limit runs before the login, so it also slows password guessing.
+
 2. **Create the certificate.** `deployment/ssl/` must hold `cert.pem` and `key.pem`. For a self-signed pair:
 
    ```bash
@@ -142,6 +144,7 @@ With a key set, the backend answers only to loopback hosts, the hosts in `CORS_O
 - **Overwritten, not appended.** nginx sets `X-Forwarded-For` to the real client address and `X-Forwarded-Proto` to `https`, and clears `Authorization`. A client can't choose its own address for rate limiting.
 - **The key.** nginx sets `X-API-Key` itself on `/api` and `/ws`. Only `${CODESAGE_API_KEY}` is substituted in the template (`NGINX_ENVSUBST_FILTER`); nginx's own `$variables` are left alone.
 - **uvicorn trust.** `Dockerfile.prod` starts uvicorn with `--forwarded-allow-ips "*"`. That is safe only because the backend has no published port and nginx is the only peer that can reach it. Keep it that way.
+- **Behind a load balancer or CDN.** nginx takes the client address from the connection, which would then always be the balancer's, so every user would share one rate limit and one WebSocket cap. Add `set_real_ip_from <the balancer's address range>;` and `real_ip_header X-Forwarded-For;` to the 443 server so nginx reads the client's address from the balancer's header. List only ranges you control: anyone else can set that header.
 - **Limits.** `client_max_body_size` is 2 MB, and `/ws` allows idle connections for an hour.
 
 ### MCP clients against prod

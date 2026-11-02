@@ -130,6 +130,11 @@ jobs:
             -v "$PWD/deployment/nginx.prod.conf.template:/etc/nginx/templates/default.conf.template:ro" \
             -v "$RUNNER_TEMP/htpasswd:/etc/nginx/htpasswd:ro" -v "$RUNNER_TEMP/ssl:/etc/nginx/ssl:ro" \
             nginx:alpine sh -c '/docker-entrypoint.d/20-envsubst-on-templates.sh && nginx -t'
+      # The backend trusts X-Forwarded-For for per-client limits: every proxied location must overwrite it
+      - name: Prod nginx overwrites X-Forwarded-For
+        run: >-
+          test "$(grep -c 'proxy_pass' deployment/nginx.prod.conf.template)"
+          = "$(grep -cF 'X-Forwarded-For $remote_addr;' deployment/nginx.prod.conf.template)"
       # Smoke test: run the dev stack (this also builds the frontend image) and check both containers answer
       - name: Start the dev stack
         env:

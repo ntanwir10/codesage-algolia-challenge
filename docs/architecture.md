@@ -265,8 +265,9 @@ Limits come from slowapi, per client address, and can be turned off with `ENABLE
 `deployment/nginx.prod.conf.template` is the only thing that holds the key in production:
 
 - **TLS and login.** Port 443 requires basic auth, with the login file in `deployment/htpasswd`. Port 80 answers `/health` and redirects everything else to HTTPS.
+- **Request limit.** Port 443 allows each address 10 requests a second, in bursts of up to 50, then answers `429`. It runs before the login, so it also slows password guessing.
 - **Key injection.** nginx sets `X-API-Key` on every `/api/` and `/ws` request and clears `Authorization`, so the browser never holds the key.
-- **Forwarding.** It passes `Host` with its port, `X-Forwarded-For` and `X-Forwarded-Proto: https`, which the origin check and the per-client WebSocket cap rely on.
+- **Forwarding.** It passes `Host` with its port, `X-Forwarded-For` and `X-Forwarded-Proto: https`, which the origin check and the per-client WebSocket cap rely on. `X-Forwarded-For` is overwritten with the connection's address, never appended to, and CI checks that every proxied location does so.
 - **Health.** `/health` skips basic auth. It returns `200` for `healthy` and `degraded` (Algolia unreachable or not configured) and `503` only when the database fails, so the Docker healthcheck stays green while Algolia is unset.
 
 The bridge sends the key itself when it talks to the backend directly. Through nginx it uses the basic-auth login instead, and nginx supplies the key. It refuses to send either over plain `http://` to a non-loopback host.
