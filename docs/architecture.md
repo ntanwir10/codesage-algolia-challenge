@@ -274,7 +274,7 @@ The bridge sends the key itself when it talks to the backend directly. Through n
 ## Known limitations
 
 - **One worker.** Job state, the two-run limit and WebSocket subscriptions live in the process, so run exactly one worker.
-- **SQLite only.** The database is a single local file.
+- **SQLite by default.** The database is a single local file unless `DATABASE_URL` names Postgres (`postgresql://` maps to the psycopg 3 driver). `tests/test_postgres.py` runs against a real server in CI: the migrations, `bytea` vectors and the job claim.
 - **Synchronous Algolia client.** Calls run in worker threads.
 - **Partial results.** A repository over 1000 files or 100 MB, or too large for the trees API, is indexed in part. Source files are kept first, then tests, docs and data files.
 - **No automatic retry.** An interrupted or failed run waits for a manual reprocess.

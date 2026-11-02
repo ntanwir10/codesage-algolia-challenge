@@ -5,9 +5,10 @@
 fastapi==0.161.1
 uvicorn[standard]==0.54.0
 
-# Database and migrations (SQLite)
+# Database and migrations (SQLite by default, Postgres optional)
 sqlalchemy==2.1.6
 alembic==1.20.1
+psycopg[binary]==3.3.6  # Postgres, when DATABASE_URL names one
 
 # Algolia search (v4, the synchronous client; calls run in a thread pool)
 algoliasearch==4.48.0

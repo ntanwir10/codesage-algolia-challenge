@@ -57,8 +57,17 @@ class Settings(BaseSettings):
     # Database Settings
     database_url: str = Field(
         default="sqlite:///./codesage.db",
-        description="Database URL (SQLite by default)",
+        description="Database URL: SQLite by default, or postgresql://user:password@host/db",
     )
+
+    @field_validator("database_url")
+    @classmethod
+    def _postgres_driver(cls, url: str) -> str:
+        """postgres:// and postgresql:// mean psycopg 3, the Postgres driver CodeSage installs"""
+        for prefix in ("postgres://", "postgresql://"):
+            if url.startswith(prefix):
+                return "postgresql+psycopg://" + url[len(prefix) :]
+        return url
     sql_echo: bool = Field(default=False, description="Log every SQL statement")
 
     # MCP Server Settings
