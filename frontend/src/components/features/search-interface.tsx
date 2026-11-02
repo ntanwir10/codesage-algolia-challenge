@@ -9,7 +9,7 @@ import { describeError, type DescribedError } from "@/lib/errors";
 import { ENTITY_TYPES, fileViewerPath, isHttpUrl } from "@/lib/utils";
 import { Link, useSearchParams } from "react-router-dom";
 import { Highlight } from "@/components/ui/highlight";
-import type { EntityType, SearchHit } from "@/types/mcp";
+import type { EntityType, SearchHit, SearchMode } from "@/types/mcp";
 import type { RepositoryStatus } from "@/types/repository";
 
 interface SearchInterfaceProps {
@@ -24,6 +24,8 @@ interface SearchInterfaceProps {
 
 const PAGE_SIZE = 10;
 const BLUR_CLOSE_MS = 150;
+// Each semantic suggestion costs an embeddings call, so wait a little longer for typing to stop
+const SUGGEST_DELAY_MS = { keyword: 300, semantic: 500 };
 
 export function SearchInterface({
   repositoryId,
@@ -36,6 +38,12 @@ export function SearchInterface({
   const [searchQuery, setSearchQuery] = useState("");
   const [language, setLanguage] = useState("");
   const [entityType, setEntityType] = useState<EntityType | "">("");
+  const [params, setParams] = useSearchParams();
+  // Kept in the URL with the query, so Back from the file viewer returns to the same ranking
+  const [mode, setMode] = useState<SearchMode>(params.get("mode") === "semantic" ? "semantic" : "keyword");
+  const [semanticAvailable, setSemanticAvailable] = useState(false);
+  // Whether the shown results came from a semantic search (they rank everything, so no count)
+  const [rankedByMeaning, setRankedByMeaning] = useState(false);
   // The query that produced the current results (pagination must reuse it,
   // not whatever is currently typed in the input).
   const [activeQuery, setActiveQuery] = useState("");
@@ -51,7 +59,6 @@ export function SearchInterface({
   const [totalHits, setTotalHits] = useState(0);
 
   const searchInputRef = useRef<HTMLInputElement>(null);
-  const [params, setParams] = useSearchParams();
   const blurTimer = useRef<ReturnType<typeof setTimeout> | undefined>(
     undefined
   );
@@ -60,6 +67,20 @@ export function SearchInterface({
   const suppressedFor = useRef<string | null>(null);
 
   useEffect(() => () => clearTimeout(blurTimer.current), []);
+
+  // Offer search by meaning only when the server has an embeddings key
+  useEffect(() => {
+    let cancelled = false;
+    api
+      .getCapabilities()
+      .then((caps) => {
+        if (!cancelled) setSemanticAvailable(caps.semantic_search === true);
+      })
+      .catch(() => {}); // keyword search still works
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   // Debounced suggestions; stale responses are aborted and ignored.
   useEffect(() => {
@@ -75,6 +96,7 @@ export function SearchInterface({
         const result = await api.getSearchSuggestions(searchQuery, {
           repositoryId,
           limit: 5,
+          mode,
           signal: controller.signal,
         });
         // A search submitted after the timer started doesn't change searchQuery,
@@ -87,13 +109,13 @@ export function SearchInterface({
         setSuggestions([]);
         setShowSuggestions(false);
       }
-    }, 300);
+    }, SUGGEST_DELAY_MS[mode]);
     return () => {
       cancelled = true;
       controller.abort();
       clearTimeout(timeoutId);
     };
-  }, [searchQuery, canSearch, repositoryId]);
+  }, [searchQuery, canSearch, repositoryId, mode]);
 
   const runSearch = async (query: string, targetPage: number) => {
     const trimmed = query.trim();
@@ -113,9 +135,11 @@ export function SearchInterface({
         entity_type: entityType || undefined,
         limit: PAGE_SIZE,
         page: targetPage,
+        mode,
       });
       if (requestId !== searchRequestId.current) return; // superseded
       setSearchResults(response.results);
+      setRankedByMeaning(response.mode === "semantic");
       setTotalHits(response.total_hits);
       setPages(response.pages);
       setPage(response.page ?? targetPage);
@@ -125,6 +149,8 @@ export function SearchInterface({
         (current) => {
           const next = new URLSearchParams(current);
           next.set("q", trimmed);
+          if (mode === "semantic") next.set("mode", "semantic");
+          else next.delete("mode");
           return next;
         },
         { replace: true }
@@ -159,7 +185,7 @@ export function SearchInterface({
   useEffect(() => {
     if (activeQuery) void runSearch(activeQuery, 0);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- only filter changes re-run it
-  }, [language, entityType]);
+  }, [language, entityType, mode]);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -315,6 +341,17 @@ export function SearchInterface({
                 </option>
               ))}
             </select>
+            {semanticAvailable && (
+              <select
+                aria-label="Search mode"
+                value={mode}
+                onChange={(e) => setMode(e.target.value as SearchMode)}
+                className="border rounded-md px-2 py-1 bg-background"
+              >
+                <option value="keyword">Keyword</option>
+                <option value="semantic">By meaning</option>
+              </select>
+            )}
           </div>
         )}
 
@@ -355,8 +392,14 @@ export function SearchInterface({
           <div className="space-y-4">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <p className="text-sm text-muted-foreground">
-                Found {totalHits.toLocaleString()} result
-                {totalHits !== 1 ? "s" : ""} for &ldquo;{activeQuery}&rdquo;
+                {rankedByMeaning ? (
+                  <>Ranked by meaning for &ldquo;{activeQuery}&rdquo;</>
+                ) : (
+                  <>
+                    Found {totalHits.toLocaleString()} result
+                    {totalHits !== 1 ? "s" : ""} for &ldquo;{activeQuery}&rdquo;
+                  </>
+                )}
               </p>
 
               {pages > 1 && (
@@ -418,11 +461,21 @@ export function SearchInterface({
                         </a>
                       )}
                     </h4>
-                    {result.entity_type && (
-                      <span className="bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-200 px-2 py-1 rounded text-xs">
-                        {result.entity_type}
-                      </span>
-                    )}
+                    <div className="flex shrink-0 flex-wrap justify-end gap-1">
+                      {result.score !== undefined && (
+                        <span
+                          title="Cosine similarity between your query and this definition; higher is closer"
+                          className="bg-blue-50 dark:bg-blue-950/40 text-blue-700 dark:text-blue-300 px-2 py-1 rounded text-xs"
+                        >
+                          similarity {result.score.toFixed(2)}
+                        </span>
+                      )}
+                      {result.entity_type && (
+                        <span className="bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-200 px-2 py-1 rounded text-xs">
+                          {result.entity_type}
+                        </span>
+                      )}
+                    </div>
                   </div>
 
                   <div className="space-y-2">

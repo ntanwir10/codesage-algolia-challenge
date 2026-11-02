@@ -260,6 +260,39 @@ async def search_code(db: Session, args: schemas.SearchCodeArgs) -> dict:
 
 
 
+def rank_definitions(
+    db: Session,
+    query_vector,
+    repository_id: int | None,
+    language: str | None = None,
+    entity_type: str | None = None,
+) -> list[tuple[float, CodeEntity, str, str]]:
+    """Definitions with a vector, closest in meaning first, as (score, entity, path, language). Blocking"""
+    # Only vectors from the current model compare; a repository being reindexed is left out
+    # until it completes, since its old and new rows both exist meanwhile
+    query = (
+        db.query(CodeEntity, CodeFile.file_path, CodeFile.language)
+        .join(CodeFile, CodeEntity.file_id == CodeFile.id)
+        .filter(CodeEntity.embedding_model == embeddings.model_name())
+    )
+    if repository_id is not None:
+        query = query.filter(CodeEntity.repository_id == repository_id)
+    else:
+        query = query.join(Repository, Repository.id == CodeEntity.repository_id).filter(
+            Repository.status == "completed"
+        )
+    if language:
+        query = query.filter(CodeFile.language == language)
+    if entity_type:
+        query = query.filter(CodeEntity.entity_type == entity_type)
+    scored = [
+        (embeddings.similarity(query_vector, embeddings.unpack(entity.embedding)), entity, path, file_language)
+        for entity, path, file_language in query
+    ]
+    scored.sort(key=lambda row: row[0], reverse=True)
+    return scored
+
+
 async def _semantic_search(db: Session, args: schemas.SearchCodeArgs, repository: Repository | None) -> dict:
     """Rank definitions by how close their vectors are to the query's (bring your own key)"""
     if not embeddings.is_configured():
@@ -270,34 +303,14 @@ async def _semantic_search(db: Session, args: schemas.SearchCodeArgs, repository
         [blob] = await embeddings.embed([args.query], kind="query")
     except embeddings.EmbeddingError as exc:
         raise ToolError(f"Semantic search is unavailable: {exc}") from exc
-    query_vector = embeddings.unpack(blob)
-
-    def rank():
-        # Only vectors from the current model compare; a repository being reindexed is left out
-        # until it completes, since its old and new rows both exist meanwhile
-        query = (
-            db.query(CodeEntity, CodeFile.file_path, CodeFile.language)
-            .join(CodeFile, CodeEntity.file_id == CodeFile.id)
-            .filter(CodeEntity.embedding_model == embeddings.model_name())
-        )
-        if repository is not None:
-            query = query.filter(CodeEntity.repository_id == repository.id)
-        else:
-            query = query.join(Repository, Repository.id == CodeEntity.repository_id).filter(
-                Repository.status == "completed"
-            )
-        if args.language:
-            query = query.filter(CodeFile.language == args.language)
-        if args.entity_type:
-            query = query.filter(CodeEntity.entity_type == args.entity_type)
-        scored = [
-            (embeddings.similarity(query_vector, embeddings.unpack(entity.embedding)), entity, path, language)
-            for entity, path, language in query
-        ]
-        scored.sort(key=lambda row: row[0], reverse=True)
-        return scored
-
-    scored = await asyncio.to_thread(rank)
+    scored = await asyncio.to_thread(
+        rank_definitions,
+        db,
+        embeddings.unpack(blob),
+        repository.id if repository else None,
+        args.language,
+        args.entity_type,
+    )
     page = scored[args.page * args.limit : (args.page + 1) * args.limit]
     known = {repository.id: repository} if repository else {
         found.id: found

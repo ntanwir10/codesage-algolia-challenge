@@ -12,7 +12,8 @@ const queryInput = () => screen.getByRole("combobox", { name: /search query/i })
 // Results link into the file viewer, so they need a router
 const renderSearch = (ui: React.ReactElement) => render(ui, { wrapper: MemoryRouter });
 
-function mockApi() {
+function mockApi(semantic = false) {
+  vi.spyOn(api, "getCapabilities").mockResolvedValue({ semantic_search: semantic });
   const suggestions = vi
     .spyOn(api, "getSearchSuggestions")
     .mockResolvedValue(["debounce"]);
@@ -204,5 +205,88 @@ describe("SearchInterface states", () => {
     expect(await screen.findByText("Still indexing")).toBeInTheDocument();
     expect(screen.getByText("foo")).toBeInTheDocument();
     expect(screen.getByText("Page 1 of 2")).toBeInTheDocument();
+  });
+});
+
+describe("SearchInterface search by meaning", () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  const modeSelect = () => screen.queryByRole("combobox", { name: "Search mode" });
+
+  it("offers no mode switch when the server has no embeddings key", async () => {
+    mockApi(false);
+    renderSearch(<SearchInterface repositoryId={2} canSearch />);
+    await waitFor(() => expect(api.getCapabilities).toHaveBeenCalled());
+    expect(modeSelect()).not.toBeInTheDocument();
+  });
+
+  it("searches and suggests by meaning, and shows each hit's similarity", async () => {
+    const suggestions = mockApi(true);
+    const hit = { entity_name: "createStore", file_path: "src/vanilla.ts", line_start: 60, line_end: 97, score: 0.7134 } as SearchHit;
+    const search = vi.spyOn(api, "searchCode").mockResolvedValue({
+      query: "make a store",
+      repository: "2",
+      mode: "semantic",
+      total_hits: 1012,
+      page: 0,
+      pages: 102,
+      results: [hit],
+    });
+    renderSearch(<SearchInterface repositoryId={2} canSearch />);
+    await userEvent.selectOptions(await screen.findByRole("combobox", { name: "Search mode" }), "semantic");
+    await userEvent.type(queryInput(), "make a store");
+    await waitFor(() =>
+      expect(suggestions).toHaveBeenCalledWith("make a store", expect.objectContaining({ mode: "semantic" }))
+    );
+    await userEvent.type(queryInput(), "{enter}");
+
+    await waitFor(() => expect(search).toHaveBeenCalledWith(expect.objectContaining({ mode: "semantic" })));
+    expect(await screen.findByText(/Ranked by meaning for/)).toBeInTheDocument();
+    expect(screen.queryByText(/Found 1,012/)).not.toBeInTheDocument();
+    expect(screen.getByText("similarity 0.71")).toBeInTheDocument();
+  });
+
+  it("keeps the mode in the URL, so a reload or Back reruns the same ranking", async () => {
+    mockApi(true);
+    const search = vi.spyOn(api, "searchCode").mockResolvedValue({
+      query: "store",
+      repository: "2",
+      mode: "semantic",
+      total_hits: 0,
+      page: 0,
+      pages: 0,
+      results: [],
+    });
+    let location = "";
+    function Where() {
+      location = useLocation().search;
+      return null;
+    }
+    render(
+      <MemoryRouter initialEntries={["/repository/2?q=store&mode=semantic"]}>
+        <SearchInterface repositoryId={2} canSearch />
+        <Where />
+      </MemoryRouter>
+    );
+    await waitFor(() => expect(search).toHaveBeenCalledWith(expect.objectContaining({ query: "store", mode: "semantic" })));
+    await userEvent.selectOptions(await screen.findByRole("combobox", { name: "Search mode" }), "keyword");
+    await waitFor(() => expect(location).toBe("?q=store"));
+  });
+
+  it("shows no similarity on keyword hits", async () => {
+    mockApi(true);
+    const hit = { entity_name: "foo", file_path: "a.py", line_start: 1, line_end: 2 } as SearchHit;
+    vi.spyOn(api, "searchCode").mockResolvedValue({
+      query: "foo",
+      repository: "2",
+      total_hits: 1,
+      page: 0,
+      pages: 1,
+      results: [hit],
+    });
+    renderSearch(<SearchInterface repositoryId={2} canSearch />);
+    await userEvent.type(queryInput(), "foo{enter}");
+    expect(await screen.findByText(/Found 1 result/)).toBeInTheDocument();
+    expect(screen.queryByText(/similarity/)).not.toBeInTheDocument();
   });
 });

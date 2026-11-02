@@ -300,12 +300,12 @@ The bridge uses these under `/api/v1/ai`. You can call them directly. "Key" mean
 
 | Endpoint | Key | Rate limit | Purpose |
 | --- | --- | --- | --- |
-| `GET /mcp/capabilities` | no | none | Server name, version, tool names |
+| `GET /mcp/capabilities` | no | none | Server name, version, tool names, and `semantic_search` (whether an embeddings key is set) |
 | `GET /mcp/tools` | no | none | Tool list with JSON Schemas |
 | `POST /mcp/tools/call` | yes | 30/minute | Run a tool |
 | `GET /mcp/resources` | no | none | Resource list |
 | `GET /mcp/resources/read?uri=...` | yes | 30/minute | Read a resource |
-| `GET /search/suggestions` | yes | 100/minute | Entity names for auto-complete |
+| `GET /search/suggestions` | yes | 100/minute | Entity names for auto-complete; `mode=semantic` names the definitions closest in meaning |
 
 ```bash
 curl -X POST http://127.0.0.1:8001/api/v1/ai/mcp/tools/call \

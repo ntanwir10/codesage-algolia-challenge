@@ -14,6 +14,8 @@ import type {
   SearchQuery,
   SearchResponse,
   SearchSuggestionsResponse,
+  SearchMode,
+  MCPCapabilities,
   DefinitionsResponse,
   EntityType,
   FileContent,
@@ -203,6 +205,7 @@ export class CodeSageAPI {
     if (query.repository) args.repository = query.repository;
     if (query.language) args.language = query.language;
     if (query.entity_type) args.entity_type = query.entity_type;
+    if (query.mode === "semantic") args.mode = "semantic";
     return this.callTool<SearchResponse>("search_code", args);
   }
 
@@ -238,7 +241,7 @@ export class CodeSageAPI {
 
   async getSearchSuggestions(
     query: string,
-    options: { repositoryId?: number; limit?: number; signal?: AbortSignal } = {}
+    options: { repositoryId?: number; limit?: number; mode?: SearchMode; signal?: AbortSignal } = {}
   ): Promise<string[]> {
     const response = await this.client.get<SearchSuggestionsResponse>(
       "/ai/search/suggestions",
@@ -247,11 +250,17 @@ export class CodeSageAPI {
           query,
           limit: options.limit ?? 5,
           repository_id: options.repositoryId,
+          mode: options.mode === "semantic" ? "semantic" : undefined,
         },
         signal: options.signal,
       }
     );
     return response.data.suggestions || [];
+  }
+
+  async getCapabilities(): Promise<MCPCapabilities> {
+    const response = await this.client.get<MCPCapabilities>("/ai/mcp/capabilities");
+    return response.data;
   }
 
   // Health check lives at the origin root, not under the API base.
