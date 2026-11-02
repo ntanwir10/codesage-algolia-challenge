@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { AxiosError } from "axios";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
@@ -223,6 +223,23 @@ describe("RepositoryPage error states", () => {
   it("shows the progress card for a pending repository", async () => {
     const pending = { ...repository, status: "pending" as const };
     renderPage(pending);
+    expect(await screen.findByText("Processing Status")).toBeInTheDocument();
+  });
+});
+
+describe("RepositoryPage reprocess", () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it("shows the run as processing at once, while the server still reads completed", async () => {
+    // The server keeps a completed repository "completed" until its job starts
+    const reprocess = vi.spyOn(api, "reprocessRepository").mockResolvedValue({});
+    renderPage(repository);
+
+    await userEvent.click(await screen.findByRole("button", { name: "Reprocess" }));
+    await userEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Reprocess" }));
+
+    expect(reprocess).toHaveBeenCalledWith(1);
+    // Processing again, so the status poll keeps running until the job reports in
     expect(await screen.findByText("Processing Status")).toBeInTheDocument();
   });
 });

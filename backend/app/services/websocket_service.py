@@ -162,10 +162,6 @@ class WebSocketManager:
             repository_id, {"type": "repository_status", "data": data}
         )
 
-    def get_connection_count(self) -> int:
-        """Get the number of active connections"""
-        return len(self.active_connections)
-
     def is_full_for(self, websocket: WebSocket) -> bool:
         """Whether accepting this socket would pass the global or its client's connection cap"""
         if len(self.active_connections) >= MAX_CONNECTIONS:

@@ -27,7 +27,7 @@ from app.models.repository import Repository
 from app.schemas.repository import RepositoryCreate
 from app.services import algolia_service, embeddings
 from app.services.github_service import FileSelector, quote_path
-from app.services.repository_service import RepositoryAddError, RepositoryService
+from app.services.repository_service import RepositoryAddError, RepositoryService, latest_files
 from app.services.repository_service import add_repository as create_repository
 from codesage_mcp import schemas
 
@@ -118,7 +118,12 @@ def _require_ready(repository: Repository) -> None:
 
 
 def _entity_counts(db: Session) -> dict[int, int]:
-    rows = db.query(CodeEntity.repository_id, func.count()).group_by(CodeEntity.repository_id).all()
+    rows = (
+        db.query(CodeEntity.repository_id, func.count())
+        .filter(CodeEntity.file_id.in_(latest_files()))
+        .group_by(CodeEntity.repository_id)
+        .all()
+    )
     return dict(rows)
 
 
@@ -701,7 +706,9 @@ async def read_resource(db: Session, uri: str) -> dict:
         repository = db.get(Repository, repository_id) if repository_id < 2**63 else None
         if repository is None:
             raise ToolError(f"Repository {match.group(1)} not found")
-        files = db.query(CodeFile).filter(CodeFile.repository_id == repository.id)
+        files = db.query(CodeFile).filter(
+            CodeFile.repository_id == repository.id, CodeFile.id.in_(latest_files(repository.id))
+        )
         total = files.count()
         rows = (
             files.with_entities(CodeFile.file_path, CodeFile.language, CodeFile.line_count)

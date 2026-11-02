@@ -208,7 +208,12 @@ async def update_repository(
         setattr(repository, key, value)
 
     if reindex:
-        start_processing(repository_id, force_reprocess=True)
+        try:
+            start_processing(repository_id, force_reprocess=True)
+        except RepositoryBusyError as e:
+            # A run started while check_source awaited the host (a scheduled refresh, another tab)
+            db.rollback()
+            raise HTTPException(status_code=409, detail=str(e)) from e
         repository.status = "processing"
         repository.error_message = None
     db.commit()
@@ -325,10 +330,13 @@ async def process_repository(
         start_processing(repository_id, force_reprocess=force_reprocess or incremental, incremental=incremental)
     except RepositoryBusyError as e:
         raise HTTPException(status_code=409, detail=str(e)) from e
-    # The job starts at the next await, so clients polling /status never read the old "failed"
-    repository.status = "processing"
-    repository.error_message = None
-    db.commit()
+    # The job starts at the next await, so clients polling /status never read the old "failed".
+    # A completed one stays so until the job flips it: the job keeps the previous index on
+    # failure only when it reads "completed"
+    if repository.status != "completed":
+        repository.status = "processing"
+        repository.error_message = None
+        db.commit()
 
     logger.info("Repository processing scheduled", repository_id=repository_id)
     return {

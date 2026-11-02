@@ -17,7 +17,7 @@ from collections import Counter
 from datetime import UTC, datetime, timedelta
 
 import structlog
-from sqlalchemy import func, or_
+from sqlalchemy import func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 
@@ -589,15 +589,16 @@ class RepositoryService:
 
     async def get_repository_statistics(self, repository: Repository) -> dict:
         """File, line and entity counts from the stored data"""
+        latest = latest_files(repository.id)
         entity_counts = dict(
             self.db.query(CodeEntity.entity_type, func.count())
-            .filter(CodeEntity.repository_id == repository.id)
+            .filter(CodeEntity.repository_id == repository.id, CodeEntity.file_id.in_(latest))
             .group_by(CodeEntity.entity_type)
             .all()
         )
         language_counts = dict(
             self.db.query(CodeFile.language, func.count())
-            .filter(CodeFile.repository_id == repository.id)
+            .filter(CodeFile.repository_id == repository.id, CodeFile.id.in_(latest))
             .group_by(CodeFile.language)
             .all()
         )
@@ -606,7 +607,7 @@ class RepositoryService:
             self.db.query(CodeFile.language, func.count())
             .select_from(CodeEntity)
             .join(CodeFile, CodeEntity.file_id == CodeFile.id)
-            .filter(CodeEntity.repository_id == repository.id)
+            .filter(CodeEntity.repository_id == repository.id, CodeFile.id.in_(latest))
             .group_by(CodeFile.language)
             .all()
         )
@@ -829,6 +830,15 @@ async def check_source(url: str, branch: str | None) -> None:
         await GitHubService().check_repository(url, branch)
     else:
         await git_source.check_remote(url, branch)
+
+
+def latest_files(repository_id: int | None = None):
+    """Ids of each path's newest row. Until a run completes, a repository also holds the previous
+    run's rows, so counting every row would count each file the run has reached twice"""
+    query = select(func.max(CodeFile.id)).group_by(CodeFile.repository_id, CodeFile.file_path)
+    if repository_id is not None:
+        query = query.where(CodeFile.repository_id == repository_id)
+    return query
 
 
 FRESHNESS_TTL = 600  # seconds; a page polling every few seconds still asks the host once per 10 minutes

@@ -12,6 +12,7 @@ from app.models.code_file import CodeFile
 from app.models.repository import Repository
 from app.services import mcp_tools
 from app.services.mcp_tools import ToolError, call_tool, resolve_repository
+from app.services.repository_service import RepositoryService
 
 BACKEND = Path(__file__).resolve().parent.parent
 
@@ -88,6 +89,25 @@ async def test_list_repositories(db_session, repo):
     assert row["id"] == repo.id and row["total_entities"] == 2 and row["total_files"] == 2
     assert row["processed_at"].startswith("2026-01-02") and row["processed_at"].endswith("+00:00")
     assert row["error_message"] is None and row["branch"] == "main"
+
+
+async def test_counts_and_file_lists_skip_the_previous_runs_rows(db_session, repo):
+    # Mid-reprocess a repository holds both runs' rows; a.ts is reprocessed, b.ts not reached yet
+    old = add_file(db_session, repo, "a.ts", "x")
+    add_entity(db_session, old, "a")
+    add_entity(db_session, add_file(db_session, repo, "b.ts", "y"), "b")
+    add_entity(db_session, add_file(db_session, repo, "a.ts", "x"), "a")
+    repo.status = "processing"
+    db_session.commit()
+
+    [row] = (await call_tool(db_session, "list_repositories", {}))["repositories"]
+    assert row["total_entities"] == 2
+    listing = (await mcp_tools.read_resource(db_session, f"codesage://repositories/{repo.id}/files"))["content"]
+    assert [f["file_path"] for f in listing["files"]] == ["a.ts", "b.ts"]
+    assert listing["total_files"] == 2
+    stats = await RepositoryService(db_session).get_repository_statistics(repo)
+    assert (stats["total_entities"], stats["files_by_language"]) == (2, {"typescript": 2})
+    assert stats["entities_by_language"] == {"typescript": 2}
 
 
 async def test_unknown_tool_and_bad_args(db_session):

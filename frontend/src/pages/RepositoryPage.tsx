@@ -164,7 +164,11 @@ export function RepositoryPage() {
         title: "Reprocessing started",
         description: "The repository will be re-analyzed and re-indexed.",
       });
-      queryClient.invalidateQueries({ queryKey: ["repository", repositoryId] });
+      // A completed repository reads "completed" until its job starts; refetching now could stop
+      // the status polling before the run shows, so mark it processing and let polling take over
+      queryClient.setQueryData<Repository | undefined>(["repository", repositoryId], (current) =>
+        current && { ...current, status: "processing", error_message: null }
+      );
       queryClient.invalidateQueries({ queryKey: ["repository-stats", repositoryId] });
     } catch (error) {
       const { message, status: httpStatus } = describeError(error);

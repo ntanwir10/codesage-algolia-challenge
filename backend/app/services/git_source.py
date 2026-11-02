@@ -259,6 +259,3 @@ class GitSource(FileSelector):
         return files
 
 
-async def fetch_files(url: str, branch: str | None = None) -> list[GitHubFile]:
-    return await GitSource().get_repository_files(url, branch)
-
