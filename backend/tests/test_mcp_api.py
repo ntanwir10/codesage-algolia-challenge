@@ -52,7 +52,7 @@ def test_get_on_call_route_is_gone(client):
 def test_capabilities(client):
     body = client.get(f"{BASE}/mcp/capabilities").json()
     assert body["name"] and body["version"]
-    assert body["capabilities"] == {"tools": True, "resources": True, "prompts": False}
+    assert body["capabilities"] == {"tools": True, "resources": True, "prompts": True}
     assert "find_patterns" in body["tools"]
 
 

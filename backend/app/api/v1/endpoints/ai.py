@@ -64,7 +64,7 @@ async def get_mcp_capabilities():
     return {
         "name": config["name"],
         "version": config["version"],
-        "capabilities": {"tools": True, "resources": True, "prompts": False},
+        "capabilities": config["capabilities"],
         "tools": list(schemas.TOOLS),
     }
 

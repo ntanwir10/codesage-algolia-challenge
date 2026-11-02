@@ -174,7 +174,7 @@ class Settings(BaseSettings):
             "capabilities": {
                 "tools": True,
                 "resources": True,
-                "prompts": False,
+                "prompts": True,
             },
         }
 
