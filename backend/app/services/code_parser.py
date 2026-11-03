@@ -9,6 +9,8 @@ logger = structlog.get_logger()
 
 BODY_MAX_LINES = 60
 BODY_MAX_CHARS = 2000
+# The owner names a nested definition's description is built from; deeper names keep their tail
+SCOPE_MAX_CHARS = 200
 
 
 @dataclass
@@ -28,7 +30,25 @@ class ParsedCodeEntity:
 def make_body(lines: list[str], line_start: int, line_end: int) -> str:
     """Source text of a 1-based inclusive line range, capped in lines and characters"""
     end = min(line_end, line_start - 1 + BODY_MAX_LINES)
-    return "\n".join(lines[line_start - 1:end])[:BODY_MAX_CHARS]
+    # Each line is cut before joining: a minified file is one huge line, shared by every entity in it
+    return "\n".join(line[:BODY_MAX_CHARS] for line in lines[line_start - 1:end])[:BODY_MAX_CHARS]
+
+
+def source_line(lines: list[str], number: int) -> str:
+    """One 1-based source line, capped like a body for the same reason"""
+    return lines[number - 1][:BODY_MAX_CHARS]
+
+
+def source_segment(lines: list[str], node: ast.AST) -> str:
+    """ast.get_source_segment from lines split once; it re-splits the whole file on every call"""
+    first, last = node.lineno - 1, node.end_lineno - 1
+    # Column offsets count UTF-8 bytes
+    head = lines[first].encode()
+    if first == last:
+        return head[node.col_offset:node.end_col_offset].decode("utf-8", "replace")
+    tail = lines[last].encode()[:node.end_col_offset]
+    return "\n".join([head[node.col_offset:].decode("utf-8", "replace"), *lines[first + 1:last],
+                      tail.decode("utf-8", "replace")])
 
 
 @dataclass(frozen=True)
@@ -112,6 +132,9 @@ class CodeParser:
             "hcl": self._parse_hcl,
         }
         self._ts_parsers = {}
+        # Parent of every node the current tree-sitter walk has queued, by node id. Node.parent walks
+        # down from the root each time, so using it per definition is quadratic in the nesting depth
+        self._parents = {}
 
     async def extract_entities(self, file_path: str, content: str, language: str) -> list[ParsedCodeEntity]:
         """
@@ -160,7 +183,7 @@ class CodeParser:
         # Extract imports
         for node in ast.walk(tree):
             if isinstance(node, (ast.Import, ast.ImportFrom)):
-                segment = ast.get_source_segment(content, node) or lines[node.lineno - 1]
+                segment = source_segment(lines, node) or lines[node.lineno - 1]
                 statement = " ".join(segment.split())
                 entities.append(ParsedCodeEntity(
                     entity_type="import",
@@ -192,7 +215,7 @@ class CodeParser:
                     line_end=node.end_lineno,
                     parameters=self._python_parameters(node.args),
                     return_type=ast.unparse(node.returns) if node.returns else None,
-                    content=lines[node.lineno - 1],
+                    content=source_line(lines, node.lineno),
                     body=make_body(lines, node.lineno, node.end_lineno)
                 ))
                 self._collect_python_definitions(node, lines, f"{qualified_name}.", False, entities)
@@ -207,7 +230,7 @@ class CodeParser:
                     line_start=node.lineno,
                     line_end=node.end_lineno,
                     parameters=[inheritance] if inheritance else None,
-                    content=lines[node.lineno - 1],
+                    content=source_line(lines, node.lineno),
                     body=make_body(lines, node.lineno, node.end_lineno)
                 ))
                 self._collect_python_definitions(node, lines, f"{qualified_name}.", True, entities)
@@ -362,7 +385,7 @@ class CodeParser:
                 description=f"Documentation section: {text}",
                 line_start=number,
                 line_end=line_end,
-                content=lines[number - 1],
+                content=source_line(lines, number),
                 body=make_body(lines, number, line_end),
             ))
         return entities
@@ -404,7 +427,7 @@ class CodeParser:
                     description=doc or f"Terraform {name}",
                     line_start=line_start,
                     line_end=line_end,
-                    content=lines[line_start - 1],
+                    content=source_line(lines, line_start),
                     body=make_body(lines, line_start, line_end),
                 ))
             comments = []
@@ -428,6 +451,7 @@ class CodeParser:
         lines = content.split("\n")
         entities = []
         claimed = set()  # anonymous function nodes already emitted under another name
+        self._parents = {}
 
         # Iterative DFS keeps source order and avoids Python recursion limits on deep trees.
         # Stack items: (node, owner scope string, directly inside a class body)
@@ -464,8 +488,10 @@ class CodeParser:
                 if handled:
                     child_scope, child_in_class = handled, False
 
+            child_scope = child_scope[-SCOPE_MAX_CHARS:]  # deep nesting would grow it per level
             for child in reversed(node.children):
                 if child.is_named:
+                    self._parents[child.id] = node
                     stack.append((child, child_scope, child_in_class))
         return entities
 
@@ -481,11 +507,14 @@ class CodeParser:
             end -= 1
         return start, end
 
+    def _parent(self, node):
+        return self._parents.get(node.id)
+
     def _outer(self, node):
         """Widen a node's range to include wrappers such as `export` and `const x =`"""
         outer = node
-        while outer.parent is not None and outer.parent.type in _WRAPPERS:
-            outer = outer.parent
+        while (parent := self._parent(outer)) is not None and parent.type in _WRAPPERS:
+            outer = parent
         return outer
 
     def _emit_import(self, spec, node, lines, entities):
@@ -515,7 +544,7 @@ class CodeParser:
             line_start=start,
             line_end=end,
             parameters=parents or None,
-            content=lines[start - 1].strip(),
+            content=source_line(lines, start).strip(),
             body=make_body(lines, start, end),
         ))
 
@@ -536,7 +565,7 @@ class CodeParser:
             line_end=end,
             parameters=parameters,
             return_type=return_type,
-            content=lines[start - 1].strip(),
+            content=source_line(lines, start).strip(),
             body=make_body(lines, start, end),
         ))
 
@@ -660,7 +689,7 @@ class CodeParser:
             if left is not None and left.type == "member_expression":
                 left = left.child_by_field_name("property")
             name, value = self._text(left), node.child_by_field_name("right")
-        elif kind in _ANON_FUNCTIONS and node.parent is not None and node.parent.type == "export_statement":
+        elif kind in _ANON_FUNCTIONS and (parent := self._parent(node)) is not None and parent.type == "export_statement":
             name, value = "default", node
         while value is not None and value.type in _TRANSPARENT_WRAPPERS:
             # <T>fn puts the type first; every other wrapper puts the expression first
@@ -672,7 +701,8 @@ class CodeParser:
         range_node = node if kind in ("variable_declarator", "field_definition", "public_field_definition",
                                       "pair") else value
         if kind == "assignment_expression":
-            range_node = node.parent if node.parent is not None and node.parent.type == "expression_statement" else node
+            parent = self._parent(node)
+            range_node = parent if parent is not None and parent.type == "expression_statement" else node
         is_method = kind in ("field_definition", "public_field_definition")
         qualified = f"{scope}{name}"
         self._emit_function(spec, value, range_node, name, qualified, is_method and bool(scope), lines, entities)
