@@ -177,7 +177,8 @@ class CodeParser:
             # Python 2 sources, templates, pathologically nested code, etc.
             return self._parse_python_lines(content)
 
-        lines = content.split('\n')
+        # Lines as ast numbers them: a lone \r ends a line too (a \r\n line keeps its \r, as before)
+        lines = re.split(r"\r(?!\n)|\n", content)
         entities = []
 
         # Extract imports

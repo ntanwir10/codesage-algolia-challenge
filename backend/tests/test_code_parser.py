@@ -685,3 +685,12 @@ def test_import_segments_match_ast():
     assert len(nodes) == 4
     assert [source_segment(lines, n) for n in nodes] == [ast.get_source_segment(source, n) for n in nodes]
 
+
+async def test_python_lines_ending_in_a_lone_carriage_return_parse():
+    entities = await CodeParser().extract_entities("old.py", "import os\rdef f():\r    return 1\r", "python")
+
+    assert [(e.entity_type, e.name, e.line_start, e.content) for e in entities] == [
+        ("import", "import os", 1, "import os"),
+        ("function", "f", 2, "def f():"),
+    ]
+

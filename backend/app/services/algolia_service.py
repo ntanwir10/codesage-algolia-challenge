@@ -28,9 +28,8 @@ settings = get_settings()
 # Records per save_objects request (Algolia's recommended batch size)
 INDEX_BATCH_SIZE = 1000
 
-# Longest waits for Algolia to publish a task
+# Longest wait for Algolia to publish an indexing task
 INDEX_WAIT_SECONDS = 300
-DELETE_WAIT_SECONDS = 120
 
 # Characters of entity body stored with each record, well under the 10 KB record limit
 MAX_BODY_CHARS = 2000
@@ -355,12 +354,12 @@ class AlgoliaService:
         return value.replace("\\", "\\\\").replace('"', '\\"')
 
     async def delete_repository_index(
-        self, repository_id: int, wait: bool = False, run_filter: str | None = None
+        self, repository_id: int, run_filter: str | None = None
     ) -> bool:
         """Delete all indexed entities for a repository, or only those `run_filter` matches
         (e.g. `NOT run_id:"abc"` for every run but one).
 
-        Pass wait=True before re-indexing so the delete can't land after the new records.
+        Not waited on: Algolia applies an index's tasks in order, so later records still land after it.
         """
         if not self.is_available():
             return True
@@ -369,14 +368,8 @@ class AlgoliaService:
         if run_filter:
             filters += f" AND {run_filter}"
 
-        def delete():
-            response = self.index.delete_by({"filters": filters})
-            if wait:
-                # A timeout here fails the caller rather than risking stale records
-                self._wait_for_task(response, DELETE_WAIT_SECONDS)
-
         try:
-            await asyncio.to_thread(delete)
+            await asyncio.to_thread(self.index.delete_by, {"filters": filters})
         except Exception as e:
             logger.error(
                 "Failed to delete repository from Algolia",
