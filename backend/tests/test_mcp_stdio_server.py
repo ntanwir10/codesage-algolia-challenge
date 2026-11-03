@@ -11,11 +11,11 @@ from mcp.client.stdio import StdioServerParameters, stdio_client
 from mcp.shared.exceptions import MCPError
 
 from codesage_mcp.prompts import PROMPTS
-from codesage_mcp.schemas import TOOLS, input_schema
+from codesage_mcp.schemas import TOOLS, input_schema, output_schema
 from codesage_mcp.server import Config, build_server
 
 BACKEND_DIR = Path(__file__).resolve().parent.parent
-OK_BODY = {"tool": "t", "result": {"ok": True}, "is_error": False, "error": None}
+OK_BODY = {"tool": "t", "result": {"repositories": []}, "is_error": False, "error": None}
 
 
 class Backend:
@@ -71,6 +71,7 @@ async def test_tools_list_matches_schemas_without_backend():
     assert len(result.tools) == 8
     for tool in result.tools:
         assert tool.input_schema == input_schema(tool.name)
+        assert tool.output_schema == output_schema(tool.name)
     assert backend.requests == []
 
 
@@ -86,10 +87,19 @@ async def test_successful_call_returns_json_text_and_posts_expected_body():
         result = await client.call_tool("list_repositories", {})
     assert not result.is_error
     assert json.loads(result.content[0].text) == {"repositories": [{"id": 1}]}
+    assert result.structured_content == {"repositories": [{"id": 1}]}
     req = backend.requests[0]
     assert req.method == "POST"
     assert req.url.path == "/api/v1/ai/mcp/tools/call"
     assert json.loads(req.content) == {"tool_name": "list_repositories", "arguments": {}}
+
+
+@pytest.mark.parametrize("result", [[1, 2], "text", None])
+async def test_a_result_that_is_not_an_object_is_a_tool_error(result):
+    backend = Backend(lambda r: httpx.Response(200, json={**OK_BODY, "result": result}))
+    async with make_client(backend) as client:
+        reply = await client.call_tool("list_repositories", {})
+    assert reply.is_error and "unexpected response" in reply.content[0].text
 
 
 async def test_backend_is_error_maps_to_is_error():

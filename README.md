@@ -291,6 +291,8 @@ An unknown path shows "Page not found". A repository that doesn't exist says so;
 | `find_references` | Where a function, class or other name is defined and used: its definitions, then each whole-word use with the function or class it sits in, imports marked. Source comes before tests and docs. A text match, so comments and strings count too |
 | `add_repository` | Adds a repository by https URL and starts indexing. Public repositories on any git host; needs the API key |
 
+Every tool returns one JSON object as MCP `structuredContent`, described by an `outputSchema` in `tools/list`, and repeats it as text for older clients. See [Tools](docs/MCP_INTEGRATION_GUIDE.md#tools).
+
 The bridge also offers two prompts: ready-made requests that an MCP client can list for you to pick. **Explain this repository** (`explain_repository`, takes `repository`) walks the assistant through `analyze_repository`, `list_definitions` and `get_file`. **Where is this implemented?** (`find_implementation`, takes `feature` and an optional `repository`) goes through `search_code`, `list_definitions`, `find_references` and `get_file`, and answers with file paths and line ranges. A resource template, `codesage://repositories/{id}/files`, lists one repository's indexed files; see [Resources](docs/MCP_INTEGRATION_GUIDE.md#resources).
 
 The installer merges CodeSage into your client's config without touching other servers. It writes a backup first, and both files are mode 600 because they hold the key. Any other client that runs stdio MCP servers takes the same `command` and `env`; see [Manual install](docs/MCP_INTEGRATION_GUIDE.md#manual-install).

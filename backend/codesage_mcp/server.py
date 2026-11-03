@@ -31,7 +31,7 @@ from mcp.shared.exceptions import MCPError
 from pydantic import ValidationError
 
 from codesage_mcp.prompts import PROMPTS, get_prompt
-from codesage_mcp.schemas import TOOLS, input_schema
+from codesage_mcp.schemas import TOOLS, input_schema, output_schema
 
 logger = logging.getLogger("codesage_mcp")
 
@@ -271,8 +271,12 @@ class CodeSageBridge:
             return self._error(UNEXPECTED_RESPONSE)
         if body.get("is_error"):
             return self._error(str(body.get("error") or "Tool failed"))
-        text = json.dumps(body.get("result"), indent=2, default=str)
-        return types.CallToolResult(content=[types.TextContent(text=text)])
+        result = body.get("result")
+        if not isinstance(result, dict):  # structuredContent must be an object to match the tool's outputSchema
+            return self._error(UNEXPECTED_RESPONSE)
+        # The same JSON as text too, for clients that predate structuredContent
+        text = json.dumps(result, indent=2, default=str)
+        return types.CallToolResult(content=[types.TextContent(text=text)], structured_content=result)
 
     async def list_resources(self) -> types.ListResourcesResult:
         response = await self._resource_request("/mcp/resources")
@@ -330,7 +334,10 @@ def build_server(
         return types.ListToolsResult(
             tools=[
                 types.Tool(
-                    name=s.name, description=s.description, input_schema=input_schema(s.name)
+                    name=s.name,
+                    description=s.description,
+                    input_schema=input_schema(s.name),
+                    output_schema=output_schema(s.name),
                 )
                 for s in TOOLS.values()
             ]

@@ -4,7 +4,7 @@ This module is imported by both the backend and the standalone MCP server, so
 it must stay free of app, database, Algolia and settings imports.
 """
 
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -113,10 +113,93 @@ class AddRepositoryArgs(_Args):
     description: str | None = Field(default=None, description="Optional note describing the repository")
 
 
+class _Result(BaseModel):
+    # Clients validate structuredContent against this; extra keys stay allowed so the backend can add fields
+    model_config = ConfigDict(extra="allow")
+
+
+class ListRepositoriesResult(_Result):
+    repositories: list[dict[str, Any]] = Field(
+        description="id, name, url, branch, commit_sha, status, total_files, total_entities, error_message, processed_at"
+    )
+
+
+class SearchCodeResult(_Result):
+    query: str
+    repository: str | None
+    mode: str | None = None
+    total_hits: int
+    page: int
+    pages: int
+    results: list[dict[str, Any]] = Field(
+        description=(
+            "repository_id, repository, entity_name, entity_type, file_path, line_start, line_end, "
+            "language, signature, snippet, description, url; score in semantic mode"
+        )
+    )
+
+
+class GetFileResult(_Result):
+    repository: str
+    path: str
+    language: str | None
+    total_lines: int
+    start_line: int
+    end_line: int
+    truncated: bool
+    content: str
+
+
+class ListDefinitionsResult(_Result):
+    repository: str
+    total: int
+    definitions: list[dict[str, Any]] = Field(
+        description="entity_type, entity_name, file_path, line_start, line_end, signature, description"
+    )
+
+
+class AnalyzeRepositoryResult(_Result):
+    repository: str
+    top_directories: list[dict[str, Any]] = Field(description="directory, files")
+    largest_files: list[dict[str, Any]] = Field(description="file_path, line_count")
+    definitions_by_language: dict[str, int]
+
+
+class FindPatternsResult(_Result):
+    repository: str
+    pattern: str
+    regex: bool
+    total_matches: int
+    truncated: bool
+    matches: list[dict[str, Any]] = Field(description="file_path, line, text")
+
+
+class FindReferencesResult(_Result):
+    repository: str
+    name: str
+    definitions: list[dict[str, Any]] = Field(
+        description="entity_type, file_path, line_start, line_end, signature"
+    )
+    total_references: int
+    files: int
+    truncated: bool
+    references: list[dict[str, Any]] = Field(
+        description="file_path, line, text, kind ('import' or 'reference'), in (the enclosing function or class)"
+    )
+
+
+class AddRepositoryResult(_Result):
+    repository_id: int
+    name: str
+    status: str
+    message: str
+
+
 class ToolSpec(BaseModel):
     name: str
     description: str
     args_model: type[BaseModel]
+    result_model: type[BaseModel]
 
 
 TOOLS: dict[str, ToolSpec] = {
@@ -126,6 +209,7 @@ TOOLS: dict[str, ToolSpec] = {
             name="list_repositories",
             description="List the repositories indexed by CodeSage with their status and size.",
             args_model=ListRepositoriesArgs,
+            result_model=ListRepositoriesResult,
         ),
         ToolSpec(
             name="search_code",
@@ -135,11 +219,13 @@ TOOLS: dict[str, ToolSpec] = {
                 "locations, snippets and links to the source on GitHub, GitLab or Bitbucket."
             ),
             args_model=SearchCodeArgs,
+            result_model=SearchCodeResult,
         ),
         ToolSpec(
             name="get_file",
             description="Read a file from a repository with line numbers. Returns at most 400 lines per call.",
             args_model=GetFileArgs,
+            result_model=GetFileResult,
         ),
         ToolSpec(
             name="list_definitions",
@@ -148,6 +234,7 @@ TOOLS: dict[str, ToolSpec] = {
                 "repository, ordered by file and line."
             ),
             args_model=ListDefinitionsArgs,
+            result_model=ListDefinitionsResult,
         ),
         ToolSpec(
             name="analyze_repository",
@@ -156,11 +243,13 @@ TOOLS: dict[str, ToolSpec] = {
                 "languages, top directories and the largest files."
             ),
             args_model=AnalyzeRepositoryArgs,
+            result_model=AnalyzeRepositoryResult,
         ),
         ToolSpec(
             name="find_patterns",
             description="Find lines in a repository's files that match a literal string or a regular expression.",
             args_model=FindPatternsArgs,
+            result_model=FindPatternsResult,
         ),
         ToolSpec(
             name="find_references",
@@ -170,6 +259,7 @@ TOOLS: dict[str, ToolSpec] = {
                 "marking imports and naming the function or class each use sits in."
             ),
             args_model=FindReferencesArgs,
+            result_model=FindReferencesResult,
         ),
         ToolSpec(
             name="add_repository",
@@ -179,6 +269,7 @@ TOOLS: dict[str, ToolSpec] = {
                 "use list_repositories to follow progress, and search it once it is completed."
             ),
             args_model=AddRepositoryArgs,
+            result_model=AddRepositoryResult,
         ),
     ]
 }
@@ -187,3 +278,8 @@ TOOLS: dict[str, ToolSpec] = {
 def input_schema(name: str) -> dict:
     """JSON Schema for a tool's arguments"""
     return TOOLS[name].args_model.model_json_schema()
+
+
+def output_schema(name: str) -> dict:
+    """JSON Schema for a tool's structuredContent"""
+    return TOOLS[name].result_model.model_json_schema()
