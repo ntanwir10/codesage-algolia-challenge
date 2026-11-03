@@ -18,9 +18,19 @@ import { isHttpUrl, sourceLabel } from "@/lib/utils";
 import type { Repository } from "@/types/repository";
 
 // The most the list endpoint returns in one request
-const MAX_LISTED = 500;
+const PAGE_SIZE = 500;
 // The most repositories one WebSocket may subscribe to (MAX_SUBSCRIPTIONS_PER_CONNECTION on the server)
 const MAX_SUBSCRIPTIONS = 100;
+
+/** Every repository, a page at a time, since the list endpoint caps each request at PAGE_SIZE */
+async function loadAllRepositories(): Promise<Repository[]> {
+  const all: Repository[] = [];
+  for (;;) {
+    const page = await api.getRepositories({ skip: all.length, limit: PAGE_SIZE });
+    all.push(...page);
+    if (page.length < PAGE_SIZE) return all;
+  }
+}
 
 export function DashboardPage() {
   const { addToast } = useToast();
@@ -42,8 +52,7 @@ export function DashboardPage() {
     refetch,
   } = useQuery({
     queryKey: ["repositories"],
-    // The server's largest page; a note below says when there may be more
-    queryFn: () => api.getRepositories({ limit: MAX_LISTED }),
+    queryFn: loadAllRepositories,
     // Poll every ~3s while any repository is pending/processing.
     refetchInterval: (query) => {
       const data = query.state.data;
@@ -56,8 +65,6 @@ export function DashboardPage() {
   });
 
   // Newest first: ids grow with each repository added
-  // shortcut: sorts the first MAX_LISTED the server returns (oldest first), so past 500 repositories
-  // the newest can be missing; have the list endpoint order newest first if that ever happens
   const repositories = useMemo(() => [...(loaded ?? [])].sort((a, b) => b.id - a.id), [loaded]);
 
   // Live updates for repositories still being processed.
@@ -269,12 +276,6 @@ export function DashboardPage() {
             </CardContent>
           </Card>
         </div>
-
-        {repositories.length >= MAX_LISTED && (
-          <p className="text-sm text-amber-700 dark:text-amber-300">
-            Showing the first {MAX_LISTED} repositories; more may exist.
-          </p>
-        )}
 
         {/* Repository List */}
         {repositories.length === 0 ? (

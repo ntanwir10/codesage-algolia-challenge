@@ -83,7 +83,7 @@ async def test_embed_batches_keeps_order_and_normalises(provider, monkeypatch):
     assert provider["requests"][0] == ("Bearer test-key", {"model": "fake-1", "input": ["retry", "store"]})
     unpacked = [embeddings.unpack(blob) for blob in result]
     assert [max(range(4), key=lambda i: v[i]) for v in unpacked[:4]] == [0, 1, 2, 3]
-    assert all(abs(embeddings.similarity(v, v) - 1) < 1e-5 for v in unpacked)
+    assert all(abs(sum(x * x for x in v) - 1) < 1e-5 for v in unpacked)  # unit length
 
 
 async def test_embed_errors_say_the_status_but_never_echo_the_provider(provider):

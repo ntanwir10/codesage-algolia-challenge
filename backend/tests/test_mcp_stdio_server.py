@@ -463,6 +463,8 @@ async def test_missing_key_vs_wrong_key():
     cfg = Config(server_url="https://backend.test")
     missing = await tool_text(reply(401, json={"detail": "x"}), Config(server_url="https://backend.test"))
     assert "No API key is configured" in missing and "CODESAGE_API_KEY" in missing
+    # Every client's install target, not one client's
+    assert "install-cursor, install-vscode or install-windsurf" in missing
     wrong = await tool_text(reply(401, json={"detail": "x"}), Config(server_url=cfg.server_url, api_key="bad"))
     assert "rejected the API key" in wrong
     assert "No API key is configured" in await resource_text(reply(401), cfg)

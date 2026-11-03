@@ -27,5 +27,6 @@ slowapi==0.1.10
 
 tree-sitter-language-pack==1.22.1
 regex==2026.9.29
+numpy==2.5.4  # semantic search ranks every definition in one matrix product
 mcp==2.3.0
 httpx2==2.16.0

@@ -6,7 +6,6 @@ answer `{data: [{index, embedding}]}`. Off unless EMBEDDING_API_KEY is set.
 
 import array
 import math
-import operator
 from urllib.parse import urlsplit
 
 import aiohttp
@@ -81,10 +80,3 @@ def unpack(blob: bytes) -> array.array:
     vector = array.array("f")
     vector.frombytes(blob)
     return vector
-
-
-def similarity(a: array.array, b: array.array) -> float:
-    """Cosine similarity of two unit vectors"""
-    # shortcut: brute force in plain Python, about 0.1 s per 1000 definitions; switch to numpy
-    # or sqlite-vec if repositories grow past tens of thousands of definitions
-    return sum(map(operator.mul, a, b)) if len(a) == len(b) else -1.0

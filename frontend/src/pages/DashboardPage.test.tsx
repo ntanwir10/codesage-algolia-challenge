@@ -57,6 +57,21 @@ describe("DashboardPage", () => {
     expect(await screen.findByText("Repository not found")).toBeInTheDocument();
   });
 
+  it("lists every repository, a page of 500 at a time", async () => {
+    const all = Array.from({ length: 503 }, (_, i) => ({ ...repository, id: i + 1, name: `octo/repo-${i + 1}` }));
+    const list = vi
+      .spyOn(api, "getRepositories")
+      .mockImplementation(async (params) => all.slice(params?.skip ?? 0, (params?.skip ?? 0) + (params?.limit ?? 100)));
+    renderPage();
+
+    expect(await screen.findByText("octo/repo-503")).toBeInTheDocument();
+    expect(screen.getByText("octo/repo-1")).toBeInTheDocument();
+    expect(list.mock.calls.map(([params]) => params)).toEqual([
+      { skip: 0, limit: 500 },
+      { skip: 500, limit: 500 },
+    ]);
+  });
+
   it("lists the newest repository first", async () => {
     vi.spyOn(api, "getRepositories").mockResolvedValue([
       repository,

@@ -6,6 +6,7 @@ pydantic's env_file never override variables that are already set, so these
 keys and the local codesage.db never come from a developer's backend/.env.
 """
 
+import asyncio
 import os
 
 os.environ["DATABASE_URL"] = "sqlite://"
@@ -228,6 +229,38 @@ def algolia_index(monkeypatch):
 
     monkeypatch.setattr(algolia_module, "AlgoliaService", FakeAlgoliaService)
     return index
+
+
+@pytest.fixture
+async def async_api(db_session):
+    """API client on the test's own event loop, so a job an endpoint starts runs here and can be awaited"""
+    import httpx2 as httpx
+
+    from app.core.database import get_db
+    from app.main import app
+
+    app.dependency_overrides[get_db] = lambda: db_session
+    transport = httpx.ASGITransport(app=app, client=LOCAL)
+    try:
+        async with httpx.AsyncClient(transport=transport, base_url="http://localhost") as client:
+            yield client
+    finally:
+        app.dependency_overrides.clear()
+
+
+@pytest.fixture
+def wait_for_job():
+    """Await the background job of one repository (inline mode)"""
+    from app.services import repository_service
+
+    async def wait(repository_id: int) -> None:
+        for _ in range(500):
+            if not repository_service.is_processing(repository_id):
+                return
+            await asyncio.sleep(0.01)
+        raise AssertionError(f"the job for repository {repository_id} did not finish")
+
+    return wait
 
 
 class FakeGitHub:
