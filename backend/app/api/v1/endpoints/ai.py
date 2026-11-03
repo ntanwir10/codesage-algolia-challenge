@@ -104,6 +104,7 @@ async def list_mcp_tools():
             "name": spec.name,
             "description": spec.description,
             "inputSchema": schemas.input_schema(spec.name),
+            "outputSchema": schemas.output_schema(spec.name),
         }
         for spec in schemas.TOOLS.values()
     ]

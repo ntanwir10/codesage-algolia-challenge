@@ -136,7 +136,7 @@ Request behaviour:
 
 ## Tools
 
-Each tool answers with one JSON object, sent twice: as `structuredContent`, which matches the tool's `outputSchema` in `tools/list`, and as the same JSON in a text block for clients that predate structured results. The schemas live in `backend/codesage_mcp/schemas.py` next to the argument models. They list the top-level fields and allow extra ones, so a new field in a later version doesn't break a client that validates.
+A successful tool call answers with one JSON object, sent twice: as `structuredContent`, which matches the tool's `outputSchema` in `tools/list`, and as the same JSON in a text block for clients that predate structured results. The schemas live in `backend/codesage_mcp/schemas.py` next to the argument models. They list the top-level fields and allow extra ones, so a new field in a later version doesn't break a client that validates. A failed call is text only, with `isError` set; see [How failures reach your assistant](#how-failures-reach-your-assistant). `GET /mcp/tools` returns the same `outputSchema` beside each `inputSchema`.
 
 `repository` accepts the numeric ID, the name, or `owner/name`; `list_repositories` shows them. Matching on name and `owner/name` ignores case.
 
