@@ -250,7 +250,7 @@ Adds a repository and starts indexing it. It returns `repository_id`, `name`, `s
 
 - **Same checks as the dashboard.** A duplicate URL (case-insensitive), a missing Algolia setup, and a missing repository or branch are refused before anything is created.
 - **Needs the API key,** like every tool call, and counts toward the 30 per minute limit.
-- **Errors.** A bad URL gives a message that starts with `url:` and says why (a scheme other than https, credentials or a port, `localhost` or a private IP address). `http://` and `git@host:path` URLs are rewritten to `https://` first, so they are accepted. A duplicate gives "<name> is already added as repository <id>." Other refusals use the messages below.
+- **Errors.** A bad URL gives a message that starts with `url:` and says why (a scheme other than https, credentials or a port, `localhost` or a private IP address). `http://` and `git@host:path` URLs are rewritten to `https://` first, so they are accepted. A duplicate gives `<name> is already added as repository <id>.` Other refusals use the messages below.
 
 | Message | Cause |
 | --- | --- |

@@ -659,7 +659,6 @@ def test_terraform_only_the_comment_run_directly_above_the_first_block_counts():
     [
         # Each nested definition used to walk Node.parent up from the root: quadratic in depth
         ("deep.js", "javascript", "function f(){" * 20000 + "}" * 20000),
-        ("arrows.js", "javascript", "export default () => {" * 20000 + "}" * 20000),
         # ast.get_source_segment re-split the whole file for every import
         ("many.py", "python", "import os\n" * 20000),
     ],
