@@ -173,6 +173,7 @@ For Cursor, VS Code or Windsurf, run `make install-cursor`, `make install-vscode
 | `CORS_ORIGINS` | the Compose file | dev: localhost on 80, 3000, 5173. Prod: `https://yourdomain.com` | Edit the file; it overrides `backend/.env` |
 | `DATABASE_URL` | the Compose file | `sqlite:///./data/codesage.db` | Lives in the data volume. Migrations run at startup |
 | `ALGOLIA_APP_ID`, `ALGOLIA_ADMIN_API_KEY`, `GITHUB_TOKEN` | `backend/.env` | none | Read through `env_file` by both stacks |
+| `EMBEDDING_API_URL`, `EMBEDDING_API_KEY`, `EMBEDDING_MODEL` | `backend/.env` | off | Read through `env_file` by both stacks. Inside a container `localhost` is the container, so a local Ollama is `http://host.docker.internal:11434/v1/embeddings`, not `localhost:11434`. The Compose files map that name to the host (`extra_hosts: host-gateway`), which Linux Docker Engine needs and Docker Desktop and OrbStack do anyway; with `localhost` every run ends `Partially indexed: ... (the embedding API failed)` |
 
 Each stack uses its own Algolia index, and neither matches the local-run default `codesage_code_entities`. Records are keyed by repository id, so two databases sharing an index would delete each other's records.
 
