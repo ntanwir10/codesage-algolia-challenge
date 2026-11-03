@@ -9,9 +9,15 @@ on:
 permissions:
   contents: read
 
+# A newer push to the same pull request makes the older run moot
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   backend:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     defaults:
       run:
         working-directory: backend
@@ -28,6 +34,7 @@ jobs:
 
   frontend:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     defaults:
       run:
         working-directory: frontend
@@ -46,6 +53,7 @@ jobs:
   # The Postgres-specific tests (tests/test_postgres.py) against a real server
   postgres:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     services:
       postgres:
         image: postgres:16
@@ -74,6 +82,7 @@ jobs:
   # Playwright against an isolated backend and Vite server (frontend/playwright.config.ts)
   e2e:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     defaults:
       run:
         working-directory: frontend
@@ -104,6 +113,7 @@ jobs:
 
   docker:
     runs-on: ubuntu-latest
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
       # Compose reads backend/.env via env_file. Throwaway values: the backend binds 0.0.0.0 in
