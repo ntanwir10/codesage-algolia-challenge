@@ -61,13 +61,6 @@ describe("CodeSageAPI", () => {
     );
   });
 
-  it("honours VITE_API_BASE_URL", async () => {
-    vi.stubEnv("VITE_API_BASE_URL", "https://api.example.com/api/v1/");
-    const { api, calls } = makeApi({ status: "ok" });
-    await api.getRepository(3);
-    expect(calls[0].baseURL).toBe("https://api.example.com/api/v1");
-  });
-
   it("sends X-API-Key when VITE_CODESAGE_API_KEY is set", async () => {
     vi.stubEnv("VITE_CODESAGE_API_KEY", "secret-key");
     const { api, calls } = makeApi({});

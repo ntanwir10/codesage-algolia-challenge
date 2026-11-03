@@ -123,7 +123,7 @@ flowchart TD
     index -. "nothing indexed,<br/>or Algolia rejects it" .-> failed
 ```
 
-The previous run's rows and records stay searchable until the new run is complete. If a reprocess of a completed repository fails, they are kept: the repository goes back to `completed`, and `error_message` reads "Reprocessing failed: <reason>. Search still uses the previous index." With an embeddings key, the run also embeds its definitions after indexing them.
+The previous run's rows and records stay searchable until the new run is complete. If a reprocess of a completed repository fails, they are kept: the repository goes back to `completed`, and `error_message` reads `Reprocessing failed: <reason>. Search still uses the previous index.` With an embeddings key, the run embeds its definitions before indexing them, so search never returns both runs' records for as long as embedding takes. The run completes once Algolia has applied the delete of the previous run's records.
 
 Progress is pushed to the dashboard after every batch. A file that fails to parse is still stored, without entities. A repository too large for one GitHub tree call is also listed through the contents API, up to 300 directories; anything it never reaches counts as left out. Repositories on other hosts are read with a shallow `git clone` instead, and the same file rules apply.
 
@@ -302,7 +302,7 @@ For the HTTPS prod stack, use `make install-claude ARGS="--server-url https://yo
 Paste `https://gitlab.com/group/project` into the Home page form, or ask your assistant: *"Add https://gitlab.com/group/project to CodeSage"*. The form, `POST /api/v1/repositories/` and the `add_repository` tool take the same URLs and run the same checks. In the form, `owner/repo` without a host still means GitHub.
 
 - **Hosts.** GitHub, GitLab (nested groups too), Bitbucket and self-hosted servers. `http://` and `git@host:path` URLs are rewritten to `https://`, and git always fetches over https. Branch URLs such as `.../-/tree/dev` work.
-- **Public only.** Private repositories are refused on every host but github.com, where the server's `GITHUB_TOKEN` can read them. The message is "... was not found or is private; only public repositories are supported on <host>."
+- **Public only.** Private repositories are refused on every host but github.com, where the server's `GITHUB_TOKEN` can read them. The message is `... was not found or is private; only public repositories are supported on <host>.`
 - **Rejected URLs.** Ports, credentials, `localhost`, private IP addresses, and host names that resolve to one. git then connects to the address that was checked.
 - **Names and links.** Repositories on other hosts are named `<host>/<path>`. Search results link to the exact line on GitLab (gitlab.com, and any host whose name starts with `gitlab.`) and on bitbucket.org. Other hosts, including self-hosted Bitbucket, get no link.
 - **Needs git.** The backend runs `git ls-remote` to check (10 s) and a shallow `git clone` to read (120 s). The prod Docker image includes git.

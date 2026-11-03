@@ -124,6 +124,24 @@ async def test_incremental_runs_reuse_vectors_and_a_new_model_re_embeds(
     assert set(vectors(db_session).values()) == {"fake-2", None}
 
 
+async def test_a_reprocess_embeds_before_indexing(db_session, repository, github, algolia_index, provider, monkeypatch):
+    # Indexed first, every definition would show up twice in search for as long as embedding takes
+    github.files = [github_file("pkg/a.py", RETRY)]
+    await run(db_session, repository)
+    previous = set(algolia_index.records)
+    seen = []
+    embed = embeddings.embed
+
+    async def recording_embed(texts):
+        seen.append(set(algolia_index.records))
+        return await embed(texts)
+
+    monkeypatch.setattr(embeddings, "embed", recording_embed)
+    await run(db_session, repository)
+
+    assert seen == [previous]
+
+
 async def test_a_failing_provider_still_completes_the_run(db_session, repository, github, algolia_index, provider):
     provider["status"] = 500
     github.files = [github_file("a.py", RETRY), github_file("b.py", STORE)]

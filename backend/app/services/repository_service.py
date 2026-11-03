@@ -521,18 +521,19 @@ class RepositoryService:
                 f"({failed_files} failed to process)"
             )
 
-        # 3. Algolia: index everything in chunked batch requests
+        # 3. Semantic search (bring your own key): vectors for this run's definitions that lack
+        # one from the current model. A failure leaves keyword search intact and is reported below.
+        # Done before indexing, because from indexing until step 4 search returns both runs' records
+        unembedded = await self._embed_definitions(repository.id) if embeddings.is_configured() else 0
+
+        # 3b. Algolia: index everything in chunked batch requests
         if documents:
             self._indexed = True
             if not await algolia_service.index_documents(documents):
                 raise IngestionError("Algolia rejected the indexing request")
 
-        # 3b. Semantic search (bring your own key): vectors for this run's definitions that lack
-        # one from the current model. A failure leaves keyword search intact and is reported below
-        unembedded = await self._embed_definitions(repository.id) if embeddings.is_configured() else 0
-
-        # 4. This run is complete: drop the previous run's rows and records. Not waited on:
-        # Algolia applies an index's tasks in order, and a timeout must not discard a good run
+        # 4. This run is complete: drop the previous run's rows and records, waiting for Algolia to
+        # apply the delete so search on a completed repository never returns the previous run's records
         await self._delete_rows(repository.id, previous=True)
         if kept:
             # Earlier records stay for the reused files; every other previous path goes
@@ -541,7 +542,7 @@ class RepositoryService:
             )
         else:
             stale_records = not await algolia_service.delete_repository_index(
-                repository.id, run_filter=f'NOT run_id:"{self._run_id}"'
+                repository.id, run_filter=f'NOT run_id:"{self._run_id}"', wait=True
             )
 
         programming = [f.language for f in files if f.language not in NON_PROGRAMMING_LANGUAGES]
@@ -771,7 +772,7 @@ class RepositoryService:
                 for path in paths[start : start + PATHS_PER_DELETE]
             )
             deleted &= await algolia_service.delete_repository_index(
-                repository_id, run_filter=f'NOT run_id:"{self._run_id}" AND ({any_path})'
+                repository_id, run_filter=f'NOT run_id:"{self._run_id}" AND ({any_path})', wait=True
             )
         return deleted
 

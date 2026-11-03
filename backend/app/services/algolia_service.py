@@ -28,7 +28,7 @@ settings = get_settings()
 # Records per save_objects request (Algolia's recommended batch size)
 INDEX_BATCH_SIZE = 1000
 
-# Longest wait for Algolia to publish an indexing task
+# Longest wait for Algolia to publish an indexing task, or the delete that swaps out a previous run
 INDEX_WAIT_SECONDS = 300
 
 # Characters of entity body stored with each record, well under the 10 KB record limit
@@ -354,12 +354,13 @@ class AlgoliaService:
         return value.replace("\\", "\\\\").replace('"', '\\"')
 
     async def delete_repository_index(
-        self, repository_id: int, run_filter: str | None = None
+        self, repository_id: int, run_filter: str | None = None, wait: bool = False
     ) -> bool:
         """Delete all indexed entities for a repository, or only those `run_filter` matches
         (e.g. `NOT run_id:"abc"` for every run but one).
 
-        Not waited on: Algolia applies an index's tasks in order, so later records still land after it.
+        With wait, return once Algolia has applied it (up to INDEX_WAIT_SECONDS). Without, records
+        indexed later still land after it, because Algolia applies an index's tasks in order.
         """
         if not self.is_available():
             return True
@@ -368,8 +369,17 @@ class AlgoliaService:
         if run_filter:
             filters += f" AND {run_filter}"
 
+        def delete():
+            response = self.index.delete_by({"filters": filters})
+            if wait:
+                try:
+                    self._wait_for_task(response, INDEX_WAIT_SECONDS)
+                except TimeoutError as e:
+                    # Accepted all the same: Algolia applies it later, so the records still go
+                    logger.warning("Algolia delete not applied in time", repository_id=repository_id, error=str(e))
+
         try:
-            await asyncio.to_thread(self.index.delete_by, {"filters": filters})
+            await asyncio.to_thread(delete)
         except Exception as e:
             logger.error(
                 "Failed to delete repository from Algolia",

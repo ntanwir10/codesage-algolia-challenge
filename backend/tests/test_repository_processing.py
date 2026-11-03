@@ -139,6 +139,7 @@ async def test_reprocessing_replaces_rows_and_records_instead_of_duplicating(
 
     await process(db_session, repository)
     first_ids = set(algolia_index.records)
+    waits = algolia_index.waited_deletes
     await process(db_session, repository, force=True)
 
     assert repository.status == "completed"
@@ -147,6 +148,8 @@ async def test_reprocessing_replaces_rows_and_records_instead_of_duplicating(
     assert len(algolia_index.records) == 5
     assert set(algolia_index.records).isdisjoint(first_ids)
     assert len({r["run_id"] for r in algolia_index.records.values()}) == 1
+    # Completed only once Algolia applied the delete, so a search right after finds no duplicates
+    assert algolia_index.waited_deletes == waits + 1
 
 
 async def test_reprocessing_drops_entities_removed_upstream(

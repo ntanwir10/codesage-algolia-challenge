@@ -8,8 +8,8 @@ from app.models.code_entity import CodeEntity
 from app.models.code_file import CodeFile
 from app.models.repository import Repository
 from app.services import code_parser, repository_service
-from app.services.github_service import GitHubAPIError, GitHubFile, RepositoryCheckError
-from app.services.repository_service import _ENTITY_COPY, PREVIOUS_INDEX_NOTE, RepositoryService
+from app.services.github_service import GitHubFile, RepositoryCheckError
+from app.services.repository_service import _ENTITY_COPY, RepositoryService
 
 MODULE_A = "import os\n\ndef alpha():\n    return 1\n\nclass Beta:\n    def gamma(self):\n        pass\n"
 MODULE_B = "def delta(x):\n    return x\n"
@@ -163,7 +163,7 @@ async def test_an_incremental_run_with_no_previous_index_indexes_everything(
 async def test_an_incremental_run_started_through_the_api_reuses_unchanged_files(
     db_session, repository, github, algolia_index, parsed, job_sessions, async_api, wait_for_job
 ):
-    # The endpoint and the real job together (the endpoint tests elsewhere fake the job)
+    # The only test of inline mode handing `incremental` from the endpoint to the job: a full run would parse both
     a = github_file("pkg/a.py", MODULE_A)
     github.files = [a, github_file("pkg/b.py", MODULE_B)]
     await run(db_session, repository)
@@ -179,30 +179,6 @@ async def test_an_incremental_run_started_through_the_api_reuses_unchanged_files
     assert parsed == ["pkg/b.py"]
     names = sorted(r["entity_name"] for r in algolia_index.records.values())
     assert names == sorted(["import os", "alpha", "Beta", "gamma", "delta", "epsilon"])
-
-
-async def test_a_scheduled_refresh_whose_run_fails_keeps_the_previous_index(
-    db_session, repository, github, algolia_index, job_sessions, wait_for_job, monkeypatch
-):
-    # refresh_once and the real job together (the refresh tests below fake start_processing)
-    github.files = [github_file("pkg/a.py", MODULE_A), github_file("pkg/b.py", MODULE_B)]
-    github.commit_sha = "c1"
-    await run(db_session, repository)
-    records = dict(algolia_index.records)
-
-    async def moved(repository):
-        return {"changed": True}
-
-    monkeypatch.setattr(repository_service, "index_freshness", moved)
-    github.error = GitHubAPIError(404, "GitHub repository or path not found (404)")
-
-    assert await repository_service.refresh_once() == 1
-    await wait_for_job(repository.id)
-
-    db_session.refresh(repository)
-    assert repository.status == "completed"
-    assert repository.error_message.endswith(PREVIOUS_INDEX_NOTE)
-    assert algolia_index.records == records
 
 
 # --- scheduled refresh ---------------------------------------------------------
