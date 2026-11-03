@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { Link } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import { useMemo, useState } from "react";
 import { api } from "@/services/api";
 import { Button } from "@/components/ui/button";
@@ -21,6 +21,7 @@ import type { Repository } from "@/types/repository";
 const PAGE_SIZE = 500;
 // The most repositories one WebSocket may subscribe to (MAX_SUBSCRIPTIONS_PER_CONNECTION on the server)
 const MAX_SUBSCRIPTIONS = 100;
+const STATUSES: Repository["status"][] = ["completed", "processing", "pending", "failed"];
 
 /** Every repository, a page at a time, since the list endpoint caps each request at PAGE_SIZE */
 async function loadAllRepositories(): Promise<Repository[]> {
@@ -35,6 +36,20 @@ async function loadAllRepositories(): Promise<Repository[]> {
 export function DashboardPage() {
   const { addToast } = useToast();
   const queryClient = useQueryClient();
+  // Filters live in the URL, like search's ?q=, so reload and Back keep them
+  const [params, setParams] = useSearchParams();
+  const statusFilter = params.get("status") ?? "";
+  const languageFilter = params.get("language") ?? "";
+  const setFilter = (key: "status" | "language", value: string) =>
+    setParams(
+      (current) => {
+        const next = new URLSearchParams(current);
+        if (value) next.set(key, value);
+        else next.delete(key);
+        return next;
+      },
+      { replace: true }
+    );
   const [deleteDialog, setDeleteDialog] = useState<{
     isOpen: boolean;
     repository: Repository | null;
@@ -182,6 +197,13 @@ export function DashboardPage() {
     processing: repositories.filter((r) => isActiveStatus(r.status)).length,
     failed: repositories.filter((r) => r.status === "failed").length,
   };
+  // The URL's language stays an option even when no loaded repository has it, so the select shows it
+  const languages = [
+    ...new Set([...repositories.map((r) => r.language), languageFilter].filter((l): l is string => !!l)),
+  ].sort();
+  const shown = repositories.filter(
+    (r) => (!statusFilter || r.status === statusFilter) && (!languageFilter || r.language === languageFilter)
+  );
 
   return (
     <div className="container mx-auto px-4 py-8">
@@ -305,7 +327,50 @@ export function DashboardPage() {
               )}
             </div>
 
-            {repositories.map((repo) => (
+            <div className="flex flex-wrap items-center gap-2 text-sm">
+              <select
+                aria-label="Filter by status"
+                value={statusFilter}
+                onChange={(e) => setFilter("status", e.target.value)}
+                className="border rounded-md px-2 py-1 bg-background"
+              >
+                <option value="">All statuses</option>
+                {STATUSES.map((s) => (
+                  <option key={s} value={s}>
+                    {s[0].toUpperCase() + s.slice(1)}
+                  </option>
+                ))}
+              </select>
+              <select
+                aria-label="Filter by language"
+                value={languageFilter}
+                onChange={(e) => setFilter("language", e.target.value)}
+                className="border rounded-md px-2 py-1 bg-background"
+              >
+                <option value="">All languages</option>
+                {languages.map((l) => (
+                  <option key={l} value={l}>
+                    {l}
+                  </option>
+                ))}
+              </select>
+              {(statusFilter || languageFilter) && (
+                <span role="status" className="text-muted-foreground">
+                  Showing {shown.length} of {repositories.length}
+                </span>
+              )}
+            </div>
+
+            {shown.length === 0 && (
+              <EmptyState
+                icon="🔍"
+                title="No repositories match these filters"
+                description="Change or clear the status and language filters to see the rest."
+                action={{ label: "Clear filters", onClick: () => setParams({}, { replace: true }) }}
+              />
+            )}
+
+            {shown.map((repo) => (
               <Card
                 key={repo.id}
                 className="hover:shadow-lg transition-all duration-200"

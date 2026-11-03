@@ -1,6 +1,6 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { MemoryRouter } from "react-router-dom";
+import { MemoryRouter, useLocation } from "react-router-dom";
 import { AxiosError } from "axios";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ToastProvider } from "@/components/ui/toast";
@@ -25,13 +25,18 @@ const repository: Repository = {
   created_at: "2026-10-25T00:00:00Z",
 };
 
-function renderPage() {
+function LocationProbe() {
+  return <output data-testid="location">{useLocation().search}</output>;
+}
+
+function renderPage(url = "/dashboard") {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   render(
     <QueryClientProvider client={client}>
       <ToastProvider>
-        <MemoryRouter>
+        <MemoryRouter initialEntries={[url]}>
           <DashboardPage />
+          <LocationProbe />
         </MemoryRouter>
       </ToastProvider>
     </QueryClientProvider>
@@ -55,6 +60,45 @@ describe("DashboardPage", () => {
     ]);
     renderPage();
     expect(await screen.findByText("Repository not found")).toBeInTheDocument();
+  });
+
+  const mixed: Repository[] = [
+    { ...repository, id: 1, name: "octo/py", language: "python" },
+    { ...repository, id: 2, name: "octo/ts", language: "typescript" },
+    { ...repository, id: 3, name: "octo/broken", language: "python", status: "failed" },
+  ];
+
+  it("filters by status and language and keeps both in the URL", async () => {
+    vi.spyOn(api, "getRepositories").mockResolvedValue(mixed);
+    renderPage();
+    await screen.findByText("octo/ts");
+
+    fireEvent.change(screen.getByLabelText("Filter by language"), { target: { value: "python" } });
+    expect(screen.queryByText("octo/ts")).not.toBeInTheDocument();
+    expect(screen.getByText("octo/py")).toBeInTheDocument();
+    expect(screen.getByText("octo/broken")).toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText("Filter by status"), { target: { value: "failed" } });
+    expect(screen.queryByText("octo/py")).not.toBeInTheDocument();
+    expect(screen.getByText("octo/broken")).toBeInTheDocument();
+    expect(screen.getByText("Showing 1 of 3")).toBeInTheDocument();
+    expect(screen.getByTestId("location")).toHaveTextContent("?language=python&status=failed");
+
+    fireEvent.change(screen.getByLabelText("Filter by language"), { target: { value: "" } });
+    expect(screen.getByTestId("location")).toHaveTextContent(/^\?status=failed$/);
+  });
+
+  it("applies filters from the URL and clears them when nothing matches", async () => {
+    vi.spyOn(api, "getRepositories").mockResolvedValue(mixed);
+    renderPage("/dashboard?status=completed&language=rust");
+    expect(await screen.findByText("No repositories match these filters")).toBeInTheDocument();
+    // A language no loaded repository has still shows as selected
+    expect(screen.getByLabelText("Filter by language")).toHaveValue("rust");
+    expect(screen.getByLabelText("Filter by status")).toHaveValue("completed");
+
+    fireEvent.click(screen.getByRole("button", { name: "Clear filters" }));
+    expect(screen.getByText("octo/ts")).toBeInTheDocument();
+    expect(screen.getByTestId("location")).toBeEmptyDOMElement();
   });
 
   it("lists every repository, a page of 500 at a time", async () => {
