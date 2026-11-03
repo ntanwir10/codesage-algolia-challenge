@@ -325,9 +325,32 @@ curl -X POST http://127.0.0.1:8001/api/v1/repositories/ \
 - **Reprocess.** `POST /api/v1/repositories/{id}/process?force_reprocess=true` re-runs indexing in full. `?incremental=true` (no `force_reprocess` needed) re-parses and re-indexes only files whose content changed since the last run: unchanged files are copied as they are and keep their search records, and removed files lose theirs. It still downloads every file. The dashboard's Reprocess button is a full run, so it picks up parser improvements. It returns `202` and sets a `pending` or `failed` repository to `processing` first; a `completed` one shows `processing` once its job starts. It returns `409` while a job is running, and `503` if Algolia isn't configured. The previous run's rows and search records stay until the new run is complete (each run tags its records with a `run_id`). If a reprocess of a `completed` repository fails, what the failed run wrote is removed, and the repository goes back to `completed` with its previous counts. Its `error_message` then reads "Reprocessing failed: … Search still uses the previous index."
 - **Edit.** `PUT /api/v1/repositories/{id}` returns `409` if it would change `branch`, `language` or `framework` while a job or a delete holds the repository; other fields can change at any time. An empty `branch` means the default branch. Changing the branch of a `completed` or `failed` repository first checks that the branch exists (`422` if not), then reindexes it (`409` if a run started during that check).
 - **Delete.** `DELETE /api/v1/repositories/{id}` sends the removal to Algolia and returns without waiting for Algolia to finish. That is safe because Algolia applies an index's tasks in order, so a later re-add that reuses the id still lands after the delete. It returns `409` while a job is running. If Algolia refuses the request it returns `502` and the repository stays.
+- **GitHub push webhook.** `POST /api/v1/webhooks/github` starts the same incremental run as the scheduled refresh as soon as GitHub reports a push; see [Refresh on push](#refresh-on-push).
 - **Restarts.** A server restart starts interrupted runs again, as full runs.
 - **Errors.** Errors are `{"detail": "..."}`. Validation errors (`422`) carry a list instead, with the field in `loc`. An id or `skip` too large for the database is `422`. Rate limiting (`429`) sends `Retry-After`. A `500` has `{detail, request_id}`, the same ID as the `X-Request-ID` header and the server log, and carries CORS headers so a browser can read it.
 - **Health.** `GET /health` is `200` `healthy`, `200` `degraded` when Algolia is unreachable or not configured, and `503` `unhealthy` when the database fails.
+
+### Refresh on push
+
+A GitHub webhook can keep an index current without waiting for `REFRESH_INTERVAL_MINUTES`. Each push to an indexed branch starts an incremental run for that repository at once. The run is the same one the scheduled refresh starts.
+
+1. Make a secret and set it on the backend, then restart it:
+   ```bash
+   echo "GITHUB_WEBHOOK_SECRET=$(openssl rand -hex 32)" >> backend/.env
+   ```
+   For the Docker stacks, put it in the `.env` they read. Without it the endpoint answers `404`.
+2. In the GitHub repository, open **Settings → Webhooks → Add webhook**:
+   - **Payload URL:** `https://<your-host>/api/v1/webhooks/github`
+   - **Content type:** `application/json`
+   - **Secret:** the same value
+   - **Events:** "Just the push event"
+
+GitHub sends a `ping` first, which gets `202`. Each delivery's response, under **Recent Deliveries**, lists the repository IDs it `started` and any that were `busy`.
+
+- **Which repositories.** A push starts a run for each `completed` repository with the pushed GitHub URL and branch. A repository with no branch follows the payload's default branch. Other branches, tags, other events and a push of the commit already indexed start nothing.
+- **Authentication.** The signature in `X-Hub-Signature-256` (HMAC-SHA256 of the body with the secret) is checked first, and a missing or wrong one gets `401`. The endpoint needs no API key, since GitHub can't send one. The prod nginx exempts this one path from its login. The host check still applies when a key is set, so the host GitHub calls must be in `ALLOWED_HOSTS`.
+- **Busy repositories.** A push that arrives while a run is going is not queued. The next push picks it up, or the scheduled refresh if it's on.
+- **Locally.** Without a key, the backend only serves loopback clients. Forward deliveries with a client that runs on the same machine and calls `http://localhost:8001/api/v1/webhooks/github`, such as [smee.io](https://smee.io)'s `smee` client.
 
 ## Security
 
@@ -359,6 +382,7 @@ curl -X POST http://127.0.0.1:8001/api/v1/repositories/ \
 | `ALLOWED_HOSTS` | unset | With a key set, extra hostnames the API answers to, besides loopback and the `CORS_ORIGINS` hosts. Comma-separated; `*.example.com` allows subdomains, `*` allows any host |
 | `INDEX_WORKERS` | `inline` | Who runs indexing jobs. `inline`: the API process. `external`: the API only queues them in the database (the `jobs` table), and one or more `python -m app.worker` processes run them, so heavy parsing and embedding never slow the API. Start workers after the API, which applies the migrations. With Compose: `INDEX_WORKERS=external docker compose -f deployment/docker-compose.yml --profile workers up -d --scale worker=2` |
 | `EMBEDDING_API_URL`, `EMBEDDING_API_KEY`, `EMBEDDING_MODEL` | OpenAI's endpoint, unset, `text-embedding-3-small` | Semantic search, bring your own key: any OpenAI-compatible `/v1/embeddings` (OpenAI, Voyage, a gateway, or a local Ollama with any key). Off while the key is unset. Each run then embeds its definitions (not imports) and stores the vectors in the database; definitions and queries are sent to that provider. The dashboard offers **By meaning** search only while it's set, and each semantic suggestion costs one embeddings call |
+| `GITHUB_WEBHOOK_SECRET` | unset (off) | The secret of a GitHub push webhook pointed at `/api/v1/webhooks/github`; see [Refresh on push](#refresh-on-push) |
 | `REFRESH_INTERVAL_MINUTES` | `0` (off) | Every N minutes, check each completed repository's branch (the same check as the freshness line) and run an incremental reindex of those that moved. Answers are cached for 10 minutes, so a shorter interval adds nothing |
 | `ENVIRONMENT`, `LOG_LEVEL` | `development`, `INFO` | `production` hides `/docs` and `/redoc`. `/openapi.json` stays on; the prod stack's nginx doesn't route it |
 

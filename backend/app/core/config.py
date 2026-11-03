@@ -160,6 +160,8 @@ class Settings(BaseSettings):
     # Scheduled refresh: every N minutes, re-index changed files of repositories whose branch moved.
     # 0 turns it off. Freshness answers are cached for 10 minutes, so shorter intervals add nothing
     refresh_interval_minutes: float = Field(default=0, ge=0)
+    # GitHub push webhook (POST /api/v1/webhooks/github): the secret set on the webhook. Unset turns it off
+    github_webhook_secret: str | None = None
 
     # Logging Settings
     log_level: str = "INFO"
