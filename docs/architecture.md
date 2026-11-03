@@ -14,22 +14,22 @@ Reference for the parts of CodeSage the [root README](../README.md) only sketche
 
 ## Components
 
-Everything runs in one backend process; the other parts are clients or proxies.
+Everything runs in one backend process, unless `INDEX_WORKERS=external` moves indexing runs to worker processes; the other parts are clients or proxies.
 
 | Component | Path | Role |
 | --- | --- | --- |
 | App entry | `backend/app/main.py` | Builds the FastAPI app, validates settings, runs migrations and crash recovery at startup, and serves `/health` and `/ws`. Adds the request guard, CORS and an `X-Request-ID` header. |
 | REST API | `backend/app/api/v1/endpoints/` | `repositories.py` (create, update, delete, status, stats, freshness, process) and `ai.py` (MCP tool calls, resources, search suggestions). Mounted under `/api/v1`. |
 | Core | `backend/app/core/` | `config.py` (settings and startup validation), `security.py` (API key, request guard, rate limiter, failure messages), `database.py` (engine, session) and `migrations.py` (Alembic at startup). |
-| Models | `backend/app/models/` | SQLAlchemy tables: `Repository`, `CodeFile`, `CodeEntity`. |
-| Services | `backend/app/services/` | `repository_service.py` (job lifecycle), `github_service.py` (listing and download), `git_source.py` (public repositories on other hosts, read with git), `code_parser.py` (entities), `algolia_service.py` (index and search), `mcp_tools.py` (the eight tools) and `websocket_service.py` (live status). |
+| Models | `backend/app/models/` | SQLAlchemy tables: `Repository`, `CodeFile`, `CodeEntity`, `Job`. |
+| Services | `backend/app/services/` | `repository_service.py` (job lifecycle), `github_service.py` (listing and download), `git_source.py` (public repositories on other hosts, read with git), `code_parser.py` (entities), `algolia_service.py` (index and search), `embeddings.py` (vectors for semantic search), `mcp_tools.py` (the eight tools) and `websocket_service.py` (live status). |
 | MCP bridge | `backend/codesage_mcp/` | Stdio MCP server that your MCP client (Claude Desktop, Cursor, VS Code, ...) runs. It holds no data and turns `tools/call`, `resources/list` and `resources/read` into HTTP calls to `/api/v1/ai`. It answers `tools/list`, `resources/templates/list` and the two prompts (`prompts.py`) itself. Tool names and argument models live in `schemas.py`, which the backend imports too, so `tools/list` works with the backend down. Requests time out after 30 s, and a connection after 5 s. |
 | Dashboard | `frontend/` | React + Vite. `services/api.ts` and `services/websocket.ts` are the REST and WebSocket clients. In the dev stack nginx serves the built bundle. |
 | nginx | `deployment/nginx.conf`, `deployment/nginx.prod.conf.template` | Dev: HTTP proxy that drops requests for any `Host` except `localhost` and `127.0.0.1`. Prod: see [The prod nginx role](#the-prod-nginx-role). |
 
 ## Data model
 
-SQLite holds repositories, their files and the parsed entities. Algolia holds a searchable copy of the entities.
+SQLite (or Postgres) holds repositories, their files, the parsed entities and queued jobs. Algolia holds a searchable copy of the entities.
 
 ```mermaid
 erDiagram
@@ -40,9 +40,10 @@ erDiagram
 
 | Table | Key columns |
 | --- | --- |
-| `repositories` | `id`, `name`, `description`, `url` (unique), `branch` (null means the default branch), `language`, `framework`, `status`, `error_message`, `total_files`, `processed_files`, `total_lines`, `created_at`, `updated_at`, `processed_at` |
+| `repositories` | `id`, `name`, `description`, `url` (unique), `branch` (null means the default branch), `commit_sha` (the indexed commit), `language`, `framework`, `status`, `error_message`, `total_files`, `processed_files`, `total_lines`, `created_at`, `updated_at`, `processed_at` |
 | `code_files` | `id`, `repository_id`, `file_path` (up to 1000 characters), `content`, `language`, `line_count`, timestamps |
-| `code_entities` | `id`, `file_id`, `repository_id`, `entity_type`, `entity_name` (up to 255), `start_line`, `end_line`, `signature`, `docstring`, `entity_metadata` (JSON: `parameters`, `return_type`), timestamps |
+| `code_entities` | `id`, `file_id`, `repository_id`, `entity_type`, `entity_name` (up to 255), `start_line`, `end_line`, `signature`, `docstring`, `entity_metadata` (JSON: `parameters`, `return_type`), `embedding` (float32 vector, semantic search), `embedding_model`, timestamps |
+| `jobs` | `id`, `repository_id`, `force_reprocess`, `incremental`, `claimed_by`, `heartbeat_at`, `created_at`; used only with `INDEX_WORKERS=external` |
 
 - **Status.** `status` is `pending`, `processing`, `completed` or `failed`. The transitions are in the README's [status diagram](../README.md#repository-status).
 - **Entity types.** `function` (methods are stored as functions), `class`, `import`, `doc_section` and `terraform_block` (a top-level Terraform or HCL block, named like `resource aws_s3_bucket.logs`).
@@ -58,6 +59,9 @@ Alembic migrations in `backend/alembic/versions` run at startup through `app/cor
 | `baseline` | Creates `repositories`, `code_files`, `code_entities`, plus `sessions` and `search_indexes`, which later revisions drop. |
 | `cleanup` | Drops `sessions` and `search_indexes`. Removes duplicate repository URLs, keeping the highest `id`. Makes `url` unique. |
 | `drop_unused_columns` | Drops unused columns: `full_name`, `start_column`, `end_column`, `complexity_score`, `is_public`, `is_async` on entities; `file_name`, `is_analyzed`, `size_bytes` on files; `repo_metadata`, `security_score`, `vulnerability_count` on repositories. |
+| `commit_sha` | Adds `repositories.commit_sha`. |
+| `entity_embeddings` | Adds `code_entities.embedding` and `embedding_model`. |
+| `jobs` | Creates the `jobs` table. |
 
 - **Pre-Alembic databases.** If the app tables exist but `alembic_version` does not, the database is stamped at `baseline` and then upgraded.
 - **In-memory SQLite.** It is created directly from the models, because a separate Alembic connection would see an empty database.
@@ -94,7 +98,7 @@ A run turns a git repository into stored files, entities and Algolia records. Th
 8. **Keep the previous index.** Nothing is deleted yet: the previous run's rows and records stay searchable until this run is complete. Each run tags its records with its own `run_id`, and its rows are told apart by id.
 9. **Parse and store.** Files are handled in batches of 200: parse each file, add the file and its entities, commit off the event loop, then broadcast progress. An incremental run (`?incremental=true`, or the scheduled refresh) first loads the previous run's files: one whose content and language are unchanged is copied with its entities, column by column, without parsing, and gets no new records.
 10. **Index.** All new records are sent to Algolia in batches of 1000. The run fails if there are no records and nothing was reused, or if Algolia rejects the request.
-10a. **Embed (bring your own key).** With `EMBEDDING_API_KEY` set, the run sends this run's definitions (not imports) that have no vector from the current `EMBEDDING_MODEL` to the configured OpenAI-compatible endpoint, 64 per request. Each text is the kind, name and path, then the definition's lines, cut to 2000 characters. The unit float32 vectors go in `code_entities.embedding`, with the model in `embedding_model`. Reused files keep theirs, so an incremental run only embeds what changed, and a new model re-embeds. If the API fails, the run still completes with a note in `error_message`. Semantic `search_code` ranks by brute-force cosine in Python, which is fine for thousands of definitions.
+10a. **Embed (bring your own key).** With `EMBEDDING_API_KEY` set, the run sends this run's definitions (not imports) that have no vector from the current `EMBEDDING_MODEL` to the configured OpenAI-compatible endpoint, 64 per request. Each text is the kind, name and path, then the definition's lines, cut to 2000 characters. The unit float32 vectors go in `code_entities.embedding`, with the model in `embedding_model`. Reused files keep theirs, so an incremental run only embeds what changed, and a new model re-embeds. If the API fails, the run still completes with a note in `error_message`. Semantic `search_code` scores every stored vector with one numpy matrix product (brute force: about 30 ms for 20,000 vectors of 1536 dimensions).
 10b. **Swap.** The previous run's rows are deleted. A full run deletes every record but its own (`NOT run_id:"<run>"`). An incremental run that reused files deletes earlier records only for the other previous paths (changed, removed, or not stored this time), 50 paths per `delete_by`, so the reused files keep theirs. Neither delete is waited on; a failed one leaves a note in `error_message`.
 11. **Finish.** The primary language is the most common programming language; Markdown, JSON, YAML, XML, CSS, SCSS, HTML and plain text do not count. The framework is detected from `package.json` dependencies (`next`, `@angular/core`, `vue`, `svelte`, `react`, `express`) or Python imports (`django`, `fastapi`, `flask`). The status becomes `completed`.
 
@@ -127,11 +131,11 @@ With `REFRESH_INTERVAL_MINUTES` above 0, the lifespan starts `refresh_loop`. It 
 
 - **Parse failure.** The file is still stored, without entities, and counted as unparsed.
 - **Store failure.** A failed batch commit is rolled back, its files are counted as failed, its records are not indexed, and the run continues with the next batch.
-- **Run failure.** Any other exception rolls back, sets `failed` with a message of at most 500 characters, and broadcasts it. A database error is recorded as a generic message, because its text carries SQL and file contents. A GitHub error is recorded as its own sentence, such as the rate-limit message with the wait. Other exceptions are recorded as `ClassName: message`. If a reprocess had already cleared the old index, the message ends with a note that the previous index was removed.
-- **Partial index.** The run still ends `completed` when something was left out, and `error_message` starts with `Partially indexed:`. It names each cause: files that could not be stored, files that could not be parsed, files skipped over the 1000-file or 100 MB limit, and a listing too large to read in full. The repository page shows this as amber. The Dashboard card shows a plain "Completed" badge.
+- **Run failure.** Any other exception rolls back, discards this run's rows and records, sets `failed` with a message of at most 500 characters, and broadcasts it. A reprocess of a `completed` repository instead goes back to `completed` with its previous index, and `error_message` reads "Reprocessing failed: <reason>. Search still uses the previous index." A database error is recorded as a generic message, because its text carries SQL and file contents. A GitHub error is recorded as its own sentence, such as the rate-limit message with the wait. Other exceptions are recorded as `ClassName: message`.
+- **Partial index.** The run still ends `completed` when something was left out, and `error_message` starts with `Partially indexed:`. It names each cause: files that could not be stored, files that could not be parsed, files skipped over the 1000-file or 100 MB limit, definitions the embedding API failed to embed, a listing too large to read in full, and earlier records a delete left behind (for changed or removed files, or the whole previous run). The repository page and the Dashboard card show the message in amber.
 - **Job crash.** If the task itself dies, the row is set to `failed` ("Processing stopped unexpectedly") so it does not stay `processing`.
 - **Server restart.** At startup, every repository left `pending` or `processing` is started again as a full run, unless an external worker's job row owns it. Its previous index stays in place until that run completes.
-- **Delete.** A repository can't be deleted, or have `branch`, `language` or `framework` changed, while its job runs (`409`). A delete returns as soon as Algolia accepts the removal; a reprocess waits for it.
+- **Delete.** A repository can't be deleted, or have `branch`, `language` or `framework` changed, while its job runs (`409`). A delete returns as soon as Algolia accepts the removal. A reprocess's delete of the previous run's records isn't waited on either.
 
 ## Search
 
@@ -143,8 +147,9 @@ Entities are indexed as Algolia records, one per function, class, import, doc se
 
 | Field | Content |
 | --- | --- |
-| `objectID` | `<repository_id>_<sha1 of path:type:name:line>`, so re-indexing overwrites instead of duplicating |
+| `objectID` | `<repository_id>_<sha1 of run_id:path:type:name:line>`: each run writes new records, so the previous run's stay searchable until it completes |
 | `repository_id`, `file_path`, `language` | Where the entity lives |
+| `run_id` | The run that wrote the record; the swap deletes the others |
 | `entity_type`, `entity_name` | `function`, `class`, `import`, `doc_section` or `terraform_block`; name capped at 500 characters |
 | `description` | Docstring or summary, capped at 500 characters |
 | `parameters`, `return_type` | Parameter names; return type capped at 500 characters |
@@ -152,6 +157,7 @@ Entities are indexed as Algolia records, one per function, class, import, doc se
 | `signature` | Definition line, capped at 500 characters |
 | `content` | Signature plus the body, with at most 2000 characters of body |
 | `rank_weight` | `class` 3, `function` 2, `terraform_block` 2, `doc_section` 1, `import` 0 |
+| `is_test` | Whether the path looks like a test file |
 | `parameter_count`, `lines_of_code` | Derived counts |
 
 A record is trimmed to 9000 bytes of JSON, `content` first and then `parameters`, because Algolia rejects a whole batch if one record is over 10 KB.
@@ -161,8 +167,9 @@ A record is trimmed to 9000 bytes of JSON, `content` first and then `parameters`
 | Setting | Value |
 | --- | --- |
 | `searchableAttributes` | `entity_name`, `description`, `content`, `parameters`, `file_path`, in that order |
-| `attributesForFaceting` | `filterOnly(repository_id)`, `entity_type`, `language`, `file_path` |
-| `customRanking` | `desc(rank_weight)`: on a relevance tie, classes first, then functions and Terraform blocks, doc sections, imports |
+| `attributesForFaceting` | `filterOnly(repository_id)`, `filterOnly(run_id)`, `entity_type`, `language`, `file_path` |
+| `camelCaseAttributes` | `entity_name`, so `getUserById` also matches `user` and `ById` |
+| `customRanking` | `asc(is_test)`, then `desc(rank_weight)`: on a relevance tie, source before tests, then classes, functions and Terraform blocks, doc sections, imports |
 | Highlighting | `<mark>` and `</mark>` |
 | `hitsPerPage`, `maxValuesPerFacet` | 20, 100 |
 
@@ -170,7 +177,7 @@ A record is trimmed to 9000 bytes of JSON, `content` first and then `parameters`
 
 - **`search_code`.** The MCP tool resolves the repository by id, name or URL and requires it to be `completed`; a `failed`, `pending` or `processing` one is refused with the reason or the progress. It then queries Algolia with `repository_id=<n>` as a numeric filter (the facet form matches nothing), plus optional `language` and `entity_type` filters with escaped values. Without a repository it searches every repository, including any being reprocessed. Each query sends `removeWordsIfNoResults: allOptional`, `removeStopWords`, `ignorePlurals` and `queryLanguages: ["en"]`, so a question in plain words returns the best partial matches instead of nothing. Results carry a snippet (600 characters), signature and description (300 each) and a permalink at the exact lines of the indexed commit (`repositories.commit_sha`; GitHub runs resolve the branch to it once, then list and download every file at that commit, and clones record `HEAD`): GitHub `#L`, GitLab `/-/blob/...#L` (gitlab.com and any host starting with `gitlab.`) or Bitbucket `/src/...#lines-` (bitbucket.org). Other hosts get no link. Every other tool refuses a repository that is not `completed`, with the reason or the progress. If Algolia is not configured, the tool says so. A failed query becomes a tool error that hides the Algolia host.
 - **Suggestions.** `GET /api/v1/ai/search/suggestions` needs at least two characters, asks Algolia for twice the limit (1 to 20, default 10) and returns the distinct entity names in rank order. With `mode=semantic` it embeds the query instead and returns the names of the definitions closest in meaning (the same ranking as `search_code`'s semantic mode); without an embeddings key it returns nothing. Any failure returns an empty list.
-- **Writes and waits.** Indexing and the delete before a reprocess poll the Algolia task with a deadline (300 s to index, 120 s to delete), because the v3 client would wait forever. An indexing timeout is logged and the run goes on, since the records were accepted. A delete timeout fails the run. A plain repository delete sends `delete_by` and does not poll.
+- **Writes and waits.** Indexing polls the Algolia task with a 300 s deadline, so search finds the records when the run ends. A timeout is logged and the run goes on, since the records were accepted. Deletes (a repository delete, the swap after a reprocess, a failed run's records) send `delete_by` and don't poll: Algolia applies an index's tasks in order, so a later run's records still land after them.
 - **Threads.** The service uses the synchronous v4 client (`SearchClientSync`), behind a small adapter with the v3 index methods it always used, so each call runs in a worker thread, and there is one client per set of credentials.
 
 ## Real-time updates
@@ -202,7 +209,7 @@ A record is trimmed to 9000 bytes of JSON, `content` first and then `parameters`
 - **Subscriptions.** At most 100 per connection. Deleting a repository drops its subscribers.
 - **Broadcast.** A `repository_status` frame goes to every subscriber of that repository, at the start, after each batch of 200 files and at the end of a run.
 - **Send timeout.** Each send has a 5-second timeout. A client that fails or stalls is disconnected and closed. Sends go out concurrently over a snapshot, so a few stalled clients cost one timeout, not one each.
-- **Polling.** The dashboard also polls the status endpoint every 3 seconds while a repository is in progress.
+- **Polling.** The repository page and the Dashboard also refetch the repository (or the list) while a run is in progress: every 15 seconds while the WebSocket is connected, every 3 seconds while it isn't. The Dashboard subscribes to at most 100 active repositories and polls every 3 seconds when more are active.
 
 ## Security model
 
@@ -247,7 +254,7 @@ Limits come from slowapi, per client address, and can be turned off with `ENABLE
 
 | Endpoints | Limit |
 | --- | --- |
-| Repository create, repository process, search suggestions | 100 per minute |
+| Repository create, process and freshness, search suggestions | 100 per minute |
 | MCP tool calls, MCP resource reads | 30 per minute |
 
 ### Secrets and errors
@@ -274,7 +281,7 @@ The bridge sends the key itself when it talks to the backend directly. Through n
 
 ## Known limitations
 
-- **One worker.** Job state, the two-run limit and WebSocket subscriptions live in the process, so run exactly one worker.
+- **One API process.** WebSocket subscriptions, rate limits and caches live in the process, and so do job state and the two-run limit with `INDEX_WORKERS=inline`, so run exactly one. Indexing can move to any number of `python -m app.worker` processes.
 - **SQLite by default.** The database is a single local file unless `DATABASE_URL` names Postgres (`postgresql://` maps to the psycopg 3 driver). `tests/test_postgres.py` runs against a real server in CI: the migrations, `bytea` vectors and the job claim.
 - **Synchronous Algolia client.** Calls run in worker threads.
 - **Partial results.** A repository over 1000 files or 100 MB, or too large for the trees API, is indexed in part. Source files are kept first, then tests, docs and data files.

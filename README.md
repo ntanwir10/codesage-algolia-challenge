@@ -22,7 +22,7 @@ flowchart TB
     api -- "read files" --> db
 ```
 
-In development there is no nginx: the dashboard and the bridge call the backend directly.
+With `make start` there is no nginx: the dashboard and the bridge call the backend directly. The dev Docker stack (`make up`) puts a plain-HTTP nginx in front, with no login.
 
 ## Contents
 
@@ -84,11 +84,11 @@ flowchart TD
     slot --> run["Indexing run"]
 ```
 
-The dashboard shows every refusal under the repository field and stays on the Home page. Nothing is created on any of them. The table lists GitHub's messages; other hosts get the ones in [Other git hosts](#other-git-hosts).
+The dashboard shows every refusal under the repository field, or under the Branch field when it is about the branch, and stays on the Home page. Nothing is created on any of them. The table lists GitHub's messages; other hosts get the ones in [Other git hosts](#other-git-hosts).
 
 | You see | Status | Cause |
 | --- | --- | --- |
-| A message about the URL or branch | 422 | Not a GitHub repository URL, or an invalid branch name |
+| A message about the URL or branch | 422 | Not a usable https repository URL (credentials, ports, a query, localhost and private addresses are refused), or a branch name git wouldn't accept |
 | "GitHub repository owner/repo was not found" | 422 | The repository doesn't exist, or it's private and the server's `GITHUB_TOKEN` can't read it |
 | "Branch 'x' does not exist", "owner/repo is empty" or "GitHub denied access" | 422 | The branch is missing, the repository has no content, or GitHub refused access |
 | "owner/repo has already been added", with an "Open it" link | 409 | Same URL as an existing repository. Case doesn't matter. The body also has `repository_id` |
@@ -107,20 +107,23 @@ flowchart TD
     configured -- "yes" --> fetch["List the repository<br/>GitHub API, or a shallow clone<br/>skip vendored and minified files, lockfiles"]
     fetch --> select["Keep files under 1 MB<br/>at most 1000 files and 100 MB"]
     select --> download["Download the files"]
-    download --> clear["Clear the previous index<br/>Algolia records and rows"]
-    clear --> batch["Next batch of 200 files"]
+    download --> batch["Next batch of 200 files"]
     batch --> parse["Parse each file<br/>a parse failure is counted"]
     parse --> store["Store files and entities<br/>a failed batch is rolled back"]
     store --> more{"More files?"}
     more -- "yes" --> batch
-    more -- "no" --> index["Index the entities in Algolia"]
-    index --> skipped{"Anything left out?"}
+    more -- "no" --> index["Index the entities in Algolia<br/>tagged with this run's id"]
+    index --> clear["Delete the previous run's<br/>rows and Algolia records"]
+    clear --> skipped{"Anything left out?"}
     skipped -- "no" --> completed["completed"]
     skipped -- "yes" --> partial["completed<br/>error_message: Partially indexed"]
     configured -- "no" --> failed["failed<br/>error_message says why"]
+    failed -. "a reprocess of a<br/>completed repository" .-> kept["completed, previous index kept<br/>error_message: Reprocessing failed"]
     fetch -. "GitHub or clone error" .-> failed
     index -. "nothing indexed,<br/>or Algolia rejects it" .-> failed
 ```
+
+The previous run's rows and records stay searchable until the new run is complete. If a reprocess of a completed repository fails, they are kept: the repository goes back to `completed`, and `error_message` reads "Reprocessing failed: <reason>. Search still uses the previous index." With an embeddings key, the run also embeds its definitions after indexing them.
 
 Progress is pushed to the dashboard after every batch. A file that fails to parse is still stored, without entities. A repository too large for one GitHub tree call is also listed through the contents API, up to 300 directories; anything it never reaches counts as left out. Repositories on other hosts are read with a shallow `git clone` instead, and the same file rules apply.
 
@@ -131,7 +134,8 @@ stateDiagram-v2
     [*] --> pending: repository added
     pending --> processing: job starts
     processing --> completed: indexed
-    processing --> failed: error or crash
+    processing --> failed: error, with no earlier index
+    processing --> completed: reprocess failed, previous index kept
     completed --> processing: reprocess with force_reprocess
     failed --> processing: reprocess
     processing --> processing: server restart, runs again
@@ -156,7 +160,7 @@ flowchart TB
     search --> github["Open the result at the<br/>exact line on its host"]
 ```
 
-Progress arrives over the WebSocket, with polling every 3 seconds as well.
+Progress arrives over the WebSocket. The page also polls, every 15 seconds while the WebSocket is connected and every 3 seconds while it isn't.
 
 ### Using it from an MCP client
 
@@ -264,7 +268,7 @@ The dashboard follows your system's light or dark theme. The ☾ / ☀ button in
 
 | Page | What you can do |
 | --- | --- |
-| Home (`/`) | Add a repository. Type `owner/repo` or paste a GitHub URL, and it is trimmed to `owner/repo`. Any other URL whose first part is a host name, such as `gitlab.com/group/project` or `git@gitlab.com:group/project.git`, is sent as an https URL and checked by the server. The branch and a description have their own optional fields; the description shows on the repository page. |
+| Home (`/`) | Add a repository. Type `owner/repo` or paste a GitHub URL, and it is trimmed to `owner/repo`, keeping a `/tree/<branch>` part: the server reads the branch from it. Any other URL whose first part is a host name, such as `gitlab.com/group/project` or `git@gitlab.com:group/project.git`, is sent as an https URL and checked by the server. The branch and a description have their own optional fields; the description shows on the repository page. |
 | Repository (`/repository/:id`) | Watch indexing progress. Afterwards, search with suggestions (arrow keys and Enter work), filter by language and kind, and browse every definition by name and kind. With an embeddings key on the server, a third select switches search to **By meaning**: definitions are ranked by meaning, each hit shows its similarity (cosine, higher is closer), and suggestions come by meaning too. A result opens in the file viewer; "source ↗" opens it on the host at the indexed commit. The header shows that commit ("Indexed at abc1234") and whether the branch has moved since: "3 commits behind main" on GitHub, "main has changed since" elsewhere, or "Up to date with main", with a "Reprocess to update" link when it has moved. It asks once per visit, never on the status poll. Reprocess or delete the repository. |
 | File viewer (`/repository/:id/file?path=…&line=…&end=…`) | Read an indexed file 400 lines at a time, with the target lines highlighted and the file's definitions listed beside it. |
 | Search (`/search?q=…`) | Search every indexed repository at once. Each hit names its repository and opens in that repository's file viewer. As on the repository page, the query's words are highlighted in the results, and the query and a semantic mode stay in the URL. |
@@ -352,11 +356,11 @@ curl -X POST http://127.0.0.1:8001/api/v1/repositories/ \
 | `CORS_ORIGINS` | localhost ports 3000, 5173, 5174 (`.env.example`, which `make setup` copies, sets only 3000 and 5173) | Comma-separated list of origins; `*` is rejected. Also decides which browser origins may write |
 | `ALLOWED_HOSTS` | unset | With a key set, extra hostnames the API answers to, besides loopback and the `CORS_ORIGINS` hosts. Comma-separated; `*.example.com` allows subdomains, `*` allows any host |
 | `INDEX_WORKERS` | `inline` | Who runs indexing jobs. `inline`: the API process. `external`: the API only queues them in the database (the `jobs` table), and one or more `python -m app.worker` processes run them, so heavy parsing and embedding never slow the API. Start workers after the API, which applies the migrations. With Compose: `INDEX_WORKERS=external docker compose -f deployment/docker-compose.yml --profile workers up -d --scale worker=2` |
-| `EMBEDDING_API_URL`, `EMBEDDING_API_KEY`, `EMBEDDING_MODEL` | OpenAI's endpoint, unset, `text-embedding-3-small` | Semantic search, bring your own key: any OpenAI-compatible `/v1/embeddings` (OpenAI, Voyage, a gateway, or a local Ollama with any key). Off while the key is unset. Each run then embeds its definitions (not imports) and stores the vectors in SQLite; definitions and queries are sent to that provider. The dashboard offers **By meaning** search only while it's set, and each semantic suggestion costs one embeddings call |
+| `EMBEDDING_API_URL`, `EMBEDDING_API_KEY`, `EMBEDDING_MODEL` | OpenAI's endpoint, unset, `text-embedding-3-small` | Semantic search, bring your own key: any OpenAI-compatible `/v1/embeddings` (OpenAI, Voyage, a gateway, or a local Ollama with any key). Off while the key is unset. Each run then embeds its definitions (not imports) and stores the vectors in the database; definitions and queries are sent to that provider. The dashboard offers **By meaning** search only while it's set, and each semantic suggestion costs one embeddings call |
 | `REFRESH_INTERVAL_MINUTES` | `0` (off) | Every N minutes, check each completed repository's branch (the same check as the freshness line) and run an incremental reindex of those that moved. Answers are cached for 10 minutes, so a shorter interval adds nothing |
 | `ENVIRONMENT`, `LOG_LEVEL` | `development`, `INFO` | `production` hides `/docs` and `/redoc`. `/openapi.json` stays on; the prod stack's nginx doesn't route it |
 
-Rate limits are per client address: 100 per minute for repository create and process and for search suggestions, and 30 per minute for MCP tool calls and resource reads.
+Rate limits are per client address: 100 per minute for repository create, process and freshness and for search suggestions, and 30 per minute for MCP tool calls and resource reads.
 
 ## Deployment
 
@@ -378,7 +382,7 @@ cd frontend && npm run lint
 cd frontend && npm run build      # type-check and production build
 ```
 
-CI ([.github/workflows/ci.yml](.github/workflows/ci.yml)) runs on pushes to `master` and on every pull request. It runs the backend lint and tests, the frontend lint, build and tests, and the Playwright end-to-end tests. It also validates both Compose files and both nginx configs (`nginx -t`), and builds the prod backend image. It then starts the dev stack (`deployment/docker-compose.yml`) with a throwaway `backend/.env` and fake Algolia keys, and checks that the backend answers `/health`, that nginx serves the app at `/`, and that nginx proxies `/health` and an API call to the backend. The stack is torn down afterwards, and its logs are printed if a check fails.
+CI ([.github/workflows/ci.yml](.github/workflows/ci.yml)) runs on pushes to `master` and on every pull request. It runs the backend lint and tests, the Postgres tests against Postgres 16, the frontend lint, build and tests, and the Playwright end-to-end tests. It also validates both Compose files and both nginx configs (`nginx -t`), checks that every proxied location in the prod template overwrites `X-Forwarded-For`, and builds the prod backend image. It then starts the dev stack (`deployment/docker-compose.yml`) with a throwaway `backend/.env` and fake Algolia keys, and checks that the backend answers `/health`, that nginx serves the app at `/`, and that nginx proxies `/health` and an API call to the backend. The stack is torn down afterwards, and its logs are printed if a check fails.
 
 ```
 backend/app/            FastAPI app: api/ (routes), core/ (config, auth, database), models/, schemas/, services/

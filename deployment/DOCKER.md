@@ -65,7 +65,7 @@ The dev stack serves the built dashboard and proxies the API through nginx, with
 - **The key is mandatory.** The container listens on `0.0.0.0` (`MCP_SERVER_HOST`), so the backend refuses to start without `CODESAGE_API_KEY`.
 - **The key is embedded.** Compose passes your shell's `CODESAGE_API_KEY` to the frontend build as `VITE_CODESAGE_API_KEY`, and Vite inlines it into the JavaScript. It must equal the value in `backend/.env`. Rebuild after changing it. This is acceptable for local, single-user use only.
 - **Unknown hosts are dropped.** The dev nginx closes the connection (`444`) for any `Host` other than `localhost` or `127.0.0.1`, so a DNS-rebinding page can't fetch the bundle.
-- **Overridden settings.** The Compose file sets `MCP_SERVER_HOST`, `MCP_SERVER_PORT`, `DATABASE_URL`, `ALGOLIA_INDEX_NAME` and `CORS_ORIGINS` (`http://localhost`, `:3000`, `:5173`) itself, and these win over `backend/.env`.
+- **Overridden settings.** The Compose file sets `MCP_SERVER_HOST`, `MCP_SERVER_PORT`, `DATABASE_URL`, `ALGOLIA_INDEX_NAME`, `CORS_ORIGINS` (`http://localhost`, `:3000`, `:5173`) and `INDEX_WORKERS` (your shell's value, else `inline`) itself, and these win over `backend/.env`.
 - **Hot reload.** `backend/` is bind-mounted into the container and uvicorn runs with `--reload --reload-dir app`.
 - **No TLS.** Port 443 is not published.
 

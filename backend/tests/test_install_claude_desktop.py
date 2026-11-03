@@ -27,6 +27,23 @@ def test_creates_config_when_missing(tmp_path):
     assert entry["env"] == {"MCP_SERVER_URL": "http://x:1", "CODESAGE_API_KEY": "k-123"}
 
 
+def test_a_symlinked_config_stays_a_symlink(tmp_path):
+    # A dotfiles-managed config: the update must land in the target, not replace the link
+    target = tmp_path / "dotfiles" / "mcp.json"
+    target.parent.mkdir()
+    target.write_text(json.dumps({"mcpServers": {"other": {"command": "x"}}}))
+    link = tmp_path / "client" / "mcp.json"
+    link.parent.mkdir()
+    link.symlink_to(target)
+
+    assert run(link) == 0
+
+    assert link.is_symlink() and link.resolve() == target
+    servers = json.loads(target.read_text())["mcpServers"]
+    assert set(servers) == {"other", "codesage"}
+    assert list(target.parent.glob("mcp.json.bak-*"))  # the backup sits next to the real file
+
+
 def test_merges_and_preserves_other_servers_and_keys(tmp_path):
     cfg = tmp_path / "c.json"
     original = {"theme": "dark", "mcpServers": {"other": {"command": "x"}}}

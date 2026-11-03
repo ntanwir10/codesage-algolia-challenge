@@ -60,7 +60,7 @@ async def test_delete_removes_only_that_repositorys_records(algolia_index):
         "3_b": {"objectID": "3_b", "repository_id": 3},
     }
 
-    assert await algolia_module.AlgoliaService().delete_repository_index(2, wait=True)
+    assert await algolia_module.AlgoliaService().delete_repository_index(2)
 
     assert set(algolia_index.records) == {"3_b"}
 
@@ -84,14 +84,6 @@ async def test_settings_are_written_only_when_they_differ(algolia_index, monkeyp
     monkeypatch.setattr(algolia_module, "_configured_indexes", set())
     await algolia_module.AlgoliaService().setup_index_settings()
     assert algolia_index.settings_writes == 1
-
-
-async def test_an_unpublished_delete_fails_instead_of_hanging(algolia_index, monkeypatch):
-    monkeypatch.setattr(algolia_module, "DELETE_WAIT_SECONDS", 0.3)
-    algolia_index.stuck_tasks = {7}
-    monkeypatch.setattr(algolia_index, "delete_by", lambda params: _PendingTask(7))
-
-    assert await algolia_module.AlgoliaService().delete_repository_index(2, wait=True) is False
 
 
 async def test_an_unpublished_save_does_not_hang_indexing(algolia_index, monkeypatch):

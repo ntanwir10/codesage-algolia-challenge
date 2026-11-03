@@ -6,17 +6,19 @@ The stack is React 19, TypeScript, Vite 7, Tailwind CSS, TanStack Query, React R
 
 ## Pages
 
-Three routes, all rendered inside a shared layout (header, footer and a connection-status badge). They are defined in `src/App.tsx`. The navigation stays visible on phones, and header rows wrap at narrow widths.
+Five routes, all rendered inside a shared layout (header with Home, Dashboard, Search and a theme toggle, footer, and a connection-status badge). They are defined in `src/App.tsx`. The navigation stays visible on phones, and header rows wrap at narrow widths.
 
 | Route | Page | What you can do |
 | --- | --- | --- |
-| `/` | `HomePage` | Add a GitHub repository. The field has a fixed `github.com/` prefix; type `owner/repo` or paste a GitHub URL, and it is normalised to `https://github.com/owner/repo` before it is sent. An optional branch field sits below. On success, land on its repository page. |
-| `/dashboard` | `DashboardPage` | List all repositories with status and progress. A failed card shows why. Open one with "View Details", delete one, or go to `/` through "Add Repository". There is no reprocess here. |
-| `/repository/:id` | `RepositoryPage` | See status, progress and statistics. When the repository is `completed`, search it with suggestions and open hits at the exact line. The source link says "View on GitHub" for github.com and "View source" for any other host. Reprocess or delete it. |
+| `/` | `HomePage` | Add a repository. Type `owner/repo` or paste a GitHub URL (it becomes `https://github.com/owner/repo`, keeping a `/tree/<branch>` part), or any other https or `git@host:path` URL whose first part is a host name. Optional Branch and Description fields sit below. On success, land on its repository page. |
+| `/dashboard` | `DashboardPage` | List every repository with status and progress, loaded 500 at a time. A failed card shows why in red; a completed one with a note shows it in amber. Open one with "View Details", delete one, or go to `/` through "Add Repository". There is no reprocess here. |
+| `/repository/:id` | `RepositoryPage` | See status, progress, statistics, the indexed commit and whether the branch has moved since. When the repository is `completed`, search it with suggestions and filters, browse its definitions (`definitions-browser`), and open hits in the file viewer; "source ↗" opens the host. Reprocess (after a confirmation dialog) or delete it. |
+| `/repository/:id/file` | `FileViewerPage` | Read an indexed file 400 lines at a time, with the target lines highlighted and the file's definitions beside it. |
+| `/search` | `SearchPage` | Search every indexed repository at once; each hit names its repository and opens in its file viewer. |
 
-- **Add errors.** The form validates `owner/repo` first ("Enter owner/repo, for example facebook/react"). A pasted `.../tree/<branch>` URL does not pass; use the branch field. Every error from the server appears inline under the repository field, with no redirect and no toast, and the input is kept. Editing the URL clears the error. The text is the server's message, or a fixed one for a timeout ("took too long"), no connection, `401`, `429` and `500` (with the request ID). A `409` adds an "Open it" link to the existing repository. The field is tied to its error with `aria-invalid` and `aria-describedby`. Only success shows a toast.
-- **Search.** It has query suggestions and paging (10 hits per page). There is no filter UI. Search is enabled only once the repository is `completed`. For a `failed` repository it says indexing failed and to reprocess; for a `pending` one it shows progress. A failed page change keeps the current results.
-- **Reprocess.** It is offered on the repository page for a completed or failed repository. It calls `POST /repositories/{id}/process?force_reprocess=true`.
+- **Add errors.** The form checks the input first ("Enter owner/repo for GitHub, or a repository's https URL"). A GitHub `.../tree/<branch>` URL passes, and the server reads the branch from it. Every error from the server appears inline, with no redirect and no toast, and the input is kept: under the Branch field when it is about the branch, otherwise under the repository field. Editing the URL clears the error. The text is the server's message, or a fixed one for a timeout ("took too long"), no connection, `401` and `500` (with the request ID); a `429` shows the server's text, which says how long to wait. A `409` adds an "Open it" link to the existing repository. The field is tied to its error with `aria-invalid` and `aria-describedby`. Only success shows a toast.
+- **Search.** It has query suggestions, paging (10 hits per page), and language and kind filters. With an embeddings key on the server, a third select switches to **By meaning**, which ranks definitions by meaning and suggests by meaning too. Matched words are highlighted (`highlight`). Search is enabled only once the repository is `completed`. For a `failed` repository it says indexing failed and to reprocess; for a `pending` one it shows progress. A failed page change keeps the current results.
+- **Reprocess.** It is offered on the repository page for a completed or failed repository, and opens a confirmation dialog first. It calls `POST /repositories/{id}/process?force_reprocess=true`. If a reprocess of a completed repository fails, the page shows "Reprocessing failed; the previous index is still searchable" in amber.
 - **Delete.** Both pages ask for confirmation first. The backend refuses to delete a repository while its job is running.
 - **Repository errors.** A `404`, or an id that isn't all digits, shows "not found", even if the repository was cached. Any other load error shows the message with "Try again". A failed background refresh keeps the data it has. Deleting a repository that is already gone counts as deleted.
 - **Page not found.** Any other path shows "Page not found" with a link home, inside the layout.
@@ -34,12 +36,13 @@ Run these from `frontend/`. From the repo root, `make start-frontend` runs `npm 
 | `npm run preview` | Serves the built `dist/` locally |
 | `npm run lint` | ESLint |
 | `npm test` | `vitest run`, one pass, jsdom |
+| `npm run test:e2e` | Playwright end-to-end tests in Chromium (first: `npx playwright install chromium`) |
 
 The dev server uses `strictPort`: if port 5173 is taken it exits instead of moving to the next port. The dev server proxies `/api`, `/ws` (with WebSocket upgrade) and `/health` to `127.0.0.1:8001`, so start the backend first (`make start-backend`). The app therefore uses same-origin `/api/v1` and `/ws` in development. In Docker, nginx does the same proxying.
 
 ## Configuration
 
-Put these in `frontend/.env.local` for development (see `.env.example`). In Docker they are build arguments; see [deployment/DOCKER.md](../deployment/DOCKER.md).
+Put these in `frontend/.env` for development (see `.env.example`). In Docker they are build arguments; see [deployment/DOCKER.md](../deployment/DOCKER.md).
 
 | Variable | Default | Notes |
 | --- | --- | --- |
@@ -58,9 +61,9 @@ Put these in `frontend/.env.local` for development (see `.env.example`). In Dock
 - **Base URL.** It comes from `VITE_API_BASE_URL`, as above. Request paths are relative and must not repeat `/api/v1`.
 - **API key.** A request interceptor sets `X-API-Key` when `VITE_CODESAGE_API_KEY` is set.
 - **401 responses.** A response interceptor calls `notifyAuthError()`. The layout listens for it and shows an "API key rejected" toast. It fires once, then stays quiet until a request succeeds or the WebSocket's `connected` frame arrives, because polling keeps getting `401`. A `401` with nginx's `WWW-Authenticate: Basic` challenge is the prod login, not the key, so it raises no toast; the browser asks for the login again.
-- **Messages.** `describeError` in `src/lib/errors.ts` turns an error into text: the server's `detail` for most statuses, a fixed line for `401`, `429` and `500`, and the server's own message for `502`, `503` and `504`. A timeout reads "took too long"; no response, or a `500` without the backend's request ID (the Vite proxy's answer when the backend is down), reads "Cannot reach the CodeSage server".
+- **Messages.** `describeError` in `src/lib/errors.ts` turns an error into text: the server's `detail` for most statuses, a fixed line for `401` (the API key, or the site's login when nginx refused it) and `500`, and the server's own message for `429`, `502`, `503` and `504`. A timeout reads "took too long"; no response, or a `500` without the backend's request ID (the Vite proxy's answer when the backend is down), reads "Cannot reach the CodeSage server".
 - **Retries.** TanStack Query does not retry 4xx responses. Other failures retry up to 3 times.
-- **Coverage.** It wraps repository CRUD, status and stats, reprocess, search, search suggestions and the MCP tool endpoints under `/ai/mcp`.
+- **Coverage.** Repositories (create, list a page, get, delete, reprocess, freshness, stats), search suggestions, capabilities, and the MCP tool call endpoint under `/ai/mcp`, which backs `searchCode`, `getFile` and `listDefinitions`.
 
 ## Live updates
 
@@ -86,10 +89,10 @@ flowchart TB
 - **Close reasons.** The server now sends text with its close codes: 1008 "Invalid or missing API key", 1013 "Too many connections; try again later" and 1011 "Internal error". The client does not show the text; it acts on the code.
 - **Code 1008.** The server rejected the key. The client stops retrying, logs a hint to check `VITE_CODESAGE_API_KEY`, and raises the same toast as an HTTP 401.
 - **Idle close.** The socket opens only while something is subscribed. One second after the last unsubscribe it closes with 1000. A tab that becomes visible again with subscribers and no socket reconnects at once.
-- **Cache updates.** Each `repository_status` frame patches the cached repository, and the repository list, with the new status and file counts. A status change, or a move to `completed` or `failed`, also invalidates the repository, status, stats and list queries, so they refetch.
-- **Subscriptions.** The repository page subscribes to its own repository. The dashboard subscribes to the repositories that are `pending` or `processing`.
-- **Toasts.** `Layout` runs one global listener (`useStatusToasts.ts`) that shows completion and failure toasts. Toasts sit in a live region, and errors use the alert role. The connection badge also lives in `Layout`. It shows "Live updates unavailable. Retrying…" once a connection with subscribers is lost, and stays up between retries until one succeeds.
-- **Polling.** WebSocket frames are not the only source. `src/lib/polling.ts` makes TanStack Query refetch every 3 s (`POLL_INTERVAL_MS`) while a repository is `pending` or `processing`, and stop once it is `completed` or `failed`. The repository, status and stats queries use `pollWhileActive`; the dashboard list uses `pollWhileAnyActive`.
+- **Cache updates.** Each `repository_status` frame patches the cached repository, and the repository list, with the new status and file counts. A status change, or a move to `completed` or `failed`, also invalidates the repository, stats and list queries, so they refetch.
+- **Subscriptions.** The repository page subscribes to its own repository. The dashboard subscribes to the repositories that are `pending` or `processing`, at most 100 (the server's cap per connection).
+- **Toasts.** `Layout` runs one global listener (`useStatusToasts.ts`) that shows completion and failure toasts. A reprocess that fails but keeps the previous index gets a yellow "Reprocessing failed" toast. Toasts sit in a live region, and errors use the alert role. The connection badge also lives in `Layout`. It shows "Live updates unavailable." with Reconnect and Dismiss once a connection with subscribers is lost, and stays up between retries until one succeeds.
+- **Polling.** WebSocket frames are not the only source. `src/lib/polling.ts` makes TanStack Query refetch while a repository is `pending` or `processing`, and stop once it is `completed` or `failed`: every 15 s (`LIVE_POLL_INTERVAL_MS`) while the WebSocket is connected, every 3 s (`POLL_INTERVAL_MS`) while it isn't. The repository and stats queries use `pollWhileActive`; the dashboard list uses `pollWhileAnyActive`, and every 3 s when more than 100 repositories are active.
 
 ## Layout
 
@@ -97,13 +100,13 @@ flowchart TB
 src/
   App.tsx             routes, providers, optional React Query devtools
   main.tsx            entry point
-  pages/              HomePage, DashboardPage, RepositoryPage
+  pages/              HomePage, DashboardPage, RepositoryPage, FileViewerPage, SearchPage
   components/
     ErrorBoundary.tsx  catches render crashes
-    features/         search-interface, repository-stats
-    forms/            github-form (owner/repo and branch validation)
-    layout/           Layout (header, footer, global toasts)
-    ui/               buttons, cards, toast, status badge, connection badge, dialogs
+    features/         search-interface, repository-stats, definitions-browser
+    forms/            github-form (URL and branch validation)
+    layout/           Layout (header, footer, global toasts), theme-toggle
+    ui/               buttons, cards, toast, status badge, connection badge, dialogs, highlight, empty-state
   services/           api.ts (HTTP client), websocket.ts (live-update client)
   hooks/              useRealtimeStatus, useStatusToasts, usePageTitle
   lib/                polling, queryClient, errors, utils
@@ -117,9 +120,10 @@ Tests use vitest with jsdom and Testing Library. The config is in `vite.config.t
 
 | Area | Test files |
 | --- | --- |
-| Pages | `HomePage`, `DashboardPage`, `RepositoryPage` |
+| Pages | `HomePage`, `DashboardPage`, `RepositoryPage`, `FileViewerPage` |
+| Hooks | `useRealtimeStatus` |
 | Services | `api` (key header, base URL, 401 handling), `websocket` (welcome-based status, subscriptions, heartbeat, backoff, 1008 and 1013, key subprotocol) |
-| Components | `search-interface`, `github-form`, `animated-progress`, `toast`, `ErrorBoundary`, `connection-status`, `delete-confirmation-dialog` |
+| Components | `search-interface`, `definitions-browser`, `github-form`, `animated-progress`, `toast`, `ErrorBoundary`, `connection-status`, `delete-confirmation-dialog`, `highlight`, `theme-toggle` |
 | Lib | `polling`, `queryClient`, `errors` |
 
-They are unit tests only. Nothing runs against a real backend or browser.
+The Playwright tests in `e2e/` start their own backend on port 8011, with a database seeded by `e2e/seed.py` and no Algolia, GitHub or API key, and Vite on 5183 proxying to it. They cover the Home form's validation and refusal, the dashboard, the repository page and the file viewer, but not search, freshness or indexing.

@@ -99,6 +99,20 @@ def test_fresh_database_has_expected_schema(tmp_path):
         assert conn.execute(text("SELECT version_num FROM alembic_version")).scalar() == HEAD
 
 
+def test_migrations_match_the_models(tmp_path):
+    # Tests build their databases from the models, so only this catches a column added without a migration
+    from alembic.autogenerate import compare_metadata
+    from alembic.migration import MigrationContext
+
+    import app.models  # noqa: F401  registers every table
+    from app.core.database import Base
+
+    engine = _engine(tmp_path / "drift.db")
+    upgrade_database(engine)
+    with engine.connect() as conn:
+        assert compare_metadata(MigrationContext.configure(conn), Base.metadata) == []
+
+
 def test_legacy_database_is_stamped_and_cleaned(tmp_path):
     db = tmp_path / "legacy.db"
     _build_legacy(db)

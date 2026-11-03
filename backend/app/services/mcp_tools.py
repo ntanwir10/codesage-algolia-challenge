@@ -15,6 +15,7 @@ from datetime import UTC
 from typing import Any
 from urllib.parse import urlsplit
 
+import numpy as np
 import regex
 import structlog
 from pydantic import BaseModel, ValidationError
@@ -290,12 +291,15 @@ def rank_definitions(
         query = query.filter(CodeFile.language == language)
     if entity_type:
         query = query.filter(CodeEntity.entity_type == entity_type)
-    scored = [
-        (embeddings.similarity(query_vector, embeddings.unpack(entity.embedding)), entity, path, file_language)
-        for entity, path, file_language in query
-    ]
-    scored.sort(key=lambda row: row[0], reverse=True)
-    return scored
+    target = np.frombuffer(query_vector, dtype=np.float32)
+    # A vector of another length (a model with other dimensions) can't be compared, so it isn't ranked
+    rows = [row for row in query if row[0].embedding and len(row[0].embedding) == target.nbytes]
+    if not rows:
+        return []
+    # One matrix-vector product scores every definition at once; vectors are unit length, so it's the cosine
+    matrix = np.frombuffer(b"".join(entity.embedding for entity, _, _ in rows), dtype=np.float32).reshape(len(rows), -1)
+    scores = matrix @ target
+    return [(float(scores[i]), *rows[i]) for i in np.argsort(-scores, kind="stable")]
 
 
 async def _semantic_search(db: Session, args: schemas.SearchCodeArgs, repository: Repository | None) -> dict:

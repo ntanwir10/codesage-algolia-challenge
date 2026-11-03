@@ -99,6 +99,9 @@ def write_atomic(path: Path, data: bytes) -> None:
     try:
         with os.fdopen(fd, "wb") as fh:
             fh.write(data)
+            # On disk before the rename, so a crash can't leave the client's config empty
+            fh.flush()
+            os.fsync(fh.fileno())
         os.chmod(tmp, 0o600)
         os.replace(tmp, path)
     except BaseException:
@@ -141,7 +144,8 @@ def main(argv: list[str] | None = None) -> int:
     args = ap.parse_args(argv)
 
     label, key = CLIENTS[args.client]
-    config_path = args.config or default_config_path(args.client)
+    # Through any symlink (a dotfiles-managed config): the rename must replace the target, not the link
+    config_path = (args.config or default_config_path(args.client)).resolve()
     server_url = args.server_url or os.environ.get("MCP_SERVER_URL") or DEFAULT_URL
     # Behind the basic-auth proxy nginx supplies the key, so don't copy the backend's into this config
     api_key = args.api_key or ("" if args.basic_auth else read_env_value(ENV_FILE, "CODESAGE_API_KEY")) or ""

@@ -1,9 +1,12 @@
 """Python entity extraction: every definition survives, with real line ranges"""
 
+import ast
 import textwrap
 import time
 
-from app.services.code_parser import CodeParser
+import pytest
+
+from app.services.code_parser import BODY_MAX_CHARS, CodeParser, source_segment
 
 SOURCE = textwrap.dedent(
     '''\
@@ -646,3 +649,48 @@ def test_terraform_block_comment_has_no_stray_stars():
 def test_terraform_only_the_comment_run_directly_above_the_first_block_counts():
     src = '# Unrelated\n\n# Bucket\n# for logs\nresource "a" "b" {}\n'
     assert CodeParser().parse("main.tf", src, "terraform")[0].description == "Bucket for logs"
+
+
+# --- hostile input stays linear -------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("path", "language", "content"),
+    [
+        # Each nested definition used to walk Node.parent up from the root: quadratic in depth
+        ("deep.js", "javascript", "function f(){" * 20000 + "}" * 20000),
+        ("arrows.js", "javascript", "export default () => {" * 20000 + "}" * 20000),
+        # ast.get_source_segment re-split the whole file for every import
+        ("many.py", "python", "import os\n" * 20000),
+    ],
+)
+def test_hostile_files_parse_in_linear_time(path, language, content):
+    started = time.perf_counter()
+    entities = CodeParser().parse(path, content, language)
+    assert len(entities) == 20000
+    assert time.perf_counter() - started < 5  # was 40 s and more
+
+
+def test_a_one_line_file_caps_what_each_entity_copies():
+    line = "function f(){" * 3000 + "}" * 3000
+    entities = CodeParser().parse("min.js", line, "javascript")
+    assert len(entities) == 3000
+    assert all(len(e.content) <= BODY_MAX_CHARS and len(e.body) <= BODY_MAX_CHARS for e in entities)
+
+
+def test_import_segments_match_ast():
+    source = 'import os; import sys\nfrom ñandú import (\n    a,\n    b as c,\n)  # x\nimport x.y as z\n'
+    lines = source.split("\n")
+    nodes = [n for n in ast.walk(ast.parse(source)) if isinstance(n, (ast.Import, ast.ImportFrom))]
+    assert len(nodes) == 4
+    assert [source_segment(lines, n) for n in nodes] == [ast.get_source_segment(source, n) for n in nodes]
+
+
+async def test_python_lines_ending_in_a_lone_carriage_return_parse():
+    entities = await CodeParser().extract_entities("old.py", "import os\rdef f():\r    return 1\r", "python")
+
+    assert [(e.entity_type, e.name, e.line_start, e.content) for e in entities] == [
+        ("import", "import os", 1, "import os"),
+        ("function", "f", 2, "def f():"),
+    ]
+

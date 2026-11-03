@@ -22,7 +22,7 @@ How to connect an MCP client (Claude Desktop, Cursor, VS Code, Windsurf or any o
 
 Your MCP client starts `mcp_launcher.sh`. The launcher runs `python -m codesage_mcp` (the bridge) from `backend/`, using `.venv/bin/python` at the repo root. The bridge is built on the `mcp` Python SDK (pinned in `backend/requirements.txt`) and forwards each tool call as an HTTP request to the backend.
 
-- **Schemas live in the bridge.** `tools/list` is answered from `backend/codesage_mcp/schemas.py`, so it works while the backend is down. Only tool calls and resource reads need the backend.
+- **Schemas live in the bridge.** `tools/list` is answered from `backend/codesage_mcp/schemas.py`, so it works while the backend is down. Only tool calls, `resources/list` and resource reads need the backend.
 - **Arguments are checked twice.** The bridge validates them first, then the backend validates them again. Unknown arguments are rejected in both places.
 - **Logs go to stderr.** stdout carries the protocol only.
 
@@ -80,7 +80,7 @@ Options go through `ARGS`. Restart the client afterwards.
 
 - **Merges one entry.** It adds or replaces `<servers key>.<name>` (`mcpServers`, or `servers` for VS Code) and keeps every other key and server. It refuses a config whose servers key is not an object.
 - **Backs up first.** If the config exists, it writes `<config file>.bak-<YYYYMMDD-HHMMSS>-<pid>` next to it (a `-1`, `-2` suffix if the name is taken), a byte-exact copy.
-- **Protects the key.** Both files are written atomically (temp file, then rename) at mode 600, because they can hold the API key.
+- **Protects the key.** Both files are written atomically (temp file, flushed to disk, then rename) at mode 600, because they can hold the API key. A config that is a symlink, such as one kept in a dotfiles repository, stays a link: the installer writes to the file it points to.
 - **Refuses to overwrite a bad file.** If the config is not valid JSON, or not a JSON object, it exits with an error and changes nothing. A config it can't read, or a folder it can't write to, is also a one-line error, and it checks this before touching the Keychain, so a failed run leaves no stray item.
 - **Warns when the client looks missing.** If the default config folder doesn't exist, it prints a warning and creates the folder anyway. It doesn't warn when you pass `--config`.
 - **Reads the key from `backend/.env`.** `--api-key` wins. With `--basic-auth` it does not copy the backend's key, because nginx adds it. `make install-claude` first generates the key if `backend/.env` has none. Run directly with no key found and no `--basic-auth`, it warns and writes an empty `CODESAGE_API_KEY`.
@@ -106,9 +106,10 @@ Copy `claude_desktop_config.example.json` into your client's config and set the 
 
 ### The launcher
 
-`mcp_launcher.sh` does three things:
+`mcp_launcher.sh` does four things:
 
 - **Finds Python.** It exits with `.venv/bin/python not found. Run `make setup`...` if the virtualenv is missing, and with "the Python dependencies are missing" if `codesage_mcp` or `mcp` can't be imported. Both messages say to run `make setup`.
+- **Fills in a local key.** If neither `CODESAGE_API_KEY` nor `CODESAGE_BASIC_AUTH_USER` is set and `MCP_SERVER_URL` is a loopback `http://` address (the default), it reads `CODESAGE_API_KEY` from `backend/.env`, so a regenerated key can't leave the client behind. A remote server keeps its own key.
 - **Looks up the basic-auth password.** If `CODESAGE_BASIC_AUTH_USER` is set, `CODESAGE_BASIC_AUTH_PASSWORD` is not, and `security` exists, it reads the password from the Keychain (`security find-generic-password -s codesage-mcp -a <user> -w`). A missing entry gives an empty password and a warning on stderr.
 - **Starts the bridge.** `cd backend && exec .venv/bin/python -m codesage_mcp`.
 
@@ -143,7 +144,7 @@ Request behaviour:
 
 ### `list_repositories`
 
-Lists indexed repositories with `id`, `name`, `url`, `branch`, `status`, `total_files`, `total_entities`, `error_message` and `processed_at`. No arguments.
+Lists indexed repositories with `id`, `name`, `url`, `branch`, `commit_sha`, `status`, `total_files`, `total_entities`, `error_message` and `processed_at`. No arguments.
 
 ### `search_code`
 
@@ -279,7 +280,7 @@ The bridge also answers `resources/list` and `resources/read`. Reading needs the
 | `codesage://repositories` | The same data as `list_repositories` |
 | `codesage://repositories/{id}/files` | `repository`, `total_files`, `truncated`, and `files` with path, language and line count. At most the first 5000 files; `truncated` is true when there are more |
 
-`resources/list` advertises `codesage://repositories`. `resources/templates/list` advertises `codesage://repositories/{id}/files` as a template, so a client can fill in an ID that `list_repositories` returns. The bridge builds both lists itself; reading goes through the backend.
+`resources/list` advertises `codesage://repositories`. `resources/templates/list` advertises `codesage://repositories/{id}/files` as a template, so a client can fill in an ID that `list_repositories` returns. The bridge builds the template list itself; the resource list and reads go through the backend.
 
 `{id}` is the numeric ID only. An unknown URI fails with `Unknown resource '<uri>'` and an unknown ID with `Repository <id> not found`. The bridge prefixes both with `Resource or repository not found: `.
 
@@ -326,7 +327,7 @@ curl -X POST http://127.0.0.1:8001/api/v1/ai/mcp/tools/call \
 | No answer in 30 s | `CodeSage backend did not answer within 30 s.` |
 | Other transport error | `CodeSage backend request failed: <type>: <message>` |
 | 401 with a Basic `WWW-Authenticate` | `The proxy in front of CodeSage rejected the login (401)...` |
-| 401, no key configured | `No API key is configured; set CODESAGE_API_KEY in the MCP server's env in your MCP client's config (for Claude Desktop, run `make install-claude`).` For a local backend the launcher reads the key from `backend/.env` when the config leaves it empty, so this means that file has no key either |
+| 401, no key configured | `No API key is configured; set CODESAGE_API_KEY in the MCP server's env in your MCP client's config (run `make install-claude`, or install-cursor, install-vscode or install-windsurf).` For a local backend the launcher reads the key from `backend/.env` when the config leaves it empty, so this means that file has no key either |
 | 401, key sent | `CodeSage backend rejected the API key (401); check CODESAGE_API_KEY in the MCP server config` |
 | 403 | `CodeSage refused the request (403): <detail>. If the backend runs on another host, add that host to ALLOWED_HOSTS on the backend and check MCP_SERVER_URL.` |
 | 404 | `The backend returned 404 for <path>; check that MCP_SERVER_URL points at the backend root (no /api/v1).` Unknown tool names never get this far: the bridge answers `Unknown tool '<name>'. Available tools: ...` itself |
@@ -382,7 +383,7 @@ Set `MCP_SERVER_URL` and `CODESAGE_API_KEY` in the Inspector's environment field
 ## Known limitations
 
 - **Backend must be running.** The bridge does not start it.
-- **Single process.** The backend keeps job state in memory, so run one worker.
+- **Single process.** The backend keeps WebSocket subscriptions, rate limits and caches in memory, and job state too unless `INDEX_WORKERS=external`, so run one API process.
 - **Rate limits are per address.** The 30 per minute on tool calls and resource reads is shared by everything behind one IP, such as nginx in the prod stack.
 - **Other hosts are public only.** `add_repository` and the dashboard can't read private repositories except on github.com.
 - **Cross-repository search.** `search_code` without `repository` includes repositories that are being reprocessed.
