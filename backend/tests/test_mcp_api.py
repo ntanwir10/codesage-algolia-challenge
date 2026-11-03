@@ -15,6 +15,7 @@ def test_tools_list_has_input_schemas(client):
                           "analyze_repository", "find_patterns", "find_references", "add_repository"}
     search = next(t for t in body["tools"] if t["name"] == "search_code")
     assert search["description"] and search["inputSchema"]["properties"]["limit"]["maximum"] == 50
+    assert "total_hits" in search["outputSchema"]["required"]
 
 
 def test_call_success_shape(client, db_session):

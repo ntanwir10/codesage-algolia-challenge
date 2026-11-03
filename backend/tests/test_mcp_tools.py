@@ -4,6 +4,7 @@ import time
 from datetime import UTC, datetime
 from pathlib import Path
 
+import jsonschema
 import pytest
 from pydantic import ValidationError
 
@@ -11,11 +12,20 @@ from app.models.code_entity import CodeEntity
 from app.models.code_file import CodeFile
 from app.models.repository import Repository
 from app.services import mcp_tools
-from app.services.mcp_tools import ToolError, call_tool, resolve_repository
+from app.services.mcp_tools import ToolError, resolve_repository
+from app.services.mcp_tools import call_tool as backend_call_tool
 from app.services.repository_service import RepositoryService
+from codesage_mcp.schemas import output_schema
 
 BACKEND = Path(__file__).resolve().parent.parent
 
+
+
+async def call_tool(db, name, arguments):
+    """Every result these tests see must match the outputSchema MCP clients validate against"""
+    result = await backend_call_tool(db, name, arguments)
+    jsonschema.validate(result, output_schema(name))
+    return result
 
 def make_repo(db, name="zustand", url="https://github.com/pmndrs/zustand", status="completed", **kw):
     repo = Repository(name=name, url=url, status=status, **kw)

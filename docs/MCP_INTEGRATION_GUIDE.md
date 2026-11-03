@@ -136,6 +136,8 @@ Request behaviour:
 
 ## Tools
 
+A successful tool call answers with one JSON object, sent twice: as `structuredContent`, which matches the tool's `outputSchema` in `tools/list`, and as the same JSON in a text block for clients that predate structured results. The schemas live in `backend/codesage_mcp/schemas.py` next to the argument models. They list the top-level fields and allow extra ones, so a new field in a later version doesn't break a client that validates. A failed call is text only, with `isError` set; see [How failures reach your assistant](#how-failures-reach-your-assistant). `GET /mcp/tools` returns the same `outputSchema` beside each `inputSchema`.
+
 `repository` accepts the numeric ID, the name, or `owner/name`; `list_repositories` shows them. Matching on name and `owner/name` ignores case.
 
 - **Not ready.** Every tool except `list_repositories` and `add_repository` refuses a repository that isn't `completed`. A failed one gives the reason from `error_message` and says to reprocess it. A `pending` or `processing` one shows progress, such as "still indexing (120/400 files)".
@@ -336,7 +338,7 @@ curl -X POST http://127.0.0.1:8001/api/v1/ai/mcp/tools/call \
 | 5xx with a JSON body | `CodeSage backend error (<status>): <detail>`, plus `(request <id>)` when there is a request ID. A 500 always has one |
 | 5xx without JSON (a proxy's HTML page) | `CodeSage backend error (<status>); the backend or the proxy in front of it may be down.` The body is not echoed |
 | Any other non-200 | `Unexpected response from CodeSage backend (<status>): <detail>` |
-| 200 that is not a JSON object | `CodeSage backend returned an unexpected response; check MCP_SERVER_URL` |
+| 200 that is not a JSON object, or whose `result` is not one | `CodeSage backend returned an unexpected response; check MCP_SERVER_URL` |
 | 200 with `is_error: true` | The backend's message, for example `Repository 'x' failed to index: <reason>. Reprocess it from the dashboard.` |
 | 200 with `is_error: true` from `add_repository` | The refusal text, such as `<host>/<path> was not found or is private; only public repositories are supported on <host>.`; see [`add_repository`](#add_repository) |
 | Bad arguments, caught by the bridge | `Invalid arguments for '<name>': <field>: <reason>`, nothing is sent |
@@ -378,7 +380,7 @@ Read the bridge's stderr in your client's MCP log for the `codesage` server (Cur
 npx @modelcontextprotocol/inspector ./mcp_launcher.sh  # run from the repo root
 ```
 
-Set `MCP_SERVER_URL` and `CODESAGE_API_KEY` in the Inspector's environment fields, or export them first. You should see eight tools under Tools. With the backend running, calling one returns JSON.
+Set `MCP_SERVER_URL` and `CODESAGE_API_KEY` in the Inspector's environment fields, or export them first. You should see eight tools under Tools, each with an output schema. With the backend running, calling one returns JSON, both as structured content and as text.
 
 ## Known limitations
 
