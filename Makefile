@@ -44,7 +44,7 @@ help:
 	@echo "  db-migration    - Autogenerate a new Alembic migration (prompts for a message)"
 	@echo ""
 	@echo "🧹 Maintenance:"
-	@echo "  clean           - Remove this project's containers, networks and volumes"
+	@echo "  clean           - Remove the dev stack's containers, networks and volumes"
 	@echo "  clean-all       - Like clean, and also remove the images it built"
 	@echo "  status          - Show running containers"
 	@echo ""
@@ -97,7 +97,6 @@ start:
 
 start-backend:
 	@echo "🔧 Starting CodeSage - MCP-First Code Discovery backend server..."
-	@echo "📍 Make sure your virtual environment is active: source .venv/bin/activate"
 	cd backend && exec ../.venv/bin/python -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8001
 
 start-frontend:
