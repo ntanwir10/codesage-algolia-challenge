@@ -350,7 +350,7 @@ GitHub sends a `ping` first, which gets `202`. Each delivery's response, under *
 - **Which repositories.** A push starts a run for each `completed` repository with the pushed GitHub URL and branch. A repository with no branch follows the payload's default branch. Other branches, tags, other events and a push of the commit already indexed start nothing.
 - **Authentication.** The signature in `X-Hub-Signature-256` (HMAC-SHA256 of the body with the secret) is checked first, and a missing or wrong one gets `401`. The endpoint needs no API key, since GitHub can't send one. The prod nginx exempts this one path from its login. The host check still applies when a key is set, so the host GitHub calls must be in `ALLOWED_HOSTS`.
 - **Busy repositories.** A push that arrives while a run is going is not queued. The next push picks it up, or the scheduled refresh if it's on.
-- **Locally.** Without a key, the backend only serves loopback clients. Forward deliveries with a client that runs on the same machine and calls `http://localhost:8001/api/v1/webhooks/github`, such as [smee.io](https://smee.io)'s `smee` client.
+- **Locally.** Without a key, the backend serves only loopback clients that address it as `localhost`. A forwarder must therefore post from the same machine to `http://localhost:8001/api/v1/webhooks/github` with `Host: localhost`. It must also pass the body through byte for byte, since the signature covers the exact bytes GitHub sent.
 
 ## Security
 
