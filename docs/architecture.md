@@ -110,6 +110,10 @@ A run turns a git repository into stored files, entities and Algolia records. Th
 
 With `REFRESH_INTERVAL_MINUTES` above 0, the lifespan starts `refresh_loop`. It waits one interval, then calls `refresh_once` each interval until shutdown cancels it. `refresh_once` asks `index_freshness` about every `completed` repository with a `commit_sha`, skipping any with a job running, and starts an incremental run for each whose branch moved. A `422` from the check also starts one: after a force-push GitHub's compare can't find the indexed commit, and if the branch is really gone the run fails and keeps the previous index. Any other error skips that repository only. Off by default, so tests, CI and Docker never start it.
 
+### Refresh on push
+
+`POST /api/v1/webhooks/github` (`endpoints/webhooks.py`) starts the same run for one push. With `GITHUB_WEBHOOK_SECRET` unset it answers `404`. Otherwise it checks `X-Hub-Signature-256` against an HMAC-SHA256 of the raw body with `hmac.compare_digest`, before it parses anything. A `push` to `refs/heads/<branch>` is matched against the `completed` repositories that have a `commit_sha`, the same set `refresh_once` walks. A repository matches on host and path from `parse_repository_url` (path case ignored) and on its branch, or the payload's `default_branch` when it has none. It also needs a `commit_sha` that differs from the payload's `after`. `start_processing(id, force_reprocess=True, incremental=True)` only schedules the job, so the response, `202` `{started, busy}`, returns at once. A repository already running is listed under `busy` and not queued. The route has no `require_api_key`, since the signature is its authentication, and the prod nginx turns basic auth off for that one location. `BrowserRequestGuard` still applies: GitHub sends no `Origin`, and its `Host` must pass the host check.
+
 ### Fetching by host
 
 `repository_service.py` picks the source from the URL's host. `GitHubService` and `GitSource` share one `FileSelector`, so the deny list, extensions, size and count limits are the same.

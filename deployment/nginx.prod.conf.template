@@ -96,6 +96,18 @@ server {
         proxy_read_timeout 60s;
     }
 
+    # GitHub can't log in: the backend checks the webhook's signature instead, and it needs no API key
+    location = /api/v1/webhooks/github {
+        auth_basic off;
+        proxy_pass http://codesage_backend;
+        proxy_http_version 1.1;
+        proxy_set_header Host $http_host;
+        proxy_set_header X-Forwarded-For $remote_addr;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_set_header Authorization "";
+        proxy_read_timeout 60s;
+    }
+
     # Open, so load balancers and uptime checks need no password
     location = /health {
         auth_basic off;
