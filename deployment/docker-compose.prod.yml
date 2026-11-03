@@ -10,6 +10,10 @@ services:
       - backend_data_prod:/app/data # SQLite database storage
     env_file:
       - ../backend/.env
+    # A local Ollama (EMBEDDING_API_URL) runs on the host: Docker Desktop and OrbStack map this
+    # name themselves, Linux Docker Engine only with this line
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     environment:
       - DATABASE_URL=sqlite:///./data/codesage.db
       # One source for the key: the shell. nginx gets the same value below, and the
