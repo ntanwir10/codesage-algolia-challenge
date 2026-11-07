@@ -136,6 +136,26 @@ def test_basic_auth_does_not_copy_the_backend_key(tmp_path, monkeypatch):
     assert "backend-secret" not in cfg.read_text()
 
 
+@pytest.mark.parametrize(
+    "url, copied",
+    [
+        ("http://127.0.0.1:8001", False),
+        ("http://localhost:8001", False),
+        ("http://[::1]:8001", False),
+        # Outside mcp_launcher.sh's loopback test, so the launcher won't fill the key in for them
+        ("http://127.0.0.1.example.com:8001", True),
+        ("https://localhost:8001", True),
+    ],
+)
+def test_a_local_backend_key_stays_out_of_the_config(tmp_path, monkeypatch, url, copied):
+    env_file = tmp_path / ".env"
+    env_file.write_text("CODESAGE_API_KEY=backend-secret\n")
+    monkeypatch.setattr(installer, "ENV_FILE", env_file)
+    cfg = tmp_path / "c.json"
+    assert installer.main(["--config", str(cfg), "--server-url", url]) == 0
+    assert ("backend-secret" in cfg.read_text()) == copied
+
+
 def test_basic_auth_stores_password_in_keychain_and_only_user_in_config(tmp_path, monkeypatch):
     calls = []
     monkeypatch.setattr(installer.shutil, "which", lambda name: "/usr/bin/security")
