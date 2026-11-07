@@ -30,7 +30,10 @@ def test_a_running_claude_desktop_is_named(tmp_path, monkeypatch, capsys, client
     # It rewrites its config from memory on its next settings save, silently undoing the change
     monkeypatch.setattr(installer, "claude_desktop_running", lambda: True)
     assert run(tmp_path / "c.json", "--client", client) == 0
-    assert ("Claude Desktop is running" in capsys.readouterr().err) == warned
+    out = capsys.readouterr()
+    assert ("Claude Desktop is running" in out.err) == warned
+    # A restart alone wouldn't keep the change, so it isn't suggested then
+    assert ("Restart" in out.out) != warned
 
 
 def test_creates_config_when_missing(tmp_path):

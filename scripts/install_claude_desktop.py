@@ -117,8 +117,13 @@ def write_atomic(path: Path, data: bytes) -> None:
 
 def claude_desktop_running() -> bool:
     """Claude Desktop keeps its config in memory and writes it back whenever it saves its own settings"""
-    # -a: pgrep otherwise skips its own ancestors, so it misses Claude Desktop when run from inside it
-    return sys.platform == "darwin" and bool(shutil.which("pgrep")) and subprocess.call(["pgrep", "-aqx", "Claude"]) == 0
+    if sys.platform != "darwin" or not shutil.which("pgrep"):
+        return False
+    try:
+        # -a: pgrep otherwise skips its own ancestors, so it misses Claude Desktop when run from inside it
+        return subprocess.call(["pgrep", "-aqx", "Claude"]) == 0
+    except OSError:
+        return False  # only advice; the config is already written
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -272,7 +277,8 @@ def main(argv: list[str] | None = None) -> int:
             "memory, undoing this change. Quit Claude Desktop, run this again, then reopen it.",
             file=sys.stderr,
         )
-    print(f"Restart {label} to pick it up.")
+    else:
+        print(f"Restart {label} to pick it up.")
     return 0
 
 
