@@ -83,6 +83,7 @@ Options go through `ARGS`. Restart the client afterwards.
 - **Protects the key.** Both files are written atomically (temp file, flushed to disk, then rename) at mode 600, because they can hold the API key. A config that is a symlink, such as one kept in a dotfiles repository, stays a link: the installer writes to the file it points to.
 - **Refuses to overwrite a bad file.** If the config is not valid JSON, or not a JSON object, it exits with an error and changes nothing. A config it can't read, or a folder it can't write to, is also a one-line error, and it checks this before touching the Keychain, so a failed run leaves no stray item.
 - **Warns when the client looks missing.** If the default config folder doesn't exist, it prints a warning and creates the folder anyway. It doesn't warn when you pass `--config`.
+- **Warns when Claude Desktop is running** (macOS). Claude Desktop keeps its config in memory and rewrites the file whenever it saves its own settings, which undoes the installer's change. Quit Claude Desktop, run the installer, then reopen it.
 - **Leaves a local key out.** For a local `http://` backend (`127.0.0.1`, `localhost` or `[::1]`, the launcher's own test) it writes no key: the launcher reads it from `backend/.env` on every start, so a regenerated key can't leave the client behind, and the client never displays it. For any other URL it copies `CODESAGE_API_KEY` from `backend/.env`. `--api-key` wins either way, and with `--basic-auth` it copies none, because nginx adds it. `make install-claude` first generates the key if `backend/.env` has none. Run directly for a non-local URL with no key found, it warns and writes none.
 - **Keeps passwords out of the config.** A password in `--server-url` is refused, and the `--basic-auth` password is never in argv or the file.
 
@@ -103,6 +104,14 @@ Copy `claude_desktop_config.example.json` into your client's config and set the 
   }
 }
 ```
+
+Codex (its CLI and its app share `~/.codex/config.toml`) adds it with its own command. It rewrites the whole file in its own format, so back the file up first:
+
+```bash
+codex mcp add codesage --env MCP_SERVER_URL=http://127.0.0.1:8001 -- /absolute/path/to/codesage-algolia-challenge/mcp_launcher.sh
+```
+
+ChatGPT's desktop app connects only to remote MCP servers set up in ChatGPT's settings, so it can't run this local stdio bridge.
 
 ### The launcher
 
