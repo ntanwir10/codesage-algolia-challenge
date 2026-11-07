@@ -9,6 +9,7 @@ backs the file up first, and writes atomically with mode 600.
 import argparse
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -21,6 +22,8 @@ REPO = Path(__file__).resolve().parent.parent
 LAUNCHER = REPO / "mcp_launcher.sh"
 ENV_FILE = REPO / "backend" / ".env"
 DEFAULT_URL = "http://127.0.0.1:8001"
+# mcp_launcher.sh's loopback test: for these URLs it reads the key from backend/.env on every start
+LOCAL_URL = re.compile(r"http://(127\.0\.0\.1|localhost)([:/]|$)|http://\[::1\]")
 
 # Each client's name and the key its config lists servers under (VS Code alone says "servers")
 CLIENTS = {
@@ -130,7 +133,10 @@ def main(argv: list[str] | None = None) -> int:
         "--server-url", default=None, help=f"backend URL (default: MCP_SERVER_URL or {DEFAULT_URL})"
     )
     ap.add_argument(
-        "--api-key", default=None, help="API key (default: CODESAGE_API_KEY from backend/.env)"
+        "--api-key",
+        default=None,
+        help="API key (default: none for a local backend, whose key the launcher reads from backend/.env; "
+        "otherwise CODESAGE_API_KEY from backend/.env)",
     )
     ap.add_argument(
         "--basic-auth",
@@ -147,8 +153,10 @@ def main(argv: list[str] | None = None) -> int:
     # Through any symlink (a dotfiles-managed config): the rename must replace the target, not the link
     config_path = (args.config or default_config_path(args.client)).resolve()
     server_url = args.server_url or os.environ.get("MCP_SERVER_URL") or DEFAULT_URL
-    # Behind the basic-auth proxy nginx supplies the key, so don't copy the backend's into this config
-    api_key = args.api_key or ("" if args.basic_auth else read_env_value(ENV_FILE, "CODESAGE_API_KEY")) or ""
+    # Copy the backend's key only where nothing else supplies it: the launcher does for a local
+    # backend, and nginx does behind the basic-auth proxy
+    supplied = args.basic_auth or LOCAL_URL.match(server_url)
+    api_key = args.api_key or ("" if supplied else read_env_value(ENV_FILE, "CODESAGE_API_KEY")) or ""
 
     parts = urlsplit(server_url)
     if parts.scheme not in ("http", "https") or not parts.hostname:
@@ -189,7 +197,7 @@ def main(argv: list[str] | None = None) -> int:
 
     entry = {
         "command": str(LAUNCHER),
-        "env": {"MCP_SERVER_URL": server_url, "CODESAGE_API_KEY": api_key},
+        "env": {"MCP_SERVER_URL": server_url, **({"CODESAGE_API_KEY": api_key} if api_key else {})},
     }
     if args.client == "vscode":
         entry = {"type": "stdio", **entry}
@@ -231,9 +239,9 @@ def main(argv: list[str] | None = None) -> int:
                 file=sys.stderr,
             )
             return 1
-    if not api_key and not args.basic_auth:
+    if not api_key and not supplied:
         print(
-            "warning: no API key found (--api-key or CODESAGE_API_KEY in backend/.env); writing it empty",
+            "warning: no API key found (--api-key or CODESAGE_API_KEY in backend/.env); writing none",
             file=sys.stderr,
         )
     try:
