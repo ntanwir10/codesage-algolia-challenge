@@ -115,6 +115,12 @@ def write_atomic(path: Path, data: bytes) -> None:
         raise
 
 
+def claude_desktop_running() -> bool:
+    """Claude Desktop keeps its config in memory and writes it back whenever it saves its own settings"""
+    # -a: pgrep otherwise skips its own ancestors, so it misses Claude Desktop when run from inside it
+    return sys.platform == "darwin" and bool(shutil.which("pgrep")) and subprocess.call(["pgrep", "-aqx", "Claude"]) == 0
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description="Add the CodeSage MCP server to an MCP client.")
     ap.add_argument(
@@ -260,6 +266,12 @@ def main(argv: list[str] | None = None) -> int:
         print(f"error: cannot write {config_path}: {exc}", file=sys.stderr)
         return 1
     print(f"updated {config_path}: {key}.{args.name} -> {LAUNCHER}")
+    if args.client == "claude" and claude_desktop_running():
+        print(
+            "warning: Claude Desktop is running, and its next settings save rewrites this file from "
+            "memory, undoing this change. Quit Claude Desktop, run this again, then reopen it.",
+            file=sys.stderr,
+        )
     print(f"Restart {label} to pick it up.")
     return 0
 

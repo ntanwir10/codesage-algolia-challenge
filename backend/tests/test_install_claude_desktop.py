@@ -19,6 +19,20 @@ def run(config: Path, *extra: str) -> int:
     )
 
 
+@pytest.fixture(autouse=True)
+def claude_desktop_closed(monkeypatch):
+    # Whatever runs on the test machine, Claude Desktop counts as closed unless a test says otherwise
+    monkeypatch.setattr(installer, "claude_desktop_running", lambda: False)
+
+
+@pytest.mark.parametrize("client, warned", [("claude", True), ("cursor", False)])
+def test_a_running_claude_desktop_is_named(tmp_path, monkeypatch, capsys, client, warned):
+    # It rewrites its config from memory on its next settings save, silently undoing the change
+    monkeypatch.setattr(installer, "claude_desktop_running", lambda: True)
+    assert run(tmp_path / "c.json", "--client", client) == 0
+    assert ("Claude Desktop is running" in capsys.readouterr().err) == warned
+
+
 def test_creates_config_when_missing(tmp_path):
     cfg = tmp_path / "Claude" / "claude_desktop_config.json"
     assert run(cfg) == 0
