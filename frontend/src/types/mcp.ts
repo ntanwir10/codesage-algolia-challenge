@@ -101,4 +101,5 @@ export interface SearchSuggestionsResponse {
 /** GET /ai/mcp/capabilities; only the field the dashboard reads. */
 export interface MCPCapabilities {
   semantic_search?: boolean;
+  read_only?: boolean;
 }

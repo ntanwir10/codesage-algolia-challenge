@@ -28,7 +28,9 @@ if settings.database_url.startswith("sqlite") and ":memory:" not in settings.dat
     @event.listens_for(engine, "connect")
     def _configure_sqlite(dbapi_connection, _record):
         cursor = dbapi_connection.cursor()
-        cursor.execute("PRAGMA journal_mode=WAL")
+        # Switching journal mode writes to the file, which a read-only server must never do
+        if not settings.read_only:
+            cursor.execute("PRAGMA journal_mode=WAL")
         cursor.execute("PRAGMA foreign_keys=ON")
         cursor.close()
 

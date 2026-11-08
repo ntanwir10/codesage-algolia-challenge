@@ -229,6 +229,8 @@ When `CODESAGE_API_KEY` is set, requests must carry it as `X-API-Key`, compared 
 
 Other reads are public: repository list, detail, status and stats, tool and resource listings, capabilities, `/` and `/health`. A `401` means a missing or wrong key.
 
+With `READ_ONLY=true` no key is needed, even on a public host: the guard checks `Host` against `CORS_ORIGINS` and `ALLOWED_HOSTS` as it does for a keyed server, and skips the loopback-client check. Every write is refused first, with `403` "This CodeSage is read-only…", whatever the key, and `add_repository` is left out of the tool list and refused if called. Startup checks that the database is at the latest migration instead of migrating it, and starts no job recovery, refresh loop or progress relay.
+
 ### BrowserRequestGuard
 
 `BrowserRequestGuard` in `app/core/security.py` is ASGI middleware for HTTP and WebSocket requests. A refusal is `403` for HTTP and close code 1008 for a WebSocket.

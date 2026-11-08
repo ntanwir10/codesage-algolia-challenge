@@ -16,6 +16,7 @@ import { describeError } from "@/lib/errors";
 import { isActiveStatus, POLL_INTERVAL_MS, pollWhileAnyActive, progressStage } from "@/lib/polling";
 import { isHttpUrl, sourceLabel } from "@/lib/utils";
 import type { Repository } from "@/types/repository";
+import { useReadOnly } from "@/hooks/useReadOnly";
 
 // The most the list endpoint returns in one request
 const PAGE_SIZE = 500;
@@ -34,6 +35,7 @@ async function loadAllRepositories(): Promise<Repository[]> {
 }
 
 export function DashboardPage() {
+  const readOnly = useReadOnly();
   const { addToast } = useToast();
   const queryClient = useQueryClient();
   // Filters live in the URL, like search's ?q=, so reload and Back keep them
@@ -216,12 +218,14 @@ export function DashboardPage() {
               Manage and explore your code repositories with real-time updates
             </p>
           </div>
-          <Button asChild className="gap-2 whitespace-nowrap">
-            <Link to="/">
-              <span>+</span>
-              Add Repository
-            </Link>
-          </Button>
+          {!readOnly && (
+            <Button asChild className="gap-2 whitespace-nowrap">
+              <Link to="/">
+                <span>+</span>
+                Add Repository
+              </Link>
+            </Button>
+          )}
         </div>
 
         {error && (
@@ -396,6 +400,7 @@ export function DashboardPage() {
                         <Button asChild variant="outline" size="sm" className="whitespace-nowrap">
                           <Link to={`/repository/${repo.id}`}>View Details</Link>
                         </Button>
+                        {!readOnly && (
                         <Button
                           variant="outline"
                           size="sm"
@@ -408,6 +413,7 @@ export function DashboardPage() {
                         >
                           <span className="text-sm">🗑️</span>
                         </Button>
+                        )}
                       </div>
                     </div>
                   </div>
