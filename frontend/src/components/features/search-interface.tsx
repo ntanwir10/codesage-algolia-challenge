@@ -35,10 +35,12 @@ export function SearchInterface({
   className,
 }: SearchInterfaceProps) {
   const listboxId = useId();
-  const [searchQuery, setSearchQuery] = useState("");
+  const [params, setParams] = useSearchParams();
+  // A query in the URL (a reload, or Back from the file viewer) runs once search is possible
+  const urlQuery = params.get("q") ?? "";
+  const [searchQuery, setSearchQuery] = useState(urlQuery);
   const [language, setLanguage] = useState("");
   const [entityType, setEntityType] = useState<EntityType | "">("");
-  const [params, setParams] = useSearchParams();
   // Kept in the URL with the query, so Back from the file viewer returns to the same ranking
   const [mode, setMode] = useState<SearchMode>(params.get("mode") === "semantic" ? "semantic" : "keyword");
   const [semanticAvailable, setSemanticAvailable] = useState(false);
@@ -49,7 +51,7 @@ export function SearchInterface({
   const [activeQuery, setActiveQuery] = useState("");
   const [hasSearched, setHasSearched] = useState(false);
   const [searchResults, setSearchResults] = useState<SearchHit[]>([]);
-  const [isSearching, setIsSearching] = useState(false);
+  const [searchPending, setSearchPending] = useState(false);
   const [suggestions, setSuggestions] = useState<string[]>([]);
   const [showSuggestions, setShowSuggestions] = useState(false);
   const [activeSuggestion, setActiveSuggestion] = useState(-1); // keyboard highlight; -1 for none
@@ -64,7 +66,8 @@ export function SearchInterface({
   );
   const searchRequestId = useRef(0);
   // Query for which suggestions should stay hidden (just searched/selected).
-  const suppressedFor = useRef<string | null>(null);
+  // Starts as the URL's query, which is about to be searched.
+  const suppressedFor = useRef<string | null>(urlQuery);
 
   useEffect(() => () => clearTimeout(blurTimer.current), []);
 
@@ -117,27 +120,32 @@ export function SearchInterface({
     };
   }, [searchQuery, canSearch, repositoryId, mode]);
 
-  const runSearch = async (query: string, targetPage: number) => {
-    const trimmed = query.trim();
-    if (!trimmed || !canSearch) return;
-
-    const requestId = ++searchRequestId.current;
+  // Filters are passed in when they have just changed, as state still holds the old ones
+  const runSearch = async (query: string, targetPage: number, filters = { language, entityType, mode }) => {
+    if (!query.trim() || !canSearch) return;
     suppressedFor.current = query;
     setShowSuggestions(false);
-    setIsSearching(true);
+    setSearchPending(true);
     setSearchError(null);
+    await fetchResults(query, targetPage, filters);
+  };
 
+  // Sets state only once the response is in, so the URL's search can run from an effect
+  const fetchResults = async (query: string, targetPage: number, filters = { language, entityType, mode }) => {
+    const trimmed = query.trim();
+    const requestId = ++searchRequestId.current;
     try {
       const response = await api.searchCode({
         query: trimmed,
         repository: repositoryId ? String(repositoryId) : undefined,
-        language: language || undefined,
-        entity_type: entityType || undefined,
+        language: filters.language || undefined,
+        entity_type: filters.entityType || undefined,
         limit: PAGE_SIZE,
         page: targetPage,
-        mode,
+        mode: filters.mode,
       });
       if (requestId !== searchRequestId.current) return; // superseded
+      setSearchError(null); // the URL's search skips runSearch's reset
       setSearchResults(response.results);
       setRankedByMeaning(response.mode === "semantic");
       setTotalHits(response.total_hits);
@@ -149,7 +157,7 @@ export function SearchInterface({
         (current) => {
           const next = new URLSearchParams(current);
           next.set("q", trimmed);
-          if (mode === "semantic") next.set("mode", "semantic");
+          if (filters.mode === "semantic") next.set("mode", "semantic");
           else next.delete("mode");
           return next;
         },
@@ -167,25 +175,25 @@ export function SearchInterface({
       }
       setHasSearched(true);
     } finally {
-      if (requestId === searchRequestId.current) setIsSearching(false);
+      if (requestId === searchRequestId.current) setSearchPending(false);
     }
   };
 
-  // A query in the URL (a reload, or Back from the file viewer) runs once search is possible
   useEffect(() => {
-    const query = params.get("q");
-    if (query && canSearch && !activeQuery) {
-      setSearchQuery(query);
-      void runSearch(query, 0);
-    }
+    if (urlQuery.trim() && canSearch && !activeQuery) void fetchResults(urlQuery, 0);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- only when search becomes possible
   }, [canSearch]);
+  // The effect can't set searchPending, so the URL's first search counts as pending until it lands
+  const isSearching = searchPending || (canSearch && urlQuery.trim() !== "" && !hasSearched);
 
   // A filter change re-runs the shown search from its first page
-  useEffect(() => {
-    if (activeQuery) void runSearch(activeQuery, 0);
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- only filter changes re-run it
-  }, [language, entityType, mode]);
+  const changeFilters = (change: Partial<{ language: string; entityType: EntityType | ""; mode: SearchMode }>) => {
+    const filters = { language, entityType, mode, ...change };
+    setLanguage(filters.language);
+    setEntityType(filters.entityType);
+    setMode(filters.mode);
+    if (activeQuery) void runSearch(activeQuery, 0, filters);
+  };
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -318,7 +326,7 @@ export function SearchInterface({
             <select
               aria-label="Filter by language"
               value={language}
-              onChange={(e) => setLanguage(e.target.value)}
+              onChange={(e) => changeFilters({ language: e.target.value })}
               className="border rounded-md px-2 py-1 bg-background"
             >
               <option value="">All languages</option>
@@ -331,7 +339,7 @@ export function SearchInterface({
             <select
               aria-label="Filter by kind"
               value={entityType}
-              onChange={(e) => setEntityType(e.target.value as EntityType | "")}
+              onChange={(e) => changeFilters({ entityType: e.target.value as EntityType | "" })}
               className="border rounded-md px-2 py-1 bg-background"
             >
               <option value="">All kinds</option>
@@ -345,7 +353,7 @@ export function SearchInterface({
               <select
                 aria-label="Search mode"
                 value={mode}
-                onChange={(e) => setMode(e.target.value as SearchMode)}
+                onChange={(e) => changeFilters({ mode: e.target.value as SearchMode })}
                 className="border rounded-md px-2 py-1 bg-background"
               >
                 <option value="keyword">Keyword</option>

@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Link } from "react-router-dom";
-import { useForm } from "react-hook-form";
+import { useForm, useWatch } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { isAxiosError } from "axios";
 import { z } from "zod";
@@ -65,7 +65,7 @@ export function GitHubForm({ onSubmit, isLoading = false }: GitHubFormProps) {
     handleSubmit,
     formState: { errors, isValid },
     reset,
-    watch,
+    control,
     setError,
     clearErrors,
   } = useForm<GitHubFormData>({
@@ -82,7 +82,7 @@ export function GitHubForm({ onSubmit, isLoading = false }: GitHubFormProps) {
   const [existingId, setExistingId] = useState<number>();
 
   // Preview the name the server will give it: owner/repo on GitHub, host/path elsewhere
-  const urlValue = watch("url");
+  const urlValue = useWatch({ control, name: "url" });
   const repoName = ((urlValue && parseRepo(urlValue)) || "").replace(/^https:\/\/(github\.com\/)?/, "");
 
   const urlField = register("url");
