@@ -36,13 +36,9 @@ from codesage_mcp import schemas
 
 logger = structlog.get_logger()
 
-# The tools that change anything; a read-only server neither lists nor runs them
-WRITE_TOOLS = {"add_repository"}
-
-
 def available_tools() -> list[str]:
     """The tool names this server offers"""
-    return [name for name in schemas.TOOLS if not (get_settings().read_only and name in WRITE_TOOLS)]
+    return [name for name in schemas.TOOLS if not (get_settings().read_only and name in schemas.WRITE_TOOLS)]
 
 MAX_FILE_LINES = 400
 SNIPPET_CHARS = 600

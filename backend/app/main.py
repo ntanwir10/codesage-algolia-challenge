@@ -211,6 +211,11 @@ from app.services.websocket_service import repository_status_websocket
 
 app.add_api_websocket_route("/ws", repository_status_websocket)
 
+# MCP over streamable HTTP, for clients that connect to a URL instead of starting the stdio bridge
+from app.mcp_http import MCPEndpoint
+
+app.add_route("/mcp", MCPEndpoint(), methods=["GET", "POST", "DELETE"], include_in_schema=False)
+
 
 # Root endpoint
 @app.get("/")

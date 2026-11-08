@@ -41,6 +41,7 @@ There are two ways in, and both end at the same FastAPI backend:
 
 - **Web dashboard** (React + Vite). Add a repository from GitHub or another git host, watch it index, and search it.
 - **MCP clients** such as Claude Desktop, Cursor, VS Code or Windsurf. The client starts `mcp_launcher.sh`, which runs a small stdio MCP bridge (`backend/codesage_mcp`). The bridge turns the assistant's tool calls into HTTP calls to the backend. The assistant can search, read and also add repositories, including public ones on GitLab, Bitbucket and other git hosts.
+- **Remote MCP clients** such as ChatGPT, which connect to a URL. They use the backend's own MCP endpoint at `/mcp` (streamable HTTP), with the same tools; see [Connect over HTTP](docs/MCP_INTEGRATION_GUIDE.md#connect-over-http).
 
 Indexing runs as a background job inside the backend. Search goes to Algolia; reading files and listing definitions go to SQLite.
 
