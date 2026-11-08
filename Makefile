@@ -1,4 +1,4 @@
-.PHONY: help setup start start-backend start-frontend stop build up down restart logs logs-backend shell health test test-mcp db-reset db-migrate db-migration clean clean-all prod-build prod-up status install-claude install-cursor install-vscode install-windsurf
+.PHONY: help setup start start-backend start-frontend stop build up down restart logs logs-backend shell health test test-mcp db-reset db-migrate db-migration clean clean-all prod-build prod-up demo-build demo-deploy status install-claude install-cursor install-vscode install-windsurf
 
 COMPOSE      = docker compose -f deployment/docker-compose.yml
 COMPOSE_PROD = docker compose -f deployment/docker-compose.prod.yml
@@ -51,6 +51,8 @@ help:
 	@echo "🚢 Production:"
 	@echo "  prod-build      - Build the production images"
 	@echo "  prod-up         - Start the production stack"
+	@echo "  demo-build      - Index the demo repositories and lay out build/demo/ for Vercel (ARGS='--reindex')"
+	@echo "  demo-deploy     - Deploy build/demo/ to Vercel as the read-only public demo"
 
 # Setup development environment
 setup:
@@ -190,6 +192,13 @@ prod-build:
 
 prod-up:
 	$(COMPOSE_PROD) up -d
+
+# Public read-only demo on Vercel; see deployment/vercel/README.md
+demo-build:
+	.venv/bin/python scripts/build_demo.py $(ARGS)
+
+demo-deploy:
+	cd build/demo && vercel deploy --prod --yes
 
 # Status
 status:
