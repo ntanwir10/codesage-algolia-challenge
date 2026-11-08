@@ -315,6 +315,8 @@ Paste `https://gitlab.com/group/project` into the Home page form, or ask your as
   | Bitbucket Cloud | `bitbucket.org=x-token-auth:<token>` | A repository, project or workspace access token with repository read access |
   | Gitea and Forgejo (such as Codeberg) | `codeberg.org=<user>:<token>` | An access token with repository read access |
 
+  This was checked end to end with a private gitlab.com repository and a personal access token limited to `read_repository`: the repository indexes and can be searched and read, and the token appeared in no log, in none of the process command lines sampled during the clone, and nowhere in the clone. Without the token, or with a wrong one, CodeSage gives the two refusals below.
+
   The token goes to that host only, as an `Authorization` header in git's environment (never its command line), and git then follows no redirects. Without an entry, a private repository gets `... was not found or is private; only public repositories are supported on <host>.` With one, a refusal reads `<host> rejected the token in GIT_HOST_CREDENTIALS or it lacks access to <path>.`. A bad token fails that host's public repositories too.
 - **Rejected URLs.** Ports, credentials, `localhost`, private IP addresses, and host names that resolve to one. git then connects to the address that was checked.
 - **Names and links.** Repositories on other hosts are named `<host>/<path>`. Search results link to the exact line on GitLab (gitlab.com, and any host whose name starts with `gitlab.`) and on bitbucket.org. Other hosts, including self-hosted Bitbucket, get no link.
