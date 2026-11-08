@@ -130,6 +130,32 @@ def test_recovery_leaves_runs_that_workers_own(external, monkeypatch):
     assert started == [orphan.id]
 
 
+def test_a_job_another_api_process_queued_first_counts_as_busy(external, monkeypatch):
+    repo = add_repository(external)
+    jobs.start_processing(repo.id)
+    monkeypatch.setattr(jobs, "is_processing", lambda repository_id: False)  # both checked, then both insert
+
+    with pytest.raises(jobs.RepositoryBusyError):
+        jobs.start_processing(repo.id)
+    assert external.query(Job).count() == 1
+
+
+def test_recovery_skips_a_run_another_api_process_queued_first(external, monkeypatch):
+    add_repository(external, "o/raced", status="processing")
+    orphan = add_repository(external, "o/orphan", status="processing")
+    started = []
+
+    def start(repository_id, **kwargs):
+        if repository_id != orphan.id:
+            raise jobs.RepositoryBusyError("queued by the other process")
+        started.append(repository_id)
+
+    monkeypatch.setattr(jobs, "start_processing", start)
+
+    assert jobs.recover_interrupted_jobs(external) == 1
+    assert started == [orphan.id]
+
+
 async def test_the_relay_sends_progress_and_the_final_status(external, monkeypatch):
     from app.services.websocket_service import websocket_manager
 

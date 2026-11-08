@@ -18,7 +18,7 @@ CodeSage ships two Compose stacks: a **dev** stack for one user on localhost, an
 | | Dev | Prod |
 | --- | --- | --- |
 | Compose file | `deployment/docker-compose.yml` | `deployment/docker-compose.prod.yml` |
-| Backend image | `backend/Dockerfile` (source bind-mounted, uvicorn `--reload`) | `backend/Dockerfile.prod` (multi-stage, no bind mount, `--workers 1`, `ENVIRONMENT=production` so `/docs` and `/redoc` are off, while `/openapi.json` stays on but isn't routed by nginx; installs `curl` and `git`, which the `add_repository` tool uses to clone public repositories from hosts other than github.com) |
+| Backend image | `backend/Dockerfile` (source bind-mounted, uvicorn `--reload`) | `backend/Dockerfile.prod` (multi-stage, no bind mount, `--workers $API_WORKERS`, 1 by default, `ENVIRONMENT=production` so `/docs` and `/redoc` are off, while `/openapi.json` stays on but isn't routed by nginx; installs `curl` and `git`, which the `add_repository` tool uses to clone public repositories from hosts other than github.com) |
 | nginx | `deployment/nginx.conf`, plain HTTP | `deployment/nginx.prod.conf.template`, HTTPS and basic auth |
 | Containers | `codesage_mcp_server`, `codesage_nginx` | `codesage_mcp_server_prod`, `codesage_nginx_prod` |
 | Published ports | `127.0.0.1:80` (nginx), `127.0.0.1:8001` (backend) | `80` and `443` (nginx). The backend is not published |
@@ -29,7 +29,7 @@ CodeSage ships two Compose stacks: a **dev** stack for one user on localhost, an
 | SQLite volume | `backend_data` | `backend_data_prod` |
 | Make targets | `build`, `up`, `down`, `logs`, ... | `prod-build`, `prod-up` |
 
-Both stacks run exactly one backend worker. Job state, WebSocket subscriptions and rate-limit counters live in the process, and SQLite is single-writer. Both publish port 80, so don't run them at the same time.
+The dev stack runs one backend process. The prod stack runs `API_WORKERS` of them, 1 by default; more need Redis and indexing workers, see [More than one API process](#more-than-one-api-process). Both publish port 80, so don't run them at the same time.
 
 ## Dev stack
 
@@ -87,7 +87,7 @@ In prod, nginx terminates TLS, asks for a password, and adds the API key to each
 flowchart TB
     browser(["Browser"]) --> https["nginx :443<br/>HTTPS, basic auth"]
     https -- "static files" --> spa["Built dashboard"]
-    https -- "/api and /ws<br/>adds X-API-Key" --> backend["backend :8001<br/>one uvicorn worker"]
+    https -- "/api and /ws<br/>adds X-API-Key" --> backend["backend :8001<br/>API_WORKERS uvicorn processes"]
     backend --> db[("SQLite volume")]
     backend --> algolia[("Algolia")]
     browser -. "plain HTTP" .-> http["nginx :80<br/>/health and a redirect"]
@@ -131,6 +131,20 @@ On port 80, `/health` is proxied to the backend and everything else gets a `301`
    make prod-up      # same file, up -d; nginx waits for the backend healthcheck
    ```
 
+### More than one API process
+
+Job state and rate-limit counters live in each API process's memory, so more than one process needs indexing workers and Redis. The `scale` profile adds both: a `redis` service and a `worker` service (`python -m app.worker`) on the same image, database volume and Algolia index as the backend.
+
+```bash
+export API_WORKERS=2 INDEX_WORKERS=external RATE_LIMIT_STORAGE_URL=redis://redis:6379
+docker compose -f deployment/docker-compose.prod.yml --profile scale up -d --build --scale worker=2
+```
+
+- **Refused without them.** With `API_WORKERS` above 1 and either of the other two unset, the backend refuses to start and says which is missing.
+- **Shared limits.** Every process counts in Redis, so the 30 tool calls a minute hold per client however many processes there are. Redis keeps the counters in memory only. If it stops, rate-limited requests fail until it is back.
+- **Migrations.** The processes start together and take turns applying the migrations. Workers start once the backend is healthy.
+- **SQLite.** The processes share one SQLite file, which takes one writer at a time. For heavy use, or processes on more than one machine, use Postgres (`DATABASE_URL`).
+
 ### Hosts and origins
 
 With a key set, the backend answers only to loopback hosts, the hosts in `CORS_ORIGINS`, and the hosts in `ALLOWED_HOSTS`. Any other `Host` gets `403`.
@@ -170,6 +184,7 @@ For Cursor, VS Code or Windsurf, run `make install-cursor`, `make install-vscode
 | `DOCKER_ALGOLIA_INDEX_NAME` | shell | `codesage_code_entities_docker` | Dev index |
 | `PROD_ALGOLIA_INDEX_NAME` | shell | `codesage_code_entities_prod` | Prod index |
 | `ALLOWED_HOSTS` | shell (prod only) | empty | Extra hostnames the API answers to, comma-separated, no port |
+| `API_WORKERS`, `INDEX_WORKERS`, `RATE_LIMIT_STORAGE_URL` | shell (prod only) | `1`, `inline`, empty | More than one API process; see [More than one API process](#more-than-one-api-process). These override `backend/.env` |
 | `CORS_ORIGINS` | the Compose file | dev: localhost on 80, 3000, 5173. Prod: `https://yourdomain.com` | Edit the file; it overrides `backend/.env` |
 | `DATABASE_URL` | the Compose file | `sqlite:///./data/codesage.db` | Lives in the data volume. Migrations run at startup |
 | `ALGOLIA_APP_ID`, `ALGOLIA_ADMIN_API_KEY`, `GITHUB_TOKEN` | `backend/.env` | none | Read through `env_file` by both stacks |

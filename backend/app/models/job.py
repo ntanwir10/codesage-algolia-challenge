@@ -10,7 +10,7 @@ class Job(Base):
     __tablename__ = "jobs"
 
     id = Column(Integer, primary_key=True)
-    repository_id = Column(Integer, nullable=False, index=True)
+    repository_id = Column(Integer, nullable=False, index=True, unique=True)  # one job per repository
     force_reprocess = Column(Boolean, nullable=False, default=False)
     incremental = Column(Boolean, nullable=False, default=False)
     claimed_by = Column(String(200), nullable=True)  # the worker's host:pid

@@ -8,6 +8,10 @@ keys and the local codesage.db never come from a developer's backend/.env.
 
 import asyncio
 import os
+import subprocess
+import sys
+import time
+from pathlib import Path
 
 os.environ["DATABASE_URL"] = "sqlite://"
 os.environ["DEBUG"] = "false"
@@ -16,6 +20,7 @@ os.environ["ALGOLIA_APP_ID"] = "test-app"
 os.environ["ALGOLIA_ADMIN_API_KEY"] = "test-key"
 os.environ["CODESAGE_API_KEY"] = ""  # empty: no key required; tests that need one set it
 os.environ["ENABLE_RATE_LIMITING"] = "true"
+os.environ["RATE_LIMIT_STORAGE_URL"] = ""  # this process's memory, never a developer's Redis
 os.environ["MCP_SERVER_HOST"] = "127.0.0.1"
 os.environ["CORS_ORIGINS"] = "http://localhost:3000,http://localhost:5173"
 
@@ -30,6 +35,8 @@ from app.core.database import Base
 from app.services import algolia_service as algolia_module
 from app.services import github_service as github_module
 from app.services.algolia_service import AlgoliaService
+
+BACKEND = Path(__file__).resolve().parents[1]
 
 LOCAL = ("127.0.0.1", 50000)  # TestClient's default peer, "testclient", is not a loopback address
 
@@ -70,6 +77,36 @@ def no_real_github_check(request, monkeypatch):
         return None
 
     monkeypatch.setattr(github_module.GitHubService, "check_repository", accept)
+
+
+_MIGRATE = """
+import sys, time
+from sqlalchemy import create_engine
+from app.core.config import Settings
+from app.core.migrations import upgrade_database
+time.sleep(max(0.0, float(sys.argv[2]) - time.time()))
+upgrade_database(create_engine(Settings(database_url=sys.argv[1]).database_url))
+"""
+
+
+@pytest.fixture
+def migrate_together():
+    """Migrate one database from several processes at the same moment, as API processes do
+    when they start together. Fails with each process's error output if any of them fails"""
+
+    def run(url: str, processes: int = 4) -> None:
+        start = time.time() + 2  # every process has imported the app by then
+        runs = [
+            subprocess.Popen(
+                [sys.executable, "-c", _MIGRATE, url, str(start)],
+                cwd=BACKEND, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True,
+            )
+            for _ in range(processes)
+        ]
+        errors = [run.communicate(timeout=120)[1] for run in runs]
+        assert [run.returncode for run in runs] == [0] * processes, "\n".join(errors)
+
+    return run
 
 
 @pytest.fixture

@@ -14,7 +14,11 @@ from app.core.config import LOOPBACK_HOSTS, get_settings, host_is_allowed, host_
 
 settings = get_settings()
 
-limiter = Limiter(key_func=get_remote_address, enabled=settings.enable_rate_limiting)
+limiter = Limiter(
+    key_func=get_remote_address,
+    enabled=settings.enable_rate_limiting,
+    storage_uri=settings.rate_limit_storage_url or "memory://",
+)
 
 
 def api_key_is_valid(key: str | None) -> bool:

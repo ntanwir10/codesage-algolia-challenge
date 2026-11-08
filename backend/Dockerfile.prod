@@ -46,8 +46,11 @@ EXPOSE 8001
 HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
     CMD curl -f http://localhost:8001/health || exit 1
 
-# Single worker: WebSocket, rate-limit and job state are in-process and SQLite is
-# single-writer. Do not raise --workers without moving that state out of process.
+# API_WORKERS uvicorn processes (default 1). Above 1 the API refuses to start unless
+# INDEX_WORKERS=external and RATE_LIMIT_STORAGE_URL (Redis) are set: jobs and rate-limit
+# counters would otherwise live in each process's memory.
 # Forwarded headers are trusted from any peer because only nginx can reach this port
 # (no published ports) and it overwrites X-Forwarded-For; rate limits key on that client IP.
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8001", "--workers", "1", "--forwarded-allow-ips", "*"]
+ENV API_WORKERS=1
+# sh -c to expand API_WORKERS; exec keeps uvicorn PID 1, so it gets the stop signal
+CMD ["sh", "-c", "exec uvicorn app.main:app --host 0.0.0.0 --port 8001 --workers \"$API_WORKERS\" --forwarded-allow-ips '*'"]
