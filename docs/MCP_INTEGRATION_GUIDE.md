@@ -113,6 +113,23 @@ codex mcp add codesage --env MCP_SERVER_URL=http://127.0.0.1:8001 -- /absolute/p
 
 ChatGPT's desktop app connects only to remote MCP servers set up in ChatGPT's settings, so it can't run this local stdio bridge.
 
+### More MCP clients
+
+These clients were checked against a local backend, with no key in their config. Back up the config file before adding the entry.
+
+| Client | Config file | Add it with |
+| --- | --- | --- |
+| Claude Code | `~/.claude.json` (user scope) | `claude mcp add -s user codesage -e MCP_SERVER_URL=http://127.0.0.1:8001 -- /absolute/path/to/codesage-algolia-challenge/mcp_launcher.sh` |
+| Gemini CLI | `~/.gemini/settings.json` (user scope) | `gemini mcp add -s user codesage /absolute/path/to/codesage-algolia-challenge/mcp_launcher.sh -e MCP_SERVER_URL=http://127.0.0.1:8001` |
+| Qwen Code | `~/.qwen/settings.json` (user scope) | `qwen mcp add -s user codesage /absolute/path/to/codesage-algolia-challenge/mcp_launcher.sh -e MCP_SERVER_URL=http://127.0.0.1:8001` |
+| LM Studio | `~/.lmstudio/mcp.json` | No command: add the `codesage` entry above under `mcpServers`, without `CODESAGE_API_KEY`. A running LM Studio picks it up |
+
+To check it:
+
+- **CLIs:** `claude mcp list`, `gemini mcp list` and `qwen mcp list` show `codesage` as Connected.
+- **Gemini CLI:** with folder trust on (`security.folderTrust.enabled`), it loads MCP servers only in a trusted folder. Elsewhere `gemini mcp list` shows `codesage` as Disabled.
+- **LM Studio:** open a chat, open the right sidebar's Integrations tab, and turn on `mcp/codesage`. It lists the eight tools.
+
 ### The launcher
 
 `mcp_launcher.sh` does four things:
