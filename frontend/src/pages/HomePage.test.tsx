@@ -74,3 +74,14 @@ describe("HomePage", () => {
     expect(screen.getByLabelText(/^repository/i)).toHaveValue("owner/repo");
   });
 });
+
+describe("HomePage on a read-only server", () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it("shows a read-only notice instead of the add form", async () => {
+    vi.spyOn(api, "getCapabilities").mockResolvedValue({ read_only: true });
+    renderHome();
+    expect(await screen.findByText("This is a read-only demo")).toBeInTheDocument();
+    expect(screen.queryByLabelText(/^repository/i)).not.toBeInTheDocument();
+  });
+});

@@ -191,3 +191,16 @@ describe("DashboardPage", () => {
     expect(screen.queryByText("Failed to load repositories")).not.toBeInTheDocument();
   });
 });
+
+describe("DashboardPage on a read-only server", () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it("offers no way to add or delete repositories", async () => {
+    vi.spyOn(api, "getCapabilities").mockResolvedValue({ read_only: true });
+    vi.spyOn(api, "getRepositories").mockResolvedValue([repository]);
+    renderPage();
+    expect(await screen.findByText(repository.name)).toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByRole("link", { name: /add repository/i })).not.toBeInTheDocument());
+    expect(screen.queryByRole("button", { name: `Delete ${repository.name}` })).not.toBeInTheDocument();
+  });
+});
