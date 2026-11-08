@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
 from app.core.database import get_db
+from app.core.security import require_writable
 from app.models.repository import Repository
 from app.services.github_service import parse_repository_url
 from app.services.repository_service import RepositoryBusyError, start_processing
@@ -26,7 +27,7 @@ def signature_is_valid(secret: str, body: bytes, signature: str | None) -> bool:
 
 
 # No API key: GitHub can't send one, so the signature is this endpoint's authentication
-@router.post("/github", status_code=202)
+@router.post("/github", status_code=202, dependencies=[Depends(require_writable)])
 async def github_push(
     request: Request,
     db: Session = Depends(get_db),

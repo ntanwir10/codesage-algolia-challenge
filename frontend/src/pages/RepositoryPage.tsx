@@ -18,6 +18,7 @@ import { useToast } from "@/components/ui/toast";
 import { describeError } from "@/lib/errors";
 import { isActiveStatus, pollWhileActive, progressStage } from "@/lib/polling";
 import { isHttpUrl, sourceLabel } from "@/lib/utils";
+import { useReadOnly } from "@/hooks/useReadOnly";
 
 // Stop polling once the repository is gone: react-query keeps the last good data
 // (still "processing") after a 404, which would otherwise keep the interval alive.
@@ -36,6 +37,7 @@ function describeFreshness({ branch, commits_behind, changed }: RepositoryFreshn
 }
 
 export function RepositoryPage() {
+  const readOnly = useReadOnly();
   const { id } = useParams<{ id: string }>();
   // Strict: parseInt would load repo 12 for "12abc". 0 means invalid.
   const repositoryId = /^\d+$/.test(id ?? "") ? Number(id) : 0;
@@ -94,9 +96,10 @@ export function RepositoryPage() {
   );
 
   // Live updates: subscribe while the repository is being processed.
+  const active = isActiveStatus(repository?.status);
   const repositoryIds = useMemo(
-    () => (repositoryId ? [repositoryId] : []),
-    [repositoryId]
+    () => (repositoryId && active ? [repositoryId] : []),
+    [repositoryId, active]
   );
   const { connectionStatus } = useRealtimeStatus({ repositoryIds });
 
@@ -297,7 +300,7 @@ export function RepositoryPage() {
                 {freshness && repository.status === "completed" && (
                   <span className="text-sm text-muted-foreground">
                     {describeFreshness(freshness)}
-                    {freshness.changed && (
+                    {freshness.changed && !readOnly && (
                       <>
                         {" · "}
                         <button
@@ -317,6 +320,7 @@ export function RepositoryPage() {
           </div>
           <div className="flex flex-wrap items-center gap-2">
             <StatusBadge status={repository.status} />
+            {!readOnly && (
             <Button
               variant="outline"
               size="sm"
@@ -329,6 +333,7 @@ export function RepositoryPage() {
               <span className="mr-1">🗑️</span>
               Delete
             </Button>
+            )}
           </div>
         </div>
 
@@ -429,14 +434,16 @@ export function RepositoryPage() {
                       )}
                     </p>
                   )}
+                  {!readOnly && (
                   <Button
-                    variant="outline"
-                    className="mt-2"
-                    onClick={() => setConfirmReprocess(true)}
-                    disabled={isReprocessing}
-                  >
-                    {isReprocessing ? "Reprocessing..." : "Reprocess"}
-                  </Button>
+                      variant="outline"
+                      className="mt-2"
+                      onClick={() => setConfirmReprocess(true)}
+                      disabled={isReprocessing}
+                    >
+                      {isReprocessing ? "Reprocessing..." : "Reprocess"}
+                    </Button>
+                  )}
                 </div>
               </div>
             </CardContent>
@@ -460,14 +467,16 @@ export function RepositoryPage() {
                       {repository.error_message}
                     </p>
                   )}
+                  {!readOnly && (
                   <Button
-                    variant="outline"
-                    className="mt-2"
-                    onClick={() => setConfirmReprocess(true)}
-                    disabled={isReprocessing}
-                  >
-                    {isReprocessing ? "Reprocessing..." : "Reprocess"}
-                  </Button>
+                      variant="outline"
+                      className="mt-2"
+                      onClick={() => setConfirmReprocess(true)}
+                      disabled={isReprocessing}
+                    >
+                      {isReprocessing ? "Reprocessing..." : "Reprocess"}
+                    </Button>
+                  )}
                 </div>
               </div>
             </CardContent>

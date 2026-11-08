@@ -104,6 +104,11 @@ class Settings(BaseSettings):
         default=None,
         description="API key required on write endpoints (X-API-Key header)",
     )
+    read_only: bool = Field(
+        default=False,
+        description="Serve searches and reads only: nothing can be added, reprocessed or deleted, "
+        "so reads need no key even on a public host",
+    )
 
     # API Settings
     cors_origins: str = Field(
@@ -214,7 +219,9 @@ def validate_runtime_settings(settings: Settings) -> None:
     if settings.codesage_api_key and "*" in settings.allowed_hosts_list:
         logger.warning("ALLOWED_HOSTS contains '*'; any Host is served, so DNS rebinding is not blocked")
     loopback = settings.mcp_server_host in LOOPBACK_HOSTS
-    if not settings.codesage_api_key:
+    if settings.read_only:
+        logger.info("Read-only: repositories can't be added, reprocessed or deleted")
+    elif not settings.codesage_api_key:
         if not loopback:
             raise RuntimeError(
                 "CODESAGE_API_KEY is required when MCP_SERVER_HOST is not a "

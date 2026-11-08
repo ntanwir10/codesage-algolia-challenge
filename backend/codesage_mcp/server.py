@@ -31,7 +31,7 @@ from mcp.shared.exceptions import MCPError
 from pydantic import ValidationError
 
 from codesage_mcp.prompts import PROMPTS, get_prompt
-from codesage_mcp.schemas import TOOLS, input_schema, output_schema
+from codesage_mcp.schemas import TOOLS, WRITE_TOOLS, input_schema, output_schema
 
 logger = logging.getLogger("codesage_mcp")
 
@@ -324,9 +324,16 @@ class CodeSageBridge:
 
 
 def build_server(
-    config: Config | None = None, client_factory: ClientFactory = default_client_factory
+    config: Config | None = None,
+    client_factory: ClientFactory = default_client_factory,
+    *,
+    backend: Any = None,
+    tool_names: Callable[[], list[str]] | None = None,
 ) -> Server:
-    bridge = CodeSageBridge(config or Config.from_env(), client_factory)
+    """The CodeSage MCP server. Its tools run through `backend` (anything with the bridge's
+    call_tool, list_resources and read_resource), by default the HTTP bridge; `tool_names` narrows
+    the listed tools, as a read-only server does"""
+    bridge = backend or CodeSageBridge(config or Config.from_env(), client_factory)
 
     async def on_list_tools(
         ctx: ServerRequestContext, params: types.PaginatedRequestParams | None
@@ -338,8 +345,12 @@ def build_server(
                     description=s.description,
                     input_schema=input_schema(s.name),
                     output_schema=output_schema(s.name),
+                    # Lets a client run the read-only tools without asking each time
+                    annotations=types.ToolAnnotations(
+                        read_only_hint=s.name not in WRITE_TOOLS, destructive_hint=False
+                    ),
                 )
-                for s in TOOLS.values()
+                for s in map(TOOLS.get, tool_names() if tool_names else TOOLS)
             ]
         )
 

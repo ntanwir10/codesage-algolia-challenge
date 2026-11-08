@@ -37,6 +37,15 @@ async def require_api_key(x_api_key: str | None = Header(None)) -> None:
         raise HTTPException(status_code=401, detail="Invalid or missing API key")
 
 
+READ_ONLY_MESSAGE = "This CodeSage is read-only: repositories can't be added, reprocessed or deleted here"
+
+
+async def require_writable() -> None:
+    """FastAPI dependency refusing every write on a read-only server, whatever the key."""
+    if get_settings().read_only:
+        raise HTTPException(status_code=403, detail=READ_ONLY_MESSAGE)
+
+
 def failure_message(error: Exception) -> str:
     """What a failed run records and broadcasts; the full error goes to the log only"""
     # A SQLAlchemy error's text carries the SQL and its parameters, which include file contents
@@ -71,11 +80,13 @@ def request_refusal(scope) -> str | None:
     # With a key set it still matters: the dev bundle embeds the key, and such a page could read it
     # /health is exempt: it reveals nothing, and load balancers often address it by IP. With a key, a
     # request with no Host at all (HTTP/1.0) is not a browser's, since browsers always send one
-    allowed = LOOPBACK_HOSTS if not settings.codesage_api_key else settings.allowed_hosts_list
-    checked = bool(host) or not settings.codesage_api_key
+    # Read-only serves the public like a keyed server: nothing it answers can change anything
+    public = bool(settings.codesage_api_key) or settings.read_only
+    allowed = settings.allowed_hosts_list if public else LOOPBACK_HOSTS
+    checked = bool(host) or not public
     if checked and not host_is_allowed(host_without_port(host), allowed) and scope.get("path") != "/health":
         return "Host not allowed"
-    if not settings.codesage_api_key:
+    if not public:
         # Bound to 0.0.0.0 by hand (MCP_SERVER_HOST unset), a LAN client could send Host: localhost,
         # but not a loopback address
         if not _is_loopback_peer(scope.get("client")):
