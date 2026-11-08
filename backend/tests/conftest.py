@@ -61,6 +61,8 @@ def no_real_github_check(request, monkeypatch):
     from app.core.config import get_settings
 
     monkeypatch.setattr(get_settings(), "embedding_api_key", None)
+    # Nor a developer's git tokens: tests that want one set it themselves
+    monkeypatch.setattr(get_settings(), "git_host_credentials", "")
     if request.node.get_closest_marker("real_github_check"):
         return
 

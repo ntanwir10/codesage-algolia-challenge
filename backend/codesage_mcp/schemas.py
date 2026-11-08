@@ -103,9 +103,9 @@ class AddRepositoryArgs(_Args):
         description=(
             "https URL of the git repository to index. Accepts GitHub, GitLab, Bitbucket and "
             "self-hosted git servers, e.g. 'https://gitlab.com/group/project'. Branch URLs "
-            "such as '.../tree/dev' are understood. Private repositories work only on GitHub, "
-            "and only when the CodeSage server's token has access; elsewhere the repository "
-            "must be public."
+            "such as '.../tree/dev' are understood. Private repositories work only when the "
+            "CodeSage server has a token for the host (GITHUB_TOKEN for GitHub, "
+            "GIT_HOST_CREDENTIALS elsewhere); no token can be passed here."
         ),
         min_length=1,
     )

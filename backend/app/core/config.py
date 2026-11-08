@@ -50,6 +50,28 @@ def _allowed_hosts(cors_origins: str, allowed_hosts: str) -> tuple[str, ...]:
     return tuple(h for h in dict.fromkeys(hosts) if h)
 
 
+@lru_cache(maxsize=8)
+def parse_git_host_credentials(raw: str) -> dict[str, str]:
+    """GIT_HOST_CREDENTIALS ('host=user:token,...') as {host: 'user:token'}.
+
+    Raises ValueError naming the entry's position, never its value: the value holds a token.
+    """
+    credentials: dict[str, str] = {}
+    entries = [entry.strip() for entry in raw.split(",") if entry.strip()]
+    for number, entry in enumerate(entries, 1):
+        host, _, credential = entry.partition("=")  # the token may hold '=' or ':'
+        host = host.strip().lower()
+        user, _, token = credential.strip().partition(":")
+        if not re.fullmatch(r"[a-z0-9]([a-z0-9.-]*[a-z0-9])?", host) or not user or not token:
+            raise ValueError(f"GIT_HOST_CREDENTIALS entry {number} must look like host=user:token")
+        if host in ("github.com", "www.github.com"):
+            raise ValueError("GIT_HOST_CREDENTIALS can't hold github.com; set GITHUB_TOKEN for it")
+        if host in credentials:
+            raise ValueError(f"GIT_HOST_CREDENTIALS lists {host} twice")
+        credentials[host] = credential.strip()
+    return credentials
+
+
 class Settings(BaseSettings):
     # Core FastAPI Settings
     environment: str = "development"
@@ -98,6 +120,24 @@ class Settings(BaseSettings):
     github_token: str | None = Field(
         default=None, description="GitHub personal access token for API access"
     )
+    git_host_credentials: str = Field(
+        default="",
+        description=(
+            "Comma-separated host=user:token pairs for private repositories on git hosts other "
+            "than github.com, e.g. gitlab.com=oauth2:<token>"
+        ),
+    )
+
+    @field_validator("git_host_credentials")
+    @classmethod
+    def _git_host_credentials_are_valid(cls, value: str) -> str:
+        parse_git_host_credentials(value)
+        return value
+
+    @property
+    def git_host_credentials_map(self) -> dict[str, str]:
+        """{host: 'user:token'} from GIT_HOST_CREDENTIALS"""
+        return parse_git_host_credentials(self.git_host_credentials)
 
     # Security
     codesage_api_key: str | None = Field(
@@ -180,8 +220,9 @@ class Settings(BaseSettings):
             },
         }
 
-    # Load from the backend directory's .env (load_dotenv() above also searches upward)
-    model_config = SettingsConfigDict(env_file=".env", case_sensitive=False, extra="ignore")
+    # Load from the backend directory's .env (load_dotenv() above also searches upward).
+    # A bad value is never echoed in the error: it may be a token or a database password
+    model_config = SettingsConfigDict(env_file=".env", case_sensitive=False, extra="ignore", hide_input_in_errors=True)
 
 
 def validate_runtime_settings(settings: Settings) -> None:

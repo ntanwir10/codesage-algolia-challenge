@@ -126,7 +126,7 @@ export function GitHubForm({ onSubmit, isLoading = false }: GitHubFormProps) {
           Add Repository
         </CardTitle>
         <CardDescription>
-          Enter a GitHub repository (owner/repo), or the https URL of a public
+          Enter a GitHub repository (owner/repo), or the https URL of a
           repository on GitLab, Bitbucket or another git host
         </CardDescription>
       </CardHeader>

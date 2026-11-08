@@ -1,15 +1,20 @@
 """git_source with the git subprocess mocked: no network, no real git"""
 
 import asyncio
+import base64
 import os
+import re
 from pathlib import Path
 
 import pytest
 
+from app.core.config import Settings, get_settings, parse_git_host_credentials
 from app.services import git_source
 from app.services.github_service import GitHubAPIError, RepositoryCheckError
 
 URL = "https://gitlab.com/group/sub/repo"
+TOKEN = "glpat-s3cret=:x"  # a token may hold '=' and ':'
+ENCODED = base64.b64encode(f"oauth2:{TOKEN}".encode()).decode()
 
 
 class FakeProcess:
@@ -60,6 +65,12 @@ def spawn(monkeypatch):
     spawn.process = FakeProcess()
     monkeypatch.setattr(asyncio, "create_subprocess_exec", fake)
     return spawn
+
+
+@pytest.fixture
+def credentials(monkeypatch):
+    """gitlab.com has a token in GIT_HOST_CREDENTIALS"""
+    monkeypatch.setattr(get_settings(), "git_host_credentials", f"gitlab.com=oauth2:{TOKEN}")
 
 
 async def check(url=URL, branch=None) -> RepositoryCheckError | None:
@@ -125,14 +136,16 @@ async def test_git_runs_without_a_shell_prompt_credentials_or_other_protocols(sp
     assert "shell" not in kwargs
 
 
-@pytest.mark.parametrize(
-    "stderr",
-    [
-        "fatal: Authentication failed for 'https://gitlab.com/group/sub/repo/'",
-        "fatal: could not read Username for 'https://gitlab.com': terminal prompts disabled",
-        "remote: The project you were looking for could not be found.\nfatal: repository 'x' not found",
-    ],
-)
+# What git prints when the host refuses: a 401 shows up as the username prompt git can't show
+REFUSED = [
+    "fatal: Authentication failed for 'https://gitlab.com/group/sub/repo/'",
+    "fatal: could not read Username for 'https://gitlab.com': terminal prompts disabled",
+    "fatal: unable to access 'https://gitlab.com/group/sub/repo.git/': The requested URL returned error: 403",
+    "remote: The project you were looking for could not be found.\nfatal: repository 'x' not found",
+]
+
+
+@pytest.mark.parametrize("stderr", REFUSED)
 async def test_missing_or_private_is_422(spawn, stderr):
     spawn.process = FakeProcess(code=128, err=stderr)
     error = await check()
@@ -141,6 +154,98 @@ async def test_missing_or_private_is_422(spawn, stderr):
         "gitlab.com/group/sub/repo was not found or is private; only public repositories are "
         "supported on gitlab.com.",
     )
+
+
+# --- GIT_HOST_CREDENTIALS -------------------------------------------------------
+
+
+async def test_a_token_goes_to_its_host_in_the_environment_never_argv(spawn, credentials):
+    spawn.process = FakeProcess(out=f"ref: refs/heads/main\tHEAD\n{SHA}\tHEAD\n")
+
+    assert await check() is None
+    assert await git_source.remote_head(URL) == ("main", SHA)
+    await git_source.GitSource().get_repository_files(URL)  # the clone, then rev-parse inside it
+
+    ls_remote, head, clone, rev_parse = spawn.calls
+    for argv, kwargs in (ls_remote, head, clone):
+        env = kwargs["env"]
+        config = [(env[f"GIT_CONFIG_KEY_{i}"], env[f"GIT_CONFIG_VALUE_{i}"]) for i in range(int(env["GIT_CONFIG_COUNT"]))]
+        assert config == [
+            ("http.https://gitlab.com/.extraHeader", f"Authorization: Basic {ENCODED}"),
+            ("http.followRedirects", "false"),  # the header can't follow a redirect
+        ]
+        # ps shows argv; and with redirects off git needs the address gitlab.com doesn't redirect
+        assert not any(TOKEN in a or ENCODED in a or "extraHeader" in a for a in argv)
+        assert argv[argv.index("--") + 1] == f"{URL}.git"
+    assert "GIT_CONFIG_COUNT" not in rev_parse[1]["env"]  # a command on the local clone gets none
+
+
+async def test_other_hosts_get_no_token(spawn, credentials):
+    for url in ("https://bitbucket.org/team/repo", "https://gitlab.com.example.org/group/repo"):
+        await check(url)
+        argv, kwargs = spawn.calls[-1]
+        assert "GIT_CONFIG_COUNT" not in kwargs["env"]
+        assert not any(ENCODED in value for value in kwargs["env"].values())
+        assert argv[argv.index("--") + 1] == url  # unchanged, redirects allowed as before
+
+
+@pytest.mark.parametrize("stderr", REFUSED)
+async def test_with_a_token_a_refusal_blames_the_token_not_privacy(spawn, credentials, stderr):
+    spawn.process = FakeProcess(code=128, err=stderr)
+    error = await check()
+    assert (error.status_code, error.detail) == (
+        422,
+        "gitlab.com rejected the token in GIT_HOST_CREDENTIALS or it lacks access to group/sub/repo.",
+    )
+
+
+async def test_with_a_token_a_redirect_says_so(spawn, credentials):
+    spawn.process = FakeProcess(code=128, err=f"fatal: unable to access '{URL}.git/': The requested URL returned error: 301")
+    error = await check()
+    assert (error.status_code, error.detail) == (
+        422,
+        "gitlab.com redirected group/sub/repo; with a token CodeSage doesn't follow redirects, so use its current address.",
+    )
+
+
+async def test_with_a_token_a_refused_clone_blames_the_token(monkeypatch, credentials):
+    seen = fake_clone(monkeypatch, populate, code=128, stderr=REFUSED[1])
+    with pytest.raises(GitHubAPIError) as caught:
+        await git_source.GitSource().get_repository_files(URL)
+    assert (caught.value.status, str(caught.value)) == (
+        404,
+        "gitlab.com rejected the token in GIT_HOST_CREDENTIALS or it lacks access to group/sub/repo",
+    )
+    assert seen["host"] == "gitlab.com"
+
+
+def test_credentials_parse_into_a_host_map():
+    raw = " GitLab.com=oauth2:glpat-x , bitbucket.org=x-token-auth:ATCTT3x=AB:C,, "
+    expected = {"gitlab.com": "oauth2:glpat-x", "bitbucket.org": "x-token-auth:ATCTT3x=AB:C"}
+    assert parse_git_host_credentials(raw) == expected
+    assert Settings(_env_file=None, git_host_credentials=raw).git_host_credentials_map == expected
+    assert Settings(_env_file=None, git_host_credentials="").git_host_credentials_map == {}
+
+
+@pytest.mark.parametrize(
+    ("raw", "message"),
+    [
+        ("glpat-SECRET", "entry 1 must look like host=user:token"),
+        ("gitlab.com=glpat-SECRET", "entry 1 must look like host=user:token"),
+        ("gitlab.com=oauth2:", "entry 1 must look like host=user:token"),
+        ("gitlab.com=:glpat-SECRET", "entry 1 must look like host=user:token"),
+        ("a.example=u:t,https://gitlab.com=oauth2:glpat-SECRET", "entry 2 must look like host=user:token"),
+        ("gitlab.com:443=oauth2:glpat-SECRET", "entry 1 must look like host=user:token"),
+        ("gitlab.com/group=oauth2:glpat-SECRET", "entry 1 must look like host=user:token"),
+        ("github.com=x:glpat-SECRET", "can't hold github.com; set GITHUB_TOKEN for it"),
+        ("www.github.com=x:glpat-SECRET", "can't hold github.com; set GITHUB_TOKEN for it"),
+        ("gitlab.com=a:glpat-SECRET,GITLAB.com=b:c", "lists gitlab.com twice"),
+    ],
+)
+def test_bad_credentials_stop_startup_without_echoing_the_token(raw, message):
+    with pytest.raises(ValueError, match=re.escape(message)) as caught:
+        Settings(_env_file=None, git_host_credentials=raw)
+    assert "SECRET" not in str(caught.value)
 
 
 async def test_a_missing_branch_is_422(spawn):
@@ -190,10 +295,10 @@ def fake_clone(monkeypatch, populate, code=0, stderr=""):
     """Replace the git runner: a clone writes `populate(target)` into the target directory"""
     seen = {}
 
-    async def run(args, timeout):
+    async def run(args, timeout, host=None):
         if "rev-parse" in args:
             return 0, "c0ffee\n", ""
-        seen["args"], seen["timeout"] = args, timeout
+        seen["args"], seen["timeout"], seen["host"] = args, timeout, host
         target = Path(args[-1])
         seen["target"] = target
         if code == 0:
@@ -297,7 +402,7 @@ async def test_clone_failures_are_user_facing_and_clean_up(monkeypatch, stderr, 
 async def test_a_clone_timeout_is_504_and_cleans_up(monkeypatch):
     seen = {}
 
-    async def run(args, timeout):
+    async def run(args, timeout, host=None):
         seen["target"] = Path(args[-1])
         raise TimeoutError
 
@@ -342,8 +447,8 @@ async def test_symlinks_in_a_real_clone_are_not_indexed(tmp_path, monkeypatch):
 
     real_git = git_source._git
 
-    async def local_git(args, timeout):
-        return await real_git([src.as_uri() if a == URL else a for a in args], timeout)
+    async def local_git(args, timeout, host=None):
+        return await real_git([src.as_uri() if a == URL else a for a in args], timeout, host)
 
     monkeypatch.setattr(git_source, "_git", local_git)
     monkeypatch.setattr(git_source, "_SAFE_GIT_ARGS", [*git_source._SAFE_GIT_ARGS, "-c", "protocol.file.allow=always"])
