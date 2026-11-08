@@ -6,13 +6,13 @@ https://codesage-demo.vercel.app is CodeSage with `READ_ONLY=true`, on Vercel's 
 
 ```bash
 make demo-build                  # index the repositories and lay out build/demo/
-make demo-build ARGS=--reindex   # rebuild the data too (clears the demo index first)
+make demo-build ARGS=--reindex   # rebuild the data too, then redeploy
 make demo-deploy                 # vercel deploy --prod from build/demo/
 ```
 
 `scripts/build_demo.py` does the work:
 
-1. **Index.** It indexes the repositories into a fresh SQLite file (`build/demo/demo.db`) and their own Algolia index, `codesage_demo`. It uses the Algolia admin key and GitHub token from `backend/.env`, or from `--env-file`. Search by meaning is off, so no embeddings key is used. It folds the WAL into the file, since the demo opens it read-only and can't replay one. This step runs only when `demo.db` is missing or you pass `--reindex`.
+1. **Index.** It indexes the repositories into a fresh SQLite file and their own Algolia index, both built aside (`demo.db.building`, `codesage_demo_build`). Only when every repository is complete does it move the index onto `codesage_demo` and rename the file to `build/demo/demo.db`, so a failed rebuild leaves the live demo as it was. It uses the Algolia admin key and GitHub token from `backend/.env`, or from `--env-file`. Search by meaning is off, so no embeddings key is used. It folds the WAL into the file, since the demo opens it read-only and can't replay one. This step runs only when `demo.db` is missing or you pass `--reindex`.
 2. **Lay out.** It copies `backend/app`, `codesage_mcp`, `alembic` and `requirements.txt`, plus the files in this folder. It builds the dashboard into `public/` with no API key and copies its `index.html` to `dashboard.html`.
 
 The files here:

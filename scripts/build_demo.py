@@ -20,6 +20,9 @@ ROOT = Path(__file__).resolve().parent.parent
 OUT = ROOT / "build" / "demo"
 DATABASE = OUT / "demo.db"
 INDEX = "codesage_demo"
+# Built aside and moved into place only when complete, so a failed rebuild leaves the live demo as it was
+BUILDING = OUT / "demo.db.building"
+BUILD_INDEX = "codesage_demo_build"
 REPOSITORIES = (
     "https://github.com/pmndrs/zustand",
     "https://github.com/pallets/click",
@@ -39,10 +42,10 @@ async def index_repositories() -> None:
     algolia = AlgoliaService()
     if not algolia.is_available():
         sys.exit("Algolia isn't configured: set ALGOLIA_APP_ID and ALGOLIA_ADMIN_API_KEY in the env file")
-    # An earlier build's records would otherwise turn up in searches across repositories
+    # A failed build's records would otherwise turn up in searches across repositories
     try:
-        task = algolia.client.clear_objects(index_name=INDEX)
-        algolia.client.wait_for_task(index_name=INDEX, task_id=task.task_id)
+        task = algolia.client.clear_objects(index_name=BUILD_INDEX)
+        algolia.client.wait_for_task(index_name=BUILD_INDEX, task_id=task.task_id)
     except RequestException as e:
         if e.status_code != 404:  # no index yet
             raise
@@ -57,13 +60,17 @@ async def index_repositories() -> None:
             if repository.status != "completed":
                 sys.exit(f"{repository.name} failed: {repository.error_message}")
     engine.dispose()
+    # Replaces the live index in one step, records and settings; the search key names INDEX
+    task = algolia.client.operation_index(BUILD_INDEX, {"operation": "move", "destination": INDEX})
+    algolia.client.wait_for_task(index_name=BUILD_INDEX, task_id=task.task_id)
 
 
 def checkpoint() -> None:
     """Fold the WAL into the file: a read-only server opens it immutable and can't replay one"""
-    with contextlib.closing(sqlite3.connect(DATABASE)) as db:
+    with contextlib.closing(sqlite3.connect(BUILDING)) as db:
         db.execute("PRAGMA journal_mode=DELETE")
         db.execute("VACUUM")
+    BUILDING.replace(DATABASE)
 
 
 def assemble() -> None:
@@ -87,14 +94,15 @@ def main() -> None:
     parser.add_argument("--env-file", type=Path, default=ROOT / "backend" / ".env",
                         help="where the Algolia admin key and GitHub token come from (default backend/.env)")
     parser.add_argument("--reindex", action="store_true",
-                        help="rebuild the data even if build/demo/demo.db exists (clears the demo index)")
+                        help="rebuild the data even if build/demo/demo.db exists")
     args = parser.parse_args()
     OUT.mkdir(parents=True, exist_ok=True)
     if args.reindex or not DATABASE.exists():
-        DATABASE.unlink(missing_ok=True)
+        for leftover in OUT.glob(f"{BUILDING.name}*"):  # a failed build's file, WAL and shared memory
+            leftover.unlink()
         # Set before load_dotenv, which keeps variables that are already set
         os.environ.update({
-            "DATABASE_URL": f"sqlite:///{DATABASE}", "ALGOLIA_INDEX_NAME": INDEX, "EMBEDDING_API_KEY": "",
+            "DATABASE_URL": f"sqlite:///{BUILDING}", "ALGOLIA_INDEX_NAME": BUILD_INDEX, "EMBEDDING_API_KEY": "",
             "INDEX_WORKERS": "inline", "READ_ONLY": "false", "REFRESH_INTERVAL_MINUTES": "0",
         })
         from dotenv import load_dotenv
