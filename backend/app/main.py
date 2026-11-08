@@ -20,7 +20,7 @@ load_dotenv()
 from app.api.v1.router import api_router
 from app.core.config import get_settings, validate_runtime_settings
 from app.core.database import SessionLocal, engine
-from app.core.migrations import upgrade_database
+from app.core.migrations import database_is_current, upgrade_database
 from app.core.security import BrowserRequestGuard, limiter
 from app.models import code_entity, code_file, repository  # noqa: F401  registers tables
 from app.services.algolia_service import AlgoliaService
@@ -65,13 +65,18 @@ async def lifespan(app: FastAPI):
         ),
     )
 
-    # Bring the schema to the latest migration; a pre-Alembic database is stamped first
-    upgrade_database(engine)
-    logger.info("Database schema up to date")
+    if settings.read_only:
+        # A read-only database is never migrated or written to; it must be built at the latest schema
+        if not database_is_current(engine):
+            raise RuntimeError("The read-only database isn't at the latest migration; rebuild it")
+    else:
+        # Bring the schema to the latest migration; a pre-Alembic database is stamped first
+        upgrade_database(engine)
+        logger.info("Database schema up to date")
 
-    # Jobs run in-process, so any run a previous process left open died with it
-    with SessionLocal() as db:
-        recover_interrupted_jobs(db)
+        # Jobs run in-process, so any run a previous process left open died with it
+        with SessionLocal() as db:
+            recover_interrupted_jobs(db)
 
     # Validate MCP server requirements
     if not settings.algolia_app_id or not settings.algolia_admin_api_key:
@@ -85,11 +90,11 @@ async def lifespan(app: FastAPI):
     logger.info("WebSocket endpoint configured at /ws for real-time updates")
 
     background = []
-    if settings.index_workers == "external":
+    if settings.index_workers == "external" and not settings.read_only:
         background.append(asyncio.create_task(relay_progress()))
         logger.info("Indexing runs in external workers (python -m app.worker)")
     refresh = None
-    if settings.refresh_interval_minutes > 0:
+    if settings.refresh_interval_minutes > 0 and not settings.read_only:
         refresh = asyncio.create_task(refresh_loop(settings.refresh_interval_minutes))
         logger.info("Scheduled refresh on", interval_minutes=settings.refresh_interval_minutes)
 

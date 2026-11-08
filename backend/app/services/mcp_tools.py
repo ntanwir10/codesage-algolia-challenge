@@ -22,6 +22,8 @@ from pydantic import BaseModel, ValidationError
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
+from app.core.config import get_settings
+from app.core.security import READ_ONLY_MESSAGE
 from app.models.code_entity import CodeEntity
 from app.models.code_file import CodeFile
 from app.models.repository import Repository
@@ -33,6 +35,14 @@ from app.services.repository_service import add_repository as create_repository
 from codesage_mcp import schemas
 
 logger = structlog.get_logger()
+
+# The tools that change anything; a read-only server neither lists nor runs them
+WRITE_TOOLS = {"add_repository"}
+
+
+def available_tools() -> list[str]:
+    """The tool names this server offers"""
+    return [name for name in schemas.TOOLS if not (get_settings().read_only and name in WRITE_TOOLS)]
 
 MAX_FILE_LINES = 400
 SNIPPET_CHARS = 600
@@ -642,6 +652,8 @@ async def find_references(db: Session, args: schemas.FindReferencesArgs) -> dict
 
 
 async def add_repository(db: Session, args: schemas.AddRepositoryArgs) -> dict:
+    if get_settings().read_only:
+        raise ToolError(READ_ONLY_MESSAGE)
     try:
         data = RepositoryCreate(url=args.url, branch=args.branch, description=args.description)
     except ValidationError as exc:

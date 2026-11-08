@@ -14,7 +14,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
 from app.core.database import get_db
-from app.core.security import limiter, require_api_key
+from app.core.security import limiter, require_api_key, require_writable
 from app.models.repository import Repository
 from app.schemas.repository import (
     RepositoryCreate,
@@ -92,7 +92,7 @@ async def list_repositories(
     "/",
     response_model=RepositoryResponse,
     status_code=201,
-    dependencies=[Depends(require_api_key)],
+    dependencies=[Depends(require_writable), Depends(require_api_key)],
     summary="Create Repository",
     description="Create a new repository for processing",
 )
@@ -156,7 +156,7 @@ async def get_repository(repository_id: RepositoryId, db: Session = Depends(get_
 @router.put(
     "/{repository_id}",
     response_model=RepositoryResponse,
-    dependencies=[Depends(require_api_key)],
+    dependencies=[Depends(require_writable), Depends(require_api_key)],
     summary="Update Repository",
     description="Update a repository's details",
 )
@@ -225,7 +225,7 @@ async def update_repository(
 
 @router.delete(
     "/{repository_id}",
-    dependencies=[Depends(require_api_key)],
+    dependencies=[Depends(require_writable), Depends(require_api_key)],
     summary="Delete Repository",
     description="Delete a repository and all its associated data",
 )
@@ -296,7 +296,7 @@ async def get_repository_stats(repository_id: RepositoryId, db: Session = Depend
 @router.post(
     "/{repository_id}/process",
     status_code=202,
-    dependencies=[Depends(require_api_key)],
+    dependencies=[Depends(require_writable), Depends(require_api_key)],
     summary="Process Repository",
     description=(
         "Schedule processing that extracts code entities and indexes them in Algolia. "

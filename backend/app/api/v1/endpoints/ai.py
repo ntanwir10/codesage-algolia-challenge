@@ -91,7 +91,9 @@ async def get_mcp_capabilities():
         "name": config["name"],
         "version": config["version"],
         "capabilities": config["capabilities"],
-        "tools": list(schemas.TOOLS),
+        "tools": mcp_tools.available_tools(),
+        # The dashboard hides adding, reprocessing and deleting on a read-only server
+        "read_only": settings.read_only,
         # Lets the dashboard offer search by meaning only when the server can do it
         "semantic_search": embeddings.is_configured(),
     }
@@ -106,7 +108,7 @@ async def list_mcp_tools():
             "inputSchema": schemas.input_schema(spec.name),
             "outputSchema": schemas.output_schema(spec.name),
         }
-        for spec in schemas.TOOLS.values()
+        for spec in map(schemas.TOOLS.get, mcp_tools.available_tools())
     ]
     return {"tools": tools, "count": len(tools)}
 
