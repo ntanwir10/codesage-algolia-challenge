@@ -122,7 +122,7 @@ These clients were checked against a local backend, with no key in their config.
 | Claude Code | `~/.claude.json` (user scope) | `claude mcp add -s user codesage -e MCP_SERVER_URL=http://127.0.0.1:8001 -- /absolute/path/to/codesage-algolia-challenge/mcp_launcher.sh` |
 | Gemini CLI | `~/.gemini/settings.json` (user scope) | `gemini mcp add -s user codesage /absolute/path/to/codesage-algolia-challenge/mcp_launcher.sh -e MCP_SERVER_URL=http://127.0.0.1:8001` |
 | Qwen Code | `~/.qwen/settings.json` (user scope) | `qwen mcp add -s user codesage /absolute/path/to/codesage-algolia-challenge/mcp_launcher.sh -e MCP_SERVER_URL=http://127.0.0.1:8001` |
-| LM Studio | `~/.lmstudio/mcp.json` | No command: add the `codesage` entry above under `mcpServers`, without `CODESAGE_API_KEY`. A running LM Studio picks it up |
+| LM Studio | `~/.lmstudio/mcp.json` | No command: put the JSON from [Manual install](#manual-install) in the file, without `CODESAGE_API_KEY`. A running LM Studio picks it up |
 
 To check it:
 
