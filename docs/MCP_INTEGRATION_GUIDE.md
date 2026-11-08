@@ -155,6 +155,8 @@ curl -X POST https://your-host/mcp -H "Content-Type: application/json" \
   -d '{"jsonrpc": "2.0", "id": 1, "method": "tools/list"}'
 ```
 
+**ChatGPT.** Add the server under Settings, Plugins, then Add, then **Add custom MCP server**. Give it the `/mcp` URL and set Authentication to **No authentication**. ChatGPT's other choices are OAuth, which CodeSage doesn't serve, and both together. ChatGPT can't send a key or a basic-auth login, so it can connect only to a read-only server such as the demo. Its "Allow read-only tools" permission follows the tools' `readOnlyHint`.
+
 ## Bridge settings
 
 All settings come from the environment, which the MCP client fills from the `env` block.

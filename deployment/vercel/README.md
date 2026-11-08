@@ -45,4 +45,5 @@ There is no `CODESAGE_API_KEY`: a read-only server needs none. Delete the `.env.
 - **No live updates.** Vercel functions don't keep WebSockets open. The dashboard opens one only while a run is in progress, which never happens here.
 - **Limits.**
   - Rate limits live in each function instance, so they hold per instance, not across the deployment.
+  - ChatGPT calls `/mcp` from OpenAI's servers, so all ChatGPT users share those servers' addresses, and so their rate limits.
   - Algolia's free plan has a monthly search quota with no overage charges. If the demo uses it up, search stops until the month resets.
