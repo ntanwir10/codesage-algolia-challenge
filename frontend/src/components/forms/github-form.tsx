@@ -133,7 +133,7 @@ export function GitHubForm({ onSubmit, isLoading = false }: GitHubFormProps) {
       <CardContent>
         <form onSubmit={handleSubmit(handleFormSubmit)} className="space-y-6">
           <div className="space-y-2">
-            <label htmlFor="url" className="text-sm font-medium">
+            <label htmlFor="url" className="inline-block text-sm font-medium">
               Repository *
             </label>
             <Input
@@ -182,7 +182,7 @@ export function GitHubForm({ onSubmit, isLoading = false }: GitHubFormProps) {
           </div>
 
           <div className="space-y-2">
-            <label htmlFor="branch" className="text-sm font-medium">
+            <label htmlFor="branch" className="inline-block text-sm font-medium">
               Branch
             </label>
             <Input
@@ -201,7 +201,7 @@ export function GitHubForm({ onSubmit, isLoading = false }: GitHubFormProps) {
           </div>
 
           <div className="space-y-2">
-            <label htmlFor="description" className="text-sm font-medium">
+            <label htmlFor="description" className="inline-block text-sm font-medium">
               Description (optional)
             </label>
             <Input
