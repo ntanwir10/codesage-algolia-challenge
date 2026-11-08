@@ -9,6 +9,7 @@ import json
 from typing import Any
 
 import mcp_types as types
+import structlog
 from limits import parse
 from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
 from mcp.shared.exceptions import MCPError
@@ -23,6 +24,10 @@ from app.core.security import api_key_is_valid, limiter
 from app.services import mcp_tools
 from app.services.mcp_tools import ToolError
 from codesage_mcp.server import build_server
+
+logger = structlog.get_logger()
+# Shown instead of an unexpected error's text, which can carry SQL and file contents
+INTERNAL_ERROR = "CodeSage hit an internal error; try again later."
 
 
 def _error(message: str) -> types.CallToolResult:
@@ -46,6 +51,9 @@ class LocalBackend:
                 return _error(f"Invalid arguments for '{name}': {problems}")
             except ToolError as exc:
                 return _error(str(exc))
+            except Exception:
+                logger.exception("MCP tool failed", tool=name)
+                return _error(INTERNAL_ERROR)
         # The same JSON as text too, for clients that predate structuredContent
         text = json.dumps(result, indent=2, default=str)
         return types.CallToolResult(content=[types.TextContent(text=text)], structured_content=result)
@@ -64,6 +72,9 @@ class LocalBackend:
                 body = await mcp_tools.read_resource(db, str(uri))
             except ToolError as exc:
                 raise MCPError(types.INVALID_PARAMS, str(exc)) from exc
+            except Exception as exc:
+                logger.exception("MCP resource read failed", uri=str(uri))
+                raise MCPError(types.INTERNAL_ERROR, INTERNAL_ERROR) from exc
         text = json.dumps(body["content"], indent=2, default=str)
         return types.ReadResourceResult(
             contents=[types.TextResourceContents(uri=body["uri"], mime_type=body["mimeType"], text=text)]
