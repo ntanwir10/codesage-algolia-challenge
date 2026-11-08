@@ -14,7 +14,7 @@ Reference for the parts of CodeSage the [root README](../README.md) only sketche
 
 ## Components
 
-Everything runs in one backend process, unless `INDEX_WORKERS=external` moves indexing runs to worker processes; the other parts are clients or proxies.
+Everything runs in the backend process (or `API_WORKERS` of them, which needs `INDEX_WORKERS=external` and Redis for the rate limits), unless `INDEX_WORKERS=external` moves indexing runs to worker processes; the other parts are clients or proxies.
 
 | Component | Path | Role |
 | --- | --- | --- |
@@ -43,7 +43,7 @@ erDiagram
 | `repositories` | `id`, `name`, `description`, `url` (unique), `branch` (null means the default branch), `commit_sha` (the indexed commit), `language`, `framework`, `status`, `error_message`, `total_files`, `processed_files`, `total_lines`, `created_at`, `updated_at`, `processed_at` |
 | `code_files` | `id`, `repository_id`, `file_path` (up to 1000 characters), `content`, `language`, `line_count`, timestamps |
 | `code_entities` | `id`, `file_id`, `repository_id`, `entity_type`, `entity_name` (up to 255), `start_line`, `end_line`, `signature`, `docstring`, `entity_metadata` (JSON: `parameters`, `return_type`), `embedding` (float32 vector, semantic search), `embedding_model`, timestamps |
-| `jobs` | `id`, `repository_id`, `force_reprocess`, `incremental`, `claimed_by`, `heartbeat_at`, `created_at`; used only with `INDEX_WORKERS=external` |
+| `jobs` | `id`, `repository_id` (unique: one job per repository), `force_reprocess`, `incremental`, `claimed_by`, `heartbeat_at`, `created_at`; used only with `INDEX_WORKERS=external` |
 
 - **Status.** `status` is `pending`, `processing`, `completed` or `failed`. The transitions are in the README's [status diagram](../README.md#repository-status).
 - **Entity types.** `function` (methods are stored as functions), `class`, `import`, `doc_section` and `terraform_block` (a top-level Terraform or HCL block, named like `resource aws_s3_bucket.logs`).
@@ -62,9 +62,11 @@ Alembic migrations in `backend/alembic/versions` run at startup through `app/cor
 | `commit_sha` | Adds `repositories.commit_sha`. |
 | `entity_embeddings` | Adds `code_entities.embedding` and `embedding_model`. |
 | `jobs` | Creates the `jobs` table. |
+| `unique_jobs` | Drops duplicate job rows, keeping the lowest `id` per repository. Makes `jobs.repository_id` unique. |
 
 - **Pre-Alembic databases.** If the app tables exist but `alembic_version` does not, the database is stamped at `baseline` and then upgraded.
 - **In-memory SQLite.** It is created directly from the models, because a separate Alembic connection would see an empty database.
+- **Lock.** Processes starting together migrate one at a time: under `pg_advisory_lock` on Postgres, and under `flock` on a `<database>-lock` file next to a SQLite database. The others wait, then find the schema at head. There is no SQLite lock on Windows.
 
 ## Ingestion pipeline
 
@@ -104,7 +106,7 @@ A run turns a git repository into stored files, entities and Algolia records. Th
 
 ### Job queue (INDEX_WORKERS)
 
-`start_processing` runs a job in the API process by default (`inline`, an asyncio task, at most two runs at once). With `INDEX_WORKERS=external` it adds a row to the `jobs` table instead, and `is_processing` also counts a repository with a job row as busy. `python -m app.worker` processes (`app/worker.py`) claim the oldest unclaimed job with `UPDATE … WHERE claimed_by IS NULL`, which only one worker can win in SQLite and Postgres, and run it through the same `_run_job`. They refresh `heartbeat_at` every 30 s (a failed refresh is logged and the next one still runs) and delete the row when done. A job silent for 5 minutes is unclaimed again as a full run. Because workers broadcast to their own empty connection lists, the API runs `relay_progress`, which reads active repositories every 2 s and sends their changes, plus the final status, over the WebSocket. At start-up, `recover_interrupted_jobs` restarts repositories left `pending` or `processing` as full runs, leaving any that a worker's job row owns.
+`start_processing` runs a job in the API process by default (`inline`, an asyncio task, at most two runs at once). With `INDEX_WORKERS=external` it adds a row to the `jobs` table instead, and `is_processing` also counts a repository with a job row as busy. The unique index on `jobs.repository_id` settles a race between API processes: when two both pass that check, the second insert fails and is reported as `RepositoryBusyError`, so recovery and the scheduled refresh in each process queue a repository once. `python -m app.worker` processes (`app/worker.py`) claim the oldest unclaimed job with `UPDATE … WHERE claimed_by IS NULL`, which only one worker can win in SQLite and Postgres, and run it through the same `_run_job`. They refresh `heartbeat_at` every 30 s (a failed refresh is logged and the next one still runs) and delete the row when done. A job silent for 5 minutes is unclaimed again as a full run. Because workers broadcast to their own empty connection lists, the API runs `relay_progress`, which reads active repositories every 2 s and sends their changes, plus the final status, over the WebSocket. At start-up, `recover_interrupted_jobs` restarts repositories left `pending` or `processing` as full runs, leaving any that a worker's job row owns.
 
 ### Scheduled refresh
 
@@ -285,7 +287,7 @@ The bridge sends the key itself when it talks to the backend directly. Through n
 
 ## Known limitations
 
-- **One API process.** WebSocket subscriptions, rate limits and caches live in the process, and so do job state and the two-run limit with `INDEX_WORKERS=inline`, so run exactly one. Indexing can move to any number of `python -m app.worker` processes.
+- **More than one API process needs Redis and workers.** `API_WORKERS` above 1 is refused unless `INDEX_WORKERS=external` (job state and the two-run limit are per process with `inline`) and `RATE_LIMIT_STORAGE_URL` names Redis (slowapi's counters are otherwise per process). WebSocket subscriptions stay per process, which works because every API process runs `relay_progress`. Caches stay per process, and each process runs the scheduled refresh, so its GitHub checks repeat once per process.
 - **SQLite by default.** The database is a single local file unless `DATABASE_URL` names Postgres (`postgresql://` maps to the psycopg 3 driver). `tests/test_postgres.py` runs against a real server in CI: the migrations, `bytea` vectors and the job claim.
 - **Synchronous Algolia client.** Calls run in worker threads.
 - **Partial results.** A repository over 1000 files or 100 MB, or too large for the trees API, is indexed in part. Source files are kept first, then tests, docs and data files.

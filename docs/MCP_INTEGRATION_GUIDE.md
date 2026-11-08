@@ -394,7 +394,7 @@ Set `MCP_SERVER_URL` and `CODESAGE_API_KEY` in the Inspector's environment field
 ## Known limitations
 
 - **Backend must be running.** The bridge does not start it.
-- **Single process.** The backend keeps WebSocket subscriptions, rate limits and caches in memory, and job state too unless `INDEX_WORKERS=external`, so run one API process.
+- **More than one API process needs Redis.** Rate limits and, with `INDEX_WORKERS=inline`, job state live in each process's memory. So `API_WORKERS` above 1 needs `INDEX_WORKERS=external` and `RATE_LIMIT_STORAGE_URL` (Redis), or the backend refuses to start.
 - **Rate limits are per address.** The 30 per minute on tool calls and resource reads is shared by everything behind one IP, such as nginx in the prod stack.
 - **Other hosts are public only.** `add_repository` and the dashboard can't read private repositories except on github.com.
 - **Cross-repository search.** `search_code` without `repository` includes repositories that are being reprocessed.
