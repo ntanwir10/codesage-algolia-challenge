@@ -65,6 +65,20 @@ async def index_repositories() -> None:
     algolia.client.wait_for_task(index_name=BUILD_INDEX, task_id=task.task_id)
 
 
+def migrate() -> None:
+    """Bring a demo.db built before a newer migration up to date. The read-only demo refuses to
+    start on an old schema, and migrations leave the indexed data as it is"""
+    from sqlalchemy import create_engine
+
+    from app.core.migrations import database_is_current, upgrade_database
+
+    engine = create_engine(f"sqlite:///{DATABASE}")
+    if not database_is_current(engine):
+        upgrade_database(engine)
+        print("demo.db migrated to the latest schema")
+    engine.dispose()
+
+
 def checkpoint() -> None:
     """Fold the WAL into the file: a read-only server opens it immutable and can't replay one"""
     with contextlib.closing(sqlite3.connect(BUILDING)) as db:
@@ -97,6 +111,7 @@ def main() -> None:
                         help="rebuild the data even if build/demo/demo.db exists")
     args = parser.parse_args()
     OUT.mkdir(parents=True, exist_ok=True)
+    sys.path.insert(0, str(ROOT / "backend"))
     if args.reindex or not DATABASE.exists():
         for leftover in OUT.glob(f"{BUILDING.name}*"):  # a failed build's file, WAL and shared memory
             leftover.unlink()
@@ -109,9 +124,12 @@ def main() -> None:
 
         if not load_dotenv(args.env_file):
             sys.exit(f"{args.env_file} not found or empty; pass --env-file")
-        sys.path.insert(0, str(ROOT / "backend"))
         asyncio.run(index_repositories())
         checkpoint()
+    else:
+        migrate()
+    for lock in OUT.glob("*-lock"):  # left by the migration lock; the demo never migrates
+        lock.unlink()
     assemble()
     print(f"Ready in {OUT}; run `make demo-deploy`")
 
