@@ -4,6 +4,8 @@ from pathlib import Path
 
 import structlog
 from alembic.config import Config
+from alembic.runtime.migration import MigrationContext
+from alembic.script import ScriptDirectory
 from sqlalchemy import Engine, inspect
 
 from alembic import command
@@ -46,3 +48,12 @@ def upgrade_database(engine: Engine) -> None:
         command.stamp(cfg, "baseline")
 
     command.upgrade(cfg, "head")
+
+
+def database_is_current(engine: Engine) -> bool:
+    """Whether the database is at the latest revision, checked without writing anything"""
+    cfg = Config()
+    cfg.set_main_option("script_location", str(_ALEMBIC_DIR))
+    head = ScriptDirectory.from_config(cfg).get_current_head()
+    with engine.connect() as connection:
+        return MigrationContext.configure(connection).get_current_revision() == head

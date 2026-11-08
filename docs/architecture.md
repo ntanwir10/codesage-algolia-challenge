@@ -24,6 +24,7 @@ Everything runs in one backend process, unless `INDEX_WORKERS=external` moves in
 | Models | `backend/app/models/` | SQLAlchemy tables: `Repository`, `CodeFile`, `CodeEntity`, `Job`. |
 | Services | `backend/app/services/` | `repository_service.py` (job lifecycle), `github_service.py` (listing and download), `git_source.py` (repositories on other hosts, read with git), `code_parser.py` (entities), `algolia_service.py` (index and search), `embeddings.py` (vectors for semantic search), `mcp_tools.py` (the eight tools) and `websocket_service.py` (live status). |
 | MCP bridge | `backend/codesage_mcp/` | Stdio MCP server that your MCP client (Claude Desktop, Cursor, VS Code, ...) runs. It holds no data and turns `tools/call`, `resources/list` and `resources/read` into HTTP calls to `/api/v1/ai`. It answers `tools/list`, `resources/templates/list` and the two prompts (`prompts.py`) itself. Tool names and argument models live in `schemas.py`, which the backend imports too, so `tools/list` works with the backend down. Requests time out after 30 s, and a connection after 5 s. |
+| MCP over HTTP | `backend/app/mcp_http.py` | `/mcp`, for clients that connect to a URL (ChatGPT, remote agents). The bridge's server (`build_server`) with its tools run in-process through `mcp_tools` instead of over HTTP, one stateless streamable-HTTP request at a time. Checks the key (`X-API-Key` or `Authorization: Bearer`) and `RATE_LIMIT_AI` itself, since FastAPI's route dependencies and slowapi don't apply to a raw ASGI route. |
 | Dashboard | `frontend/` | React + Vite. `services/api.ts` and `services/websocket.ts` are the REST and WebSocket clients. In the dev stack nginx serves the built bundle. |
 | nginx | `deployment/nginx.conf`, `deployment/nginx.prod.conf.template` | Dev: HTTP proxy that drops requests for any `Host` except `localhost` and `127.0.0.1`. Prod: see [The prod nginx role](#the-prod-nginx-role). |
 
@@ -229,6 +230,8 @@ When `CODESAGE_API_KEY` is set, requests must carry it as `X-API-Key`, compared 
 - the `/ws` WebSocket.
 
 Other reads are public: repository list, detail, status and stats, tool and resource listings, capabilities, `/` and `/health`. A `401` means a missing or wrong key.
+
+With `READ_ONLY=true` no key is needed, even on a public host: the guard checks `Host` against `CORS_ORIGINS` and `ALLOWED_HOSTS` as it does for a keyed server, and skips the loopback-client check. Every write is refused first, with `403` "This CodeSage is read-only…", whatever the key, and `add_repository` is left out of the tool list and refused if called. Startup checks that the database is at the latest migration instead of migrating it, and starts no job recovery, refresh loop or progress relay.
 
 ### BrowserRequestGuard
 

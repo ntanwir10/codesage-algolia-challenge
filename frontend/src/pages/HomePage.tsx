@@ -1,12 +1,14 @@
 import { useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
 import { GitHubForm, type GitHubFormData } from "@/components/forms/github-form";
 import { useToast } from "@/components/ui/toast";
+import { useReadOnly } from "@/hooks/useReadOnly";
 import { api } from "@/services/api";
 import type { CreateRepositoryRequest } from "@/types/repository";
 
 export function HomePage() {
+  const readOnly = useReadOnly();
   const [isSubmitting, setIsSubmitting] = useState(false);
   const navigate = useNavigate();
   const { addToast } = useToast();
@@ -52,10 +54,24 @@ export function HomePage() {
         </div>
 
         {/* GitHub Form */}
-        <GitHubForm
-          onSubmit={handleRepositorySubmit}
-          isLoading={isSubmitting}
-        />
+        {readOnly ? (
+          <div role="note" className="bg-card border rounded-lg p-6 space-y-2">
+            <h3 className="text-lg font-semibold">This is a read-only demo</h3>
+            <p className="text-muted-foreground">
+              Search and browse the repositories already indexed here, from the{" "}
+              <Link to="/dashboard" className="underline">Dashboard</Link> or{" "}
+              <Link to="/search" className="underline">Search</Link>. Your AI assistant can use them
+              too, through the MCP endpoint at <code>{`${window.location.origin}/mcp`}</code>. To
+              index your own repositories,{" "}
+              <a href="https://codesage-docs.vercel.app/docs/quick-start/" className="underline">
+                run CodeSage yourself
+              </a>
+              .
+            </p>
+          </div>
+        ) : (
+          <GitHubForm onSubmit={handleRepositorySubmit} isLoading={isSubmitting} />
+        )}
 
         {/* Quick Start Guide */}
         <div className="bg-muted/50 rounded-lg p-6">
