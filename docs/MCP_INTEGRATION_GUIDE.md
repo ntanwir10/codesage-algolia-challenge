@@ -145,7 +145,7 @@ To check it:
 Clients that connect to a URL instead of starting a program, such as ChatGPT or a remote agent, use the backend's own MCP endpoint at `/mcp` (MCP's streamable HTTP transport). It serves the same tools, resources and prompts as the bridge, with the same answers, from inside the backend. Each request stands alone, so no session is kept between them.
 
 - **Key.** With `CODESAGE_API_KEY` set, send it as `Authorization: Bearer <key>` or as `X-API-Key`; without it the answer is `401`. Behind the prod nginx, sign in with basic auth (`Authorization: Basic ...`) and nginx adds the key.
-- **Read-only.** On a `READ_ONLY=true` server no key is needed, and `tools/list` leaves out `add_repository`.
+- **Read-only.** On a `READ_ONLY=true` server no key is needed, and `tools/list` leaves out `add_repository`. The public demo is one: `https://codesage-demo.vercel.app/mcp`.
 - **Limit.** `RATE_LIMIT_AI` (30 per minute) per client address. Every request counts, `initialize` and `tools/list` included.
 - **Host.** The `Host` header must be allowed, as for the rest of the API: loopback, a `CORS_ORIGINS` host or an `ALLOWED_HOSTS` entry.
 

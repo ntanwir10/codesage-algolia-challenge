@@ -6,6 +6,8 @@
 
 Built for the [Algolia MCP Server Challenge](https://dev.to/challenges/algolia-2025-07-09).
 
+**Try the demo:** [codesage-demo.vercel.app](https://codesage-demo.vercel.app) is a read-only CodeSage with three repositories indexed. Search them there, or point an MCP client at `https://codesage-demo.vercel.app/mcp` (no key needed).
+
 ```mermaid
 flowchart TB
     you(["You"]) --> browser["Web dashboard<br/>React + Vite"]
@@ -407,6 +409,7 @@ Rate limits are per client address: 100 per minute for repository create, proces
 | --- | --- | --- |
 | Dev | `export CODESAGE_API_KEY=...` then `make up` | nginx on http://localhost and the backend on :8001, both bound to 127.0.0.1 |
 | Prod | `make prod-build && make prod-up` | HTTPS on 443 behind basic auth, with nginx adding the API key. Port 80 answers `/health` and redirects everything else |
+| Public demo | `make demo-build && make demo-deploy` | A read-only CodeSage on Vercel's free plan, with a snapshot of a few repositories; see [deployment/vercel/README.md](deployment/vercel/README.md) |
 
 Prod needs a certificate in `deployment/ssl/`, a login in `deployment/htpasswd`, and your domain in `CORS_ORIGINS`. If the site is also reached under another name or by IP, export those hostnames in `ALLOWED_HOSTS`, or they get `403`. See [deployment/DOCKER.md](deployment/DOCKER.md) for setup, and for why each stack uses its own Algolia index.
 
