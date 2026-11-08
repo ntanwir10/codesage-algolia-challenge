@@ -420,13 +420,13 @@ export function DashboardPage() {
                 </CardHeader>
                 <CardContent>
                   {repo.status === "failed" && repo.error_message && (
-                    <p className="text-sm text-red-600 dark:text-red-400 break-words mb-4">
+                    <p className="text-sm text-red-600 dark:text-red-400 wrap-break-word mb-4">
                       {repo.error_message}
                     </p>
                   )}
                   {/* A completed run's error_message says what it left out */}
                   {repo.status === "completed" && repo.error_message && (
-                    <p className="text-sm text-amber-700 dark:text-amber-300 break-words mb-4">
+                    <p className="text-sm text-amber-700 dark:text-amber-300 wrap-break-word mb-4">
                       ⚠️ {repo.error_message}
                     </p>
                   )}

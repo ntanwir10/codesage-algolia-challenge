@@ -272,7 +272,7 @@ export function RepositoryPage() {
               <span className="text-3xl">📂</span>
             </div>
             <div className="min-w-0">
-              <h1 className="text-2xl sm:text-3xl font-bold break-words">{repository.name}</h1>
+              <h1 className="text-2xl sm:text-3xl font-bold wrap-break-word">{repository.name}</h1>
               {repository.description && (
                 <p className="text-muted-foreground mt-1 text-lg">
                   {repository.description}
