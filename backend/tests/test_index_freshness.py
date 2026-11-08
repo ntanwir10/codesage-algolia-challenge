@@ -99,7 +99,7 @@ def ls_remote(monkeypatch):
     """Answer `git ls-remote` with `ls_remote.stdout`; record the arguments"""
     calls = []
 
-    async def fake_git(args, timeout):
+    async def fake_git(args, timeout, host=None):
         calls.append(args)
         return 0, ls_remote.stdout, ""
 

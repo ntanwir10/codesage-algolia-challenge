@@ -1,11 +1,13 @@
-"""Public git repositories on any https host (GitLab, Bitbucket, self-hosted), read with the git CLI.
+"""Git repositories on any https host (GitLab, Bitbucket, self-hosted), read with the git CLI.
 
 github.com goes through GitHubService and its REST API; every other host lands here. Git runs
-without a shell, a credential helper or a prompt, and only over https, so a repository that
-needs credentials is refused instead of asking for them.
+without a shell, a credential helper or a prompt, and only over https. A host listed in
+GIT_HOST_CREDENTIALS gets its token as a header; on any other host a repository that needs
+credentials is refused instead of asking for them.
 """
 
 import asyncio
+import base64
 import ipaddress
 import os
 import socket
@@ -14,6 +16,7 @@ from pathlib import Path
 
 import structlog
 
+from app.core.config import get_settings
 from app.services.github_service import (
     DENIED_DIRS,
     FileSelector,
@@ -29,9 +32,10 @@ CHECK_TIMEOUT = 10  # seconds; the caller is an HTTP request or a tool call
 CLONE_TIMEOUT = 120
 
 # No credential helper (the user's keychain), https only, whatever the user's git config says.
-# Redirects stay on: gitlab.com answers /group/repo with a 301 to /group/repo.git.
+# Redirects stay on without a token: gitlab.com answers /group/repo with a 301 to /group/repo.git.
 # shortcut: git follows that first redirect unchecked, so a hostile public host could point it at an
-# internal address; route git through an egress proxy that refuses private addresses if that matters
+# internal address; route git through an egress proxy that refuses private addresses if that matters.
+# A host with a token gets no redirects at all (see _git_env)
 _SAFE_GIT_ARGS = [
     "-c", "credential.helper=",
     "-c", "protocol.allow=never",
@@ -52,8 +56,24 @@ _NOT_FOUND_MARKERS = (
 )
 
 
-def _git_env() -> dict[str, str]:
-    """A clean environment: no user config, no prompts, nothing but what git needs to run"""
+def _credential(host: str) -> str | None:
+    """'user:token' for `host` from GIT_HOST_CREDENTIALS, or None"""
+    return get_settings().git_host_credentials_map.get(host)
+
+
+def _remote_url(url: str, host: str, path: str) -> str:
+    """The URL git is given. With a token redirects are off, so it must be the one that doesn't
+    redirect: gitlab.com sends /group/repo to /group/repo.git"""
+    return f"https://{host}/{path}.git" if _credential(host) else url
+
+
+def _git_env(host: str | None = None) -> dict[str, str]:
+    """A clean environment: no user config, no prompts, nothing but what git needs to run.
+
+    For a host with a token: an Authorization header sent only to https://<host>/, and no
+    redirects, so the header can't follow one. It goes in GIT_CONFIG_* rather than `-c`, so
+    neither `ps` nor a clone's .git/config shows it.
+    """
     env = {
         "PATH": os.environ.get("PATH", ""),
         "HOME": os.devnull,
@@ -65,13 +85,21 @@ def _git_env() -> dict[str, str]:
     for key in ("SSL_CERT_FILE", "SSL_CERT_DIR", "GIT_SSL_CAINFO", "HTTPS_PROXY", "https_proxy", "NO_PROXY"):
         if key in os.environ:
             env[key] = os.environ[key]
+    credential = _credential(host) if host else None
+    if credential:
+        header = "Authorization: Basic " + base64.b64encode(credential.encode()).decode()
+        config = [(f"http.https://{host}/.extraHeader", header), ("http.followRedirects", "false")]
+        env["GIT_CONFIG_COUNT"] = str(len(config))
+        for i, (key, value) in enumerate(config):
+            env[f"GIT_CONFIG_KEY_{i}"], env[f"GIT_CONFIG_VALUE_{i}"] = key, value
     return env
 
 
-async def _git(args: list[str], timeout: float) -> tuple[int, str, str]:
+async def _git(args: list[str], timeout: float, host: str | None = None) -> tuple[int, str, str]:
     """Run git with the safety flags; (returncode, stdout, stderr). Kills it on timeout.
 
-    Raises TimeoutError, or OSError when git can't be started.
+    `host` is the remote's host, so its token (if any) is sent. Raises TimeoutError, or OSError
+    when git can't be started.
     """
     process = await asyncio.create_subprocess_exec(
         "git",
@@ -80,7 +108,7 @@ async def _git(args: list[str], timeout: float) -> tuple[int, str, str]:
         stdin=asyncio.subprocess.DEVNULL,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
-        env=_git_env(),
+        env=_git_env(host),
     )
     try:
         stdout, stderr = await asyncio.wait_for(process.communicate(), timeout)
@@ -120,9 +148,18 @@ async def _pin_public_address(host: str) -> list[str]:
     return ["-c", f"http.curloptResolve={host}:443:{f'[{address}]' if ':' in address else address}"]
 
 
-def _looks_missing(stderr: str) -> bool:
+def _refusal(host: str, path: str, stderr: str) -> str | None:
+    """Why the host refused the repository, in words for the user (never the token), or None
+    when git failed some other way. A bad token reads 'could not read Username': git got a 401"""
     text = stderr.lower()
-    return any(marker in text for marker in _NOT_FOUND_MARKERS)
+    token = _credential(host) is not None
+    if token and "returned error: 30" in text:
+        return f"{host} redirected {path}; with a token CodeSage doesn't follow redirects, so use its current address"
+    if not any(marker in text for marker in _NOT_FOUND_MARKERS):
+        return None
+    if token:
+        return f"{host} rejected the token in GIT_HOST_CREDENTIALS or it lacks access to {path}"
+    return f"{host}/{path} was not found or is private; only public repositories are supported on {host}"
 
 
 async def remote_head(url: str, branch: str | None = None) -> tuple[str | None, str]:
@@ -172,9 +209,9 @@ async def _ls_remote(url: str, options: list[str], patterns: list[str]) -> str:
         pin = await _pin_public_address(host)
     except ValueError as e:
         raise RepositoryCheckError(422, f"Can't index {name}: {e}.") from e
-    args = [*pin, "ls-remote", *options, "--", url, *patterns]
+    args = [*pin, "ls-remote", *options, "--", _remote_url(url, host, path), *patterns]
     try:
-        code, stdout, stderr = await _git(args, CHECK_TIMEOUT)
+        code, stdout, stderr = await _git(args, CHECK_TIMEOUT, host)
     except TimeoutError as e:
         logger.warning("git ls-remote timed out", host=host, path=path)
         raise RepositoryCheckError(504, f"{host} did not respond in time; try again.") from e
@@ -184,11 +221,8 @@ async def _ls_remote(url: str, options: list[str], patterns: list[str]) -> str:
 
     if code != 0:
         logger.warning("git ls-remote failed", host=host, path=path, code=code, stderr=stderr[:500])
-        if _looks_missing(stderr):
-            raise RepositoryCheckError(
-                422,
-                f"{name} was not found or is private; only public repositories are supported on {host}.",
-            )
+        if refusal := _refusal(host, path, stderr):
+            raise RepositoryCheckError(422, f"{refusal}.")
         raise RepositoryCheckError(502, f"Could not reach {host}; try again.")
     return stdout
 
@@ -213,10 +247,10 @@ class GitSource(FileSelector):
             args = [*pin, "clone", "--depth", "1", "--single-branch", "--no-tags"]
             if branch:
                 args += ["--branch", branch]
-            args += ["--", repo_url, target]
+            args += ["--", _remote_url(repo_url, host, path), target]
             logger.info("Cloning repository", host=host, path=path, branch=branch)
             try:
-                code, _, stderr = await _git(args, CLONE_TIMEOUT)
+                code, _, stderr = await _git(args, CLONE_TIMEOUT, host)
             except TimeoutError as e:
                 raise GitHubAPIError(504, f"{host} did not respond in time while cloning {name}") from e
             except OSError as e:
@@ -226,10 +260,8 @@ class GitSource(FileSelector):
                 logger.warning("git clone failed", host=host, path=path, code=code, stderr=stderr[:500])
                 if branch and "remote branch" in stderr.lower():
                     raise GitHubAPIError(404, f"Branch '{branch}' not found in {name}")
-                if _looks_missing(stderr):
-                    raise GitHubAPIError(
-                        404, f"{name} was not found or is private; only public repositories are supported on {host}"
-                    )
+                if refusal := _refusal(host, path, stderr):
+                    raise GitHubAPIError(404, refusal)
                 raise GitHubAPIError(502, f"Could not clone {name} from {host}")
             code, out, _ = await _git(["-C", target, "rev-parse", "HEAD"], CHECK_TIMEOUT)
             self.commit_sha = out.strip() if code == 0 and out.strip() else None

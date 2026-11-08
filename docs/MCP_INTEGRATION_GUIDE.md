@@ -298,7 +298,9 @@ Adds a repository and starts indexing it. It returns `repository_id`, `name`, `s
 
 | Message | Cause |
 | --- | --- |
-| `<host>/<path> was not found or is private; only public repositories are supported on <host>.` | The repository doesn't exist, or it is private (on a host other than github.com) |
+| `<host>/<path> was not found or is private; only public repositories are supported on <host>.` | The repository doesn't exist, or it is private on a host other than github.com that has no token in `GIT_HOST_CREDENTIALS` |
+| `<host> rejected the token in GIT_HOST_CREDENTIALS or it lacks access to <path>.` | The host has a token, but the token is wrong or expired, can't read that repository, or the repository doesn't exist |
+| `<host> redirected <path>; with a token CodeSage doesn't follow redirects, so use its current address.` | The repository moved; add it at its new URL |
 | `Branch '<b>' does not exist in <host>/<path>.` | The branch is missing |
 | `<host>/<path> is empty; there is nothing to index.` | No commits |
 | `<host> did not respond in time; try again.` | The 10 s check timed out |
@@ -310,7 +312,7 @@ Adds a repository and starts indexing it. It returns `repository_id`, `name`, `s
 Ask your assistant: *"Add https://gitlab.com/group/project to CodeSage"*, then *"Search it for where requests are retried"*.
 
 - **Hosts.** GitHub, GitLab (nested groups too), Bitbucket and self-hosted servers, over https. `http://` and `git@host:path` URLs are rewritten to `https://`. Branch URLs such as `.../-/tree/dev` or Bitbucket's `/src/<branch>` work.
-- **Public only.** Private repositories are refused on every host but github.com, where the backend's `GITHUB_TOKEN` can read them.
+- **Private repositories.** The tool takes no token. The backend reads one per host from `GIT_HOST_CREDENTIALS` in `backend/.env`, as comma-separated `host=user:token` pairs: `gitlab.com=oauth2:<token>` for GitLab (a token with `read_repository`), `bitbucket.org=x-token-auth:<token>` for Bitbucket Cloud (a repository access token), and `<host>=<user>:<token>` for Gitea and Forgejo. Restart the backend after changing it. github.com uses `GITHUB_TOKEN` instead. See the README's [Other git hosts](../README.md#other-git-hosts).
 - **How it reads.** For a host other than github.com the backend runs `git ls-remote` (10 s) to check and a shallow `git clone` (120 s) to read. Git runs without a shell, a credential helper or prompts, over https only, and skips symlinks. github.com keeps the REST API path.
 - **Names.** Repositories on other hosts are named `<host>/<path>`, which you can pass as `repository` to the other tools.
 - **Also in the dashboard.** The Home page form and `POST /api/v1/repositories/` take the same URLs.
@@ -407,7 +409,8 @@ Read the bridge's stderr in your client's MCP log for the `codesage` server (Cur
 | `Invalid arguments for ...` | A wrong or unknown argument | Match the argument tables above |
 | `Repository '...' failed to index: ...` | Indexing failed; the message is the reason | Fix the cause, then reprocess it from the dashboard |
 | `Repository '...' is still indexing (n/m files)` | It is `pending` or `processing`. Every tool except `list_repositories` and `add_repository` refuses it | Wait for it to complete |
-| `... was not found or is private; only public repositories are supported on <host>.` | `add_repository` on a private or missing repository, on a host other than github.com | Make the repository public, or check the URL |
+| `... was not found or is private; only public repositories are supported on <host>.` | `add_repository` on a private or missing repository, on a host other than github.com | Check the URL, or add a token for the host to `GIT_HOST_CREDENTIALS` and restart the backend |
+| `<host> rejected the token in GIT_HOST_CREDENTIALS ...` | The host's token is wrong, expired or lacks read access, or the repository doesn't exist | Check the URL, the token's scope (GitLab: `read_repository`) and the entry's `user:` part |
 | `url: ...` from `add_repository` | The URL isn't an https repository URL (port, credentials, `localhost` and private IPs are refused) | Use the plain https URL |
 | `Search is not configured on the server` | `ALGOLIA_APP_ID` or `ALGOLIA_ADMIN_API_KEY` is empty or still a placeholder | Set them in `backend/.env` and restart the backend |
 | `Search is unavailable; try again later.` | Algolia is unreachable or rejected the query | Check the backend log; the detail is logged there only |
@@ -429,5 +432,5 @@ Set `MCP_SERVER_URL` and `CODESAGE_API_KEY` in the Inspector's environment field
 - **Backend must be running.** The bridge does not start it.
 - **Single process.** The backend keeps WebSocket subscriptions, rate limits and caches in memory, and job state too unless `INDEX_WORKERS=external`, so run one API process.
 - **Rate limits are per address.** The 30 per minute on tool calls and resource reads is shared by everything behind one IP, such as nginx in the prod stack.
-- **Other hosts are public only.** `add_repository` and the dashboard can't read private repositories except on github.com.
+- **One token per host.** Private repositories on other hosts need the backend's `GIT_HOST_CREDENTIALS`, which holds one token for each host. `add_repository` and the dashboard can't pass a token of their own.
 - **Cross-repository search.** `search_code` without `repository` includes repositories that are being reprocessed.

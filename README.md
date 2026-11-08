@@ -40,7 +40,7 @@ With `make start` there is no nginx: the dashboard and the bridge call the backe
 There are two ways in, and both end at the same FastAPI backend:
 
 - **Web dashboard** (React + Vite). Add a repository from GitHub or another git host, watch it index, and search it.
-- **MCP clients** such as Claude Desktop, Cursor, VS Code or Windsurf. The client starts `mcp_launcher.sh`, which runs a small stdio MCP bridge (`backend/codesage_mcp`). The bridge turns the assistant's tool calls into HTTP calls to the backend. The assistant can search, read and also add repositories, including public ones on GitLab, Bitbucket and other git hosts.
+- **MCP clients** such as Claude Desktop, Cursor, VS Code or Windsurf. The client starts `mcp_launcher.sh`, which runs a small stdio MCP bridge (`backend/codesage_mcp`). The bridge turns the assistant's tool calls into HTTP calls to the backend. The assistant can search, read and also add repositories, including ones on GitLab, Bitbucket and other git hosts.
 - **Remote MCP clients** such as ChatGPT, which connect to a URL. They use the backend's own MCP endpoint at `/mcp` (streamable HTTP), with the same tools; see [Connect over HTTP](docs/MCP_INTEGRATION_GUIDE.md#connect-over-http).
 
 Indexing runs as a background job inside the backend. Search goes to Algolia; reading files and listing definitions go to SQLite.
@@ -290,7 +290,7 @@ An unknown path shows "Page not found". A repository that doesn't exist says so;
 | `analyze_repository` | File, line and entity counts, languages, top directories, largest files |
 | `find_patterns` | Literal or regex line matches. Regex search stops after 10 s per call |
 | `find_references` | Where a function, class or other name is defined and used: its definitions, then each whole-word use with the function or class it sits in, imports marked. Source comes before tests and docs. A text match, so comments and strings count too |
-| `add_repository` | Adds a repository by https URL and starts indexing. Public repositories on any git host; needs the API key |
+| `add_repository` | Adds a repository by https URL and starts indexing. Any git host, private ones with a server token; needs the API key |
 
 A successful tool call returns one JSON object as MCP `structuredContent`, described by an `outputSchema` in `tools/list`, and repeats it as text for older clients. See [Tools](docs/MCP_INTEGRATION_GUIDE.md#tools).
 
@@ -305,7 +305,15 @@ For the HTTPS prod stack, use `make install-claude ARGS="--server-url https://yo
 Paste `https://gitlab.com/group/project` into the Home page form, or ask your assistant: *"Add https://gitlab.com/group/project to CodeSage"*. The form, `POST /api/v1/repositories/` and the `add_repository` tool take the same URLs and run the same checks. In the form, `owner/repo` without a host still means GitHub.
 
 - **Hosts.** GitHub, GitLab (nested groups too), Bitbucket and self-hosted servers. `http://` and `git@host:path` URLs are rewritten to `https://`, and git always fetches over https. Branch URLs such as `.../-/tree/dev` work.
-- **Public only.** Private repositories are refused on every host but github.com, where the server's `GITHUB_TOKEN` can read them. The message is `... was not found or is private; only public repositories are supported on <host>.`
+- **Private repositories.** Put a token for the host in `GIT_HOST_CREDENTIALS` in `backend/.env` and restart the backend. Entries are comma-separated `host=user:token` pairs, such as `gitlab.com=oauth2:<token>,bitbucket.org=x-token-auth:<token>`. github.com keeps `GITHUB_TOKEN` and can't be listed. A read-only token is enough:
+
+  | Host | Entry | Token |
+  | --- | --- | --- |
+  | GitLab (gitlab.com or self-managed) | `gitlab.com=oauth2:<token>` | A personal, project or group access token with `read_repository` |
+  | Bitbucket Cloud | `bitbucket.org=x-token-auth:<token>` | A repository, project or workspace access token with repository read access |
+  | Gitea and Forgejo (such as Codeberg) | `codeberg.org=<user>:<token>` | An access token with repository read access |
+
+  The token goes to that host only, as an `Authorization` header in git's environment (never its command line), and git then follows no redirects. Without an entry, a private repository gets `... was not found or is private; only public repositories are supported on <host>.` With one, a refusal reads `<host> rejected the token in GIT_HOST_CREDENTIALS or it lacks access to <path>.`. A bad token fails that host's public repositories too.
 - **Rejected URLs.** Ports, credentials, `localhost`, private IP addresses, and host names that resolve to one. git then connects to the address that was checked.
 - **Names and links.** Repositories on other hosts are named `<host>/<path>`. Search results link to the exact line on GitLab (gitlab.com, and any host whose name starts with `gitlab.`) and on bitbucket.org. Other hosts, including self-hosted Bitbucket, get no link.
 - **Needs git.** The backend runs `git ls-remote` to check (10 s) and a shallow `git clone` to read (120 s). The prod Docker image includes git.
@@ -379,6 +387,7 @@ GitHub sends a `ping` first, which gets `202`. Each delivery's response, under *
 | `ALGOLIA_APP_ID`, `ALGOLIA_ADMIN_API_KEY` | unset | Required for indexing and search. Empty or `your-...-here` values count as unset: adding or reprocessing a repository returns `503`, MCP search says Algolia isn't configured, and `/health` is `degraded` |
 | `ALGOLIA_INDEX_NAME` | `codesage_code_entities` | One index per database; the Compose files use their own |
 | `GITHUB_TOKEN` | unset | Raises GitHub rate limits and allows private github.com repositories. If GitHub rejects it, adding a repository returns `502` |
+| `GIT_HOST_CREDENTIALS` | unset | Tokens for private repositories on other git hosts: comma-separated `host=user:token`, such as `gitlab.com=oauth2:<token>`. Formats per host are in [Other git hosts](#other-git-hosts). A malformed entry, a host listed twice, or `github.com` stops startup, and the error never shows the value. Needs git 2.31 or later |
 | `DATABASE_URL` | `sqlite:///./codesage.db` | SQLite, or Postgres with `postgresql://user:password@host:5432/db` (the psycopg driver is installed). The migrations run on either at startup. Use Postgres to run `INDEX_WORKERS=external` workers on more than one machine |
 | `CORS_ORIGINS` | localhost ports 3000, 5173, 5174 (`.env.example`, which `make setup` copies, sets only 3000 and 5173) | Comma-separated list of origins; `*` is rejected. Also decides which browser origins may write |
 | `ALLOWED_HOSTS` | unset | With a key set, extra hostnames the API answers to, besides loopback and the `CORS_ORIGINS` hosts. Comma-separated; `*.example.com` allows subdomains, `*` allows any host |
@@ -432,4 +441,5 @@ mcp_launcher.sh         what the MCP client launches
 - **Synchronous Algolia client.** Its calls run in worker threads.
 - **Tests and CI.** The Playwright end-to-end tests run in Chromium only, against a seeded database with no Algolia or GitHub, so they cover the Home form, the dashboard, the repository page and the file viewer, but not search, freshness or indexing. CI starts the dev Docker stack with fake Algolia keys and checks that it answers, but never indexes a repository in it. The prod stack (HTTPS, basic auth) is only config-checked and built; it was last run by hand.
 - **Search scope.** Searching across all repositories includes ones that are being reprocessed.
-- **Git redirects.** For hosts other than github.com, git follows the host's first HTTP redirect without re-checking where it points. A hostile public host could send it to an internal address. If that matters, route the backend's traffic through an egress proxy that refuses private addresses.
+- **Git redirects.** For hosts other than github.com without a token, git follows the host's first HTTP redirect without re-checking where it points. A hostile public host could send it to an internal address. If that matters, route the backend's traffic through an egress proxy that refuses private addresses. A host in `GIT_HOST_CREDENTIALS` gets no redirects at all, so a moved repository there must be added at its current address.
+- **One token per host.** `GIT_HOST_CREDENTIALS` holds one token for each host, used for every repository on it. `add_repository` and the dashboard can't take a token of their own.
