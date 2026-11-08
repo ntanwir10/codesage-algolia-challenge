@@ -63,7 +63,7 @@ export function FileViewerPage() {
   return (
     <div className="container mx-auto px-4 py-8">
       <div className="max-w-6xl mx-auto space-y-4">
-        <Link to={back} className="text-sm text-blue-600 dark:text-blue-400 hover:underline">
+        <Link to={back} className="inline-block text-sm text-blue-600 dark:text-blue-400 hover:underline">
           ← Back to repository
         </Link>
 
@@ -81,7 +81,7 @@ export function FileViewerPage() {
             <CardContent className="space-y-3">
               {file.isPending && !!path && <LoadingSpinner text="Loading file..." />}
               {file.error && (
-                <p role="alert" className="text-sm text-red-600 dark:text-red-400 break-words">
+                <p role="alert" className="text-sm text-red-600 dark:text-red-400 wrap-break-word">
                   {describeError(file.error).message}
                 </p>
               )}

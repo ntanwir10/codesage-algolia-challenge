@@ -162,7 +162,7 @@ function ToastItem({ toast, onClose }: { toast: Toast; onClose: () => void }) {
     >
       <CardContent className="p-4">
         <div className="flex items-start gap-3">
-          <span className="text-lg flex-shrink-0">{getIcon(toast.type)}</span>
+          <span className="text-lg shrink-0">{getIcon(toast.type)}</span>
           <div className="flex-1 min-w-0">
             <h4 className="font-medium text-sm">{toast.title}</h4>
             {toast.description && (
