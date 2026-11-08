@@ -29,8 +29,7 @@ export function AnimatedProgress({
     const endValue = Math.min(value, max);
 
     if (!animated) {
-      displayRef.current = endValue;
-      setDisplayValue(endValue);
+      displayRef.current = endValue; // rendered directly below; this is where the next animation starts
       return;
     }
 
@@ -53,7 +52,8 @@ export function AnimatedProgress({
     return () => clearInterval(timer);
   }, [value, max, animated]);
 
-  const percentage = Math.min((displayValue / max) * 100, 100);
+  const shown = animated ? displayValue : Math.min(value, max);
+  const percentage = Math.min((shown / max) * 100, 100);
 
   const getColorClasses = () => {
     switch (color) {
