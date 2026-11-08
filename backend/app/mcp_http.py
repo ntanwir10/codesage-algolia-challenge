@@ -6,6 +6,7 @@ depends on the app's lifespan, which serverless hosts may never run.
 """
 
 import json
+import logging
 from typing import Any
 
 import mcp_types as types
@@ -26,6 +27,8 @@ from app.services.mcp_tools import ToolError
 from codesage_mcp.server import build_server
 
 logger = structlog.get_logger()
+# The SDK logs two lines per request at INFO (a manager started and stopped); the calls below say more
+logging.getLogger("mcp.server.streamable_http_manager").setLevel(logging.WARNING)
 # Shown instead of an unexpected error's text, which can carry SQL and file contents
 INTERNAL_ERROR = "CodeSage hit an internal error; try again later."
 
@@ -38,6 +41,7 @@ class LocalBackend:
     """The bridge's three backend calls, answered from this process's database and Algolia"""
 
     async def call_tool(self, name: str, arguments: dict[str, Any] | None) -> types.CallToolResult:
+        logger.info("MCP tool called", tool=name)
         available = mcp_tools.available_tools()
         if name not in available:
             return _error(f"Unknown tool '{name}'. Available tools: {', '.join(available)}")
@@ -81,7 +85,13 @@ class LocalBackend:
         )
 
 
-server = build_server(backend=LocalBackend(), tool_names=mcp_tools.available_tools)
+def _listed_tools() -> list[str]:
+    names = mcp_tools.available_tools()
+    logger.info("MCP tools listed", count=len(names))
+    return names
+
+
+server = build_server(backend=LocalBackend(), tool_names=_listed_tools)
 
 
 def _api_key(request: Request) -> str | None:
@@ -96,6 +106,8 @@ class MCPEndpoint:
 
     async def __call__(self, scope, receive, send):
         request = Request(scope)
+        # Says which client (ChatGPT, Codex, ...) made the tool calls logged during this request
+        structlog.contextvars.bind_contextvars(mcp_client=request.headers.get("user-agent", "")[:80])
         if not api_key_is_valid(_api_key(request)):
             response = JSONResponse(
                 {"detail": "Invalid or missing API key"}, status_code=401, headers={"WWW-Authenticate": "Bearer"}
