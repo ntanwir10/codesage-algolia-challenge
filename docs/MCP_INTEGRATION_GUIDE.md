@@ -8,6 +8,7 @@ How to connect an MCP client (Claude Desktop, Cursor, VS Code, Windsurf or any o
 - [Prerequisites](#prerequisites)
 - [Install into an MCP client](#install-into-an-mcp-client)
 - [Manual install](#manual-install)
+- [Connect over HTTP](#connect-over-http)
 - [Bridge settings](#bridge-settings)
 - [Tools](#tools)
 - [Resources](#resources)
@@ -111,7 +112,7 @@ Codex (its CLI and its app share `~/.codex/config.toml`) adds it with its own co
 codex mcp add codesage --env MCP_SERVER_URL=http://127.0.0.1:8001 -- /absolute/path/to/codesage-algolia-challenge/mcp_launcher.sh
 ```
 
-ChatGPT's desktop app connects only to remote MCP servers set up in ChatGPT's settings, so it can't run this local stdio bridge.
+ChatGPT connects only to remote MCP servers set up in ChatGPT's settings, so it can't run this local stdio bridge. It can reach a backend on the internet at `/mcp`; see [Connect over HTTP](#connect-over-http).
 
 ### More MCP clients
 
@@ -138,6 +139,21 @@ To check it:
 - **Fills in a local key.** If neither `CODESAGE_API_KEY` nor `CODESAGE_BASIC_AUTH_USER` is set and `MCP_SERVER_URL` is a loopback `http://` address (the default), it reads `CODESAGE_API_KEY` from `backend/.env`, so a regenerated key can't leave the client behind. A remote server keeps its own key.
 - **Looks up the basic-auth password.** If `CODESAGE_BASIC_AUTH_USER` is set, `CODESAGE_BASIC_AUTH_PASSWORD` is not, and `security` exists, it reads the password from the Keychain (`security find-generic-password -s codesage-mcp -a <user> -w`). A missing entry gives an empty password and a warning on stderr.
 - **Starts the bridge.** `cd backend && exec .venv/bin/python -m codesage_mcp`.
+
+## Connect over HTTP
+
+Clients that connect to a URL instead of starting a program, such as ChatGPT or a remote agent, use the backend's own MCP endpoint at `/mcp` (MCP's streamable HTTP transport). It serves the same tools, resources and prompts as the bridge, with the same answers, from inside the backend. Each request stands alone, so no session is kept between them.
+
+- **Key.** With `CODESAGE_API_KEY` set, send it as `Authorization: Bearer <key>` or as `X-API-Key`; without it the answer is `401`. Behind the prod nginx, sign in with basic auth (`Authorization: Basic ...`) and nginx adds the key.
+- **Read-only.** On a `READ_ONLY=true` server no key is needed, and `tools/list` leaves out `add_repository`.
+- **Limit.** `RATE_LIMIT_AI` (30 per minute) per client address. Every request counts, `initialize` and `tools/list` included.
+- **Host.** The `Host` header must be allowed, as for the rest of the API: loopback, a `CORS_ORIGINS` host or an `ALLOWED_HOSTS` entry.
+
+```bash
+curl -X POST https://your-host/mcp -H "Content-Type: application/json" \
+  -H "Accept: application/json, text/event-stream" -H "Authorization: Bearer $CODESAGE_API_KEY" \
+  -d '{"jsonrpc": "2.0", "id": 1, "method": "tools/list"}'
+```
 
 ## Bridge settings
 

@@ -275,6 +275,10 @@ TOOLS: dict[str, ToolSpec] = {
 }
 
 
+# The tools that change anything; a read-only server neither lists nor runs them
+WRITE_TOOLS = frozenset({"add_repository"})
+
+
 def input_schema(name: str) -> dict:
     """JSON Schema for a tool's arguments"""
     return TOOLS[name].args_model.model_json_schema()
