@@ -9,7 +9,7 @@ from sqlalchemy import create_engine, inspect, text
 from alembic import command
 from app.core.migrations import _ALEMBIC_DIR, upgrade_database
 
-HEAD = "jobs"
+HEAD = "unique_jobs"
 DROPPED = {
     "repositories": {"repo_metadata", "security_score", "vulnerability_count"},
     "code_files": {"file_name", "is_analyzed", "size_bytes"},
@@ -238,6 +238,29 @@ def test_downgrade_to_baseline(tmp_path):
     # and back up again
     upgrade_database(engine)
     assert set(inspect(engine).get_table_names()) == NEW_TABLES
+
+
+def test_processes_starting_together_migrate_one_at_a_time(tmp_path, migrate_together):
+    db = tmp_path / "shared.db"
+    migrate_together(f"sqlite:///{db}")
+
+    with _engine(db).connect() as conn:
+        assert conn.execute(text("SELECT version_num FROM alembic_version")).scalar() == HEAD
+
+
+def test_duplicate_jobs_are_dropped_before_the_unique_index(tmp_path):
+    db = tmp_path / "jobs.db"
+    command.upgrade(_cfg(db), "jobs")
+    with closing(sqlite3.connect(db)) as conn, conn:  # closing: the with alone only commits
+        conn.executemany(
+            "INSERT INTO jobs (repository_id, force_reprocess, incremental) VALUES (?, 0, 0)",
+            [(1,), (1,), (2,)],
+        )
+
+    upgrade_database(_engine(db))
+
+    with closing(sqlite3.connect(db)) as conn, conn:
+        assert conn.execute("SELECT id, repository_id FROM jobs ORDER BY id").fetchall() == [(1, 1), (3, 2)]
 
 
 def test_memory_database_uses_create_all():

@@ -124,7 +124,11 @@ def start_processing(
         # A worker process (python -m app.worker) picks it up
         with SessionLocal() as db:
             db.add(Job(repository_id=repository_id, force_reprocess=force_reprocess, incremental=incremental))
-            db.commit()
+            try:
+                db.commit()
+            except IntegrityError as e:
+                # Another API process queued it between the check above and this insert
+                raise RepositoryBusyError(f"Repository {repository_id} is already being processed") from e
         return None
 
     task = asyncio.create_task(_run_job(repository_id, force_reprocess, incremental))
@@ -192,12 +196,18 @@ def recover_interrupted_jobs(db: Session) -> int:
     """
     stuck = db.query(Repository).filter(Repository.status.in_(("pending", "processing"))).all()
     owned = {repository_id for (repository_id,) in db.query(Job.repository_id)}
-    stuck = [repository for repository in stuck if repository.id not in owned]
+    restarted = 0
     for repository in stuck:
-        start_processing(repository.id, force_reprocess=True)
-    if stuck:
-        logger.warning("Restarted interrupted runs", count=len(stuck))
-    return len(stuck)
+        if repository.id in owned:
+            continue
+        try:
+            start_processing(repository.id, force_reprocess=True)
+        except RepositoryBusyError:
+            continue  # another API process starting at the same time queued it first
+        restarted += 1
+    if restarted:
+        logger.warning("Restarted interrupted runs", count=restarted)
+    return restarted
 
 
 JOB_HEARTBEAT_SECONDS = 30

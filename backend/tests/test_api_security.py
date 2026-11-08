@@ -1,5 +1,10 @@
 """API key auth, rate limiting, URL validation and error handling"""
 
+import os
+import subprocess
+import sys
+from pathlib import Path
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -518,3 +523,38 @@ class TestRuntimeSettings:
     @pytest.mark.parametrize("host", ["127.0.0.1", "localhost", "::1"])
     def test_loopback_without_key_is_allowed(self, host):
         validate_runtime_settings(Settings(mcp_server_host=host, codesage_api_key=None))
+
+    @pytest.mark.parametrize(
+        ("settings", "missing"),
+        [
+            ({}, "INDEX_WORKERS=external and RATE_LIMIT_STORAGE_URL"),
+            ({"rate_limit_storage_url": "redis://redis:6379"}, "INDEX_WORKERS=external"),
+            ({"index_workers": "external"}, "RATE_LIMIT_STORAGE_URL"),
+            ({"index_workers": "external", "rate_limit_storage_url": "memory://"}, "RATE_LIMIT_STORAGE_URL"),
+        ],
+    )
+    def test_more_than_one_api_process_needs_shared_jobs_and_limits(self, settings, missing):
+        with pytest.raises(RuntimeError, match=f"API_WORKERS=2 needs {missing}"):
+            validate_runtime_settings(Settings(api_workers=2, **settings))
+
+    @pytest.mark.parametrize(
+        "settings",
+        [
+            {"api_workers": 1},
+            {"api_workers": 2, "index_workers": "external", "rate_limit_storage_url": "redis://redis:6379"},
+            {"api_workers": 2, "index_workers": "external", "enable_rate_limiting": False},
+        ],
+    )
+    def test_api_processes_that_share_their_state_are_allowed(self, settings):
+        validate_runtime_settings(Settings(**settings))
+
+
+@pytest.mark.parametrize(("url", "storage"), [("", "MemoryStorage"), ("redis://127.0.0.1:1/0", "RedisStorage")])
+def test_rate_limit_counters_live_where_the_setting_says(url, storage):
+    # A fresh process: the limiter is built at import. Redis is only reached on the first request
+    code = "from app.core.security import limiter; print(type(limiter._storage).__name__)"
+    result = subprocess.run(
+        [sys.executable, "-c", code], cwd=Path(__file__).resolve().parents[1],
+        env={**os.environ, "RATE_LIMIT_STORAGE_URL": url}, capture_output=True, text=True, check=True,
+    )
+    assert result.stdout.strip() == storage

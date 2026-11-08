@@ -146,10 +146,16 @@ class Settings(BaseSettings):
     enable_rate_limiting: bool = True
     rate_limit_default: str = "100/minute"
     rate_limit_ai: str = "30/minute"  # For MCP tool endpoints
+    # Where rate-limit counters live. Unset: this process's memory. redis://host:6379 shares
+    # them, so more than one API process (API_WORKERS) still enforces one limit per client
+    rate_limit_storage_url: str | None = None
 
     # Who runs indexing jobs. inline: this API process, as before. external: the API only queues
     # them in the database, and `python -m app.worker` processes (one or more) run them
     index_workers: Literal["inline", "external"] = "inline"
+    # API processes uvicorn starts (Dockerfile.prod's --workers). Above 1 needs external
+    # workers and shared rate limits; validate_runtime_settings checks both
+    api_workers: int = Field(default=1, ge=1)
 
     # Semantic search, bring your own key: any OpenAI-compatible embeddings endpoint (OpenAI, Voyage,
     # a gateway, or a local Ollama at http://localhost:11434/v1/embeddings). Off without a key
@@ -191,6 +197,20 @@ def validate_runtime_settings(settings: Settings) -> None:
             "CORS_ORIGINS must not contain '*' because credentials are allowed; "
             "list the allowed origins explicitly"
         )
+    if settings.api_workers > 1:
+        # Inline jobs live in one process's memory, and so do memory:// rate-limit counters
+        shared_limits = not settings.enable_rate_limiting or not (
+            settings.rate_limit_storage_url or "memory://"
+        ).startswith("memory")
+        missing = [name for name, ok in (
+            ("INDEX_WORKERS=external", settings.index_workers == "external"),
+            ("RATE_LIMIT_STORAGE_URL (redis://...)", shared_limits),
+        ) if not ok]
+        if missing:
+            raise RuntimeError(
+                f"API_WORKERS={settings.api_workers} needs {' and '.join(missing)}; "
+                "or set API_WORKERS=1"
+            )
     if settings.codesage_api_key and "*" in settings.allowed_hosts_list:
         logger.warning("ALLOWED_HOSTS contains '*'; any Host is served, so DNS rebinding is not blocked")
     loopback = settings.mcp_server_host in LOOPBACK_HOSTS
